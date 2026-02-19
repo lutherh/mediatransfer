@@ -13,7 +13,7 @@ function providerWithData(data: string, uploadSpy: ReturnType<typeof vi.fn>): Cl
       for await (const chunk of stream) {
         chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       }
-      uploadSpy(key, Buffer.concat(chunks).toString('utf8'));
+      new uploadSpy(key, Buffer.concat(chunks).toString('utf8'));
     },
     async delete() {},
   };
