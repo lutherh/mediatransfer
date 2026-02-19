@@ -1,0 +1,20 @@
+{
+  "generatedAt": "2026-02-19T22:29:10.059Z",
+  "summary": {
+    "total": 18,
+    "processed": 18,
+    "uploaded": 18,
+    "skipped": 0,
+    "failed": 0,
+    "dryRun": true,
+    "stoppedEarly": false,
+    "failureLimitReached": false
+  },
+  "bytes": {
+    "uploaded": 0,
+    "skipped": 0,
+    "failed": 0
+  },
+  "failuresByReason": {},
+  "manifestCount": 18
+}

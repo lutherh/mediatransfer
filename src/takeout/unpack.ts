@@ -4,6 +4,11 @@ import extractZip from 'extract-zip';
 import { extract as extractTar } from 'tar';
 
 const ARCHIVE_EXTENSIONS = ['.zip', '.tar', '.tgz', '.tar.gz'] as const;
+const MEDIA_EXTENSIONS = new Set([
+  '.jpg', '.jpeg', '.png', '.gif', '.webp',
+  '.heic', '.heif', '.avif', '.dng', '.tif', '.tiff',
+  '.mp4', '.mov', '.avi', '.m4v', '.3gp', '.mkv', '.webm',
+]);
 
 export type ArchiveExtractor = (archivePath: string, destinationDir: string) => Promise<void>;
 
@@ -16,6 +21,7 @@ export type UnpackResult = {
  * Discover Google Takeout archive files in input directory.
  */
 export async function discoverTakeoutArchives(inputDir: string): Promise<string[]> {
+  await fs.mkdir(inputDir, { recursive: true });
   const entries = await fs.readdir(inputDir, { withFileTypes: true });
   return entries
     .filter((entry) => entry.isFile())
@@ -96,7 +102,18 @@ export async function unpackAndNormalizeTakeout(
 ): Promise<UnpackResult> {
   const archives = await discoverTakeoutArchives(inputDir);
   if (archives.length === 0) {
-    throw new Error(`No Takeout archives found in input directory: ${inputDir}`);
+    const hasDirectMedia = await containsMediaFiles(inputDir);
+    if (hasDirectMedia) {
+      return {
+        archives: [],
+        mediaRoot: inputDir,
+      };
+    }
+
+    throw new Error(
+      `No Takeout archives found in input directory: ${inputDir}. ` +
+        'Place one or more Google Takeout .zip/.tar/.tgz archives there and run takeout:scan again.',
+    );
   }
 
   await extractTakeoutArchives(archives, workDir, extractor);
@@ -185,4 +202,29 @@ async function exists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function containsMediaFiles(rootDir: string): Promise<boolean> {
+  const stack = [rootDir];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) continue;
+
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+        continue;
+      }
+
+      if (!entry.isFile()) continue;
+      if (MEDIA_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }

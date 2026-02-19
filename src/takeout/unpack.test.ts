@@ -20,6 +20,17 @@ async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
 }
 
 describe('takeout/unpack', () => {
+  it('creates missing input directory during archive discovery', async () => {
+    await withTempDir(async (dir) => {
+      const inputDir = path.join(dir, 'missing-input');
+
+      const found = await discoverTakeoutArchives(inputDir);
+
+      expect(found).toEqual([]);
+      await expect(fs.access(inputDir)).resolves.toBeUndefined();
+    });
+  });
+
   it('discovers supported archive formats in sorted order', async () => {
     await withTempDir(async (dir) => {
       await fs.writeFile(path.join(dir, 'takeout-2.zip'), 'x');
@@ -102,6 +113,31 @@ describe('takeout/unpack', () => {
       expect(path.basename(result.archives[0])).toBe('takeout-1.zip');
       expect(result.mediaRoot).toBe(path.join(workDir, 'normalized', 'Google Photos'));
       await expect(fs.access(path.join(result.mediaRoot, 'AlbumX', 'file.jpg'))).resolves.toBeUndefined();
+    });
+  });
+
+  it('throws actionable error when no archives are found', async () => {
+    await withTempDir(async (dir) => {
+      const inputDir = path.join(dir, 'input');
+      const workDir = path.join(dir, 'work');
+
+      await expect(unpackAndNormalizeTakeout(inputDir, workDir)).rejects.toThrow(
+        'Place one or more Google Takeout .zip/.tar/.tgz archives there and run takeout:scan again.',
+      );
+    });
+  });
+
+  it('supports direct media folders when no archives are present', async () => {
+    await withTempDir(async (dir) => {
+      const inputDir = path.join(dir, 'input');
+      const workDir = path.join(dir, 'work');
+      await fs.mkdir(inputDir, { recursive: true });
+      await fs.writeFile(path.join(inputDir, 'Screenshot 2026-02-19 101010.png'), 'pngdata');
+
+      const result = await unpackAndNormalizeTakeout(inputDir, workDir);
+
+      expect(result.archives).toEqual([]);
+      expect(result.mediaRoot).toBe(inputDir);
     });
   });
 });
