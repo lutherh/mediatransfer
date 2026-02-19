@@ -1,0 +1,79 @@
+// MediaTransfer — Prisma Schema
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ── Enums ─────────────────────────────────────────────────────
+
+enum TransferStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum LogLevel {
+  INFO
+  WARN
+  ERROR
+  DEBUG
+}
+
+// ── Models ────────────────────────────────────────────────────
+
+/// A single file transfer job between two cloud providers.
+model TransferJob {
+  id             String         @id @default(uuid())
+  status         TransferStatus @default(PENDING)
+  sourceProvider String         @map("source_provider")
+  destProvider   String         @map("dest_provider")
+  sourceConfig   Json?          @map("source_config")  /// Provider-specific config (bucket, prefix, etc.)
+  destConfig     Json?          @map("dest_config")
+  keys           String[]       @default([])            /// List of object keys to transfer
+  progress       Float          @default(0)             /// 0.0 – 1.0
+  errorMessage   String?        @map("error_message")
+  startedAt      DateTime?      @map("started_at")
+  completedAt    DateTime?      @map("completed_at")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  logs TransferLog[]
+
+  @@map("transfer_jobs")
+}
+
+/// Encrypted cloud provider credentials.
+model CloudCredential {
+  id        String   @id @default(uuid())
+  name      String                          /// Human-friendly label (e.g. "My AWS prod")
+  provider  String                          /// Provider name (s3, gcs, azure-blob, scaleway)
+  config    String                          /// AES-256-GCM encrypted JSON blob
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("cloud_credentials")
+}
+
+/// Log entries associated with a transfer job.
+model TransferLog {
+  id        String   @id @default(uuid())
+  jobId     String   @map("job_id")
+  level     LogLevel @default(INFO)
+  message   String
+  meta      Json?                           /// Optional structured metadata
+  createdAt DateTime @default(now()) @map("created_at")
+
+  job TransferJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@map("transfer_logs")
+}
+
