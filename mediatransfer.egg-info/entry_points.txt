@@ -1,0 +1,2 @@
+[console_scripts]
+mediatransfer = mediatransfer.cli:main
