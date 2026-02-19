@@ -145,7 +145,8 @@ class GooglePhotosProvider(BaseProvider):
             created_at=created_at,
             description=item.get("description"),
             metadata={
-                "width": meta.get("photo", {}).get("cameraMake"),
+                "width": meta.get("width"),
+                "height": meta.get("height"),
                 "camera_make": meta.get("photo", {}).get("cameraMake"),
                 "camera_model": meta.get("photo", {}).get("cameraModel"),
                 "focal_length": meta.get("photo", {}).get("focalLength"),

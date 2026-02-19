@@ -149,9 +149,9 @@ class TestTransferEngine:
 
         result = transfer(source, dest, verify=True, preserve_metadata=False)
 
-        assert result.verification_failures != [] or result.verified == 1
-        # Either verified (bytes matched) or failed verification
         assert result.transferred == 1
+        assert len(result.verification_failures) == 1
+        assert result.success is False
 
     def test_multiple_assets(self):
         assets = [
