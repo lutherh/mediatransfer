@@ -75,8 +75,17 @@ const server = http.createServer(async (req, res) => {
     const tokens = await exchangeCode(oauthClient, code);
     console.log('✅  Tokens obtained!');
     console.log(`   Access token : ${tokens.accessToken.slice(0, 20)}...`);
-    console.log(`   Refresh token: ${tokens.refreshToken ? tokens.refreshToken.slice(0, 20) + '...' : '(none)'}`);
+    console.log(`   Refresh token: ${tokens.refreshToken ? '[received]' : '(none)'}`);
     console.log(`   Expiry       : ${tokens.expiryDate ? new Date(tokens.expiryDate).toISOString() : 'unknown'}\n`);
+
+    if (tokens.refreshToken) {
+      console.log('📋  Copy these lines into your .env (keep secret):');
+      console.log(`   GOOGLE_REFRESH_TOKEN=${tokens.refreshToken}`);
+      if (tokens.expiryDate) {
+        console.log(`   GOOGLE_TOKEN_EXPIRY_DATE=${tokens.expiryDate}`);
+      }
+      console.log('');
+    }
 
     // Quick raw fetch test before using the provider
     console.log('🔍  Checking Google Photos Library API access...');
