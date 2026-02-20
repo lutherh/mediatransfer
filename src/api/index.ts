@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import swagger from '@fastify/swagger';
+import { timingSafeEqual } from 'node:crypto';
 import { ZodError } from 'zod';
 import {
 	createCredential,
@@ -30,10 +31,54 @@ import type { ApiServices } from './types.js';
 export type CreateApiOptions = {
 	services?: ApiServices;
 	enableSwagger?: boolean;
+	apiAuthToken?: string;
+	corsAllowedOrigins?: string[];
 };
 
 export async function createApiServer(options?: CreateApiOptions): Promise<FastifyInstance> {
-	const app = Fastify({ logger: true });
+	const app = Fastify({
+		logger: {
+			redact: {
+				paths: [
+					'req.headers.authorization',
+					'req.headers.x-api-key',
+					'req.body.config',
+					'body.config',
+					'config.secretKey',
+					'config.accessKey',
+					'config.password',
+					'config.token',
+					'config.refreshToken',
+				],
+				censor: '[REDACTED]',
+			},
+		},
+	});
+
+	const apiAuthToken = options?.apiAuthToken?.trim();
+
+	if (apiAuthToken) {
+		app.addHook('onRequest', async (request, reply) => {
+			if (request.method === 'OPTIONS') {
+				return;
+			}
+
+			if (request.url.startsWith('/health')) {
+				return;
+			}
+
+			const headerToken = parseAuthToken(request.headers.authorization, request.headers['x-api-key']);
+			if (!headerToken || !safeEqual(headerToken, apiAuthToken)) {
+				return reply.status(401).send({
+					error: {
+						code: 'UNAUTHORIZED',
+						message: 'Missing or invalid API token',
+					},
+					requestId: request.id,
+				});
+			}
+		});
+	}
 
 	app.setErrorHandler((error, request, reply) => {
 		if (error instanceof ZodError) {
@@ -73,7 +118,7 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	});
 
 	await app.register(cors, {
-		origin: true,
+		origin: buildCorsOriginHandler(options?.corsAllowedOrigins ?? []),
 	});
 
 	if (options?.enableSwagger) {
@@ -173,3 +218,53 @@ function createDefaultServices(): { services: ApiServices; dispose: () => Promis
 }
 
 export type { TransferJobPayload };
+
+function parseAuthToken(
+	authorizationHeader: string | undefined,
+	xApiKeyHeader: string | string[] | undefined,
+): string | undefined {
+	if (typeof xApiKeyHeader === 'string' && xApiKeyHeader.length > 0) {
+		return xApiKeyHeader;
+	}
+
+	if (Array.isArray(xApiKeyHeader) && xApiKeyHeader.length > 0 && xApiKeyHeader[0]) {
+		return xApiKeyHeader[0];
+	}
+
+	if (!authorizationHeader) {
+		return undefined;
+	}
+
+	const match = /^Bearer\s+(.+)$/i.exec(authorizationHeader);
+	return match?.[1];
+}
+
+function safeEqual(left: string, right: string): boolean {
+	const leftBuffer = Buffer.from(left);
+	const rightBuffer = Buffer.from(right);
+	if (leftBuffer.length !== rightBuffer.length) {
+		return false;
+	}
+
+	return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function buildCorsOriginHandler(allowedOrigins: string[]) {
+	const normalized = allowedOrigins
+		.map((origin) => origin.trim())
+		.filter((origin) => origin.length > 0);
+
+	if (normalized.length === 0) {
+		return false;
+	}
+
+	const allowed = new Set(normalized);
+	return (origin: string | undefined, callback: (err: Error | null, allow: boolean) => void): void => {
+		if (!origin) {
+			callback(null, false);
+			return;
+		}
+
+		callback(null, allowed.has(origin));
+	};
+}

@@ -1,6 +1,8 @@
 # MediaTransfer
 
-Local tool to move media between providers (with a Takeout-first flow for full Google Photos migration).
+Local tool to move media between providers with two migration paths:
+- Takeout-first flow for complete Google Photos exports at scale.
+- Fully programmatic Google Photos API batch flow (download → upload → verify → cleanup) with automatic `.env` token persistence and resumable checkpoints.
 
 ## 1) Setup environment values
 
@@ -9,6 +11,8 @@ Local tool to move media between providers (with a Takeout-first flow for full G
 	- `DATABASE_URL` → keep default for local Docker unless you use your own DB.
 	- `REDIS_URL` → keep default for local Docker unless you use your own Redis.
 	- `ENCRYPTION_SECRET` → random secret used to encrypt stored credentials.
+	- `API_AUTH_TOKEN` → required in production; clients must send `Authorization: Bearer <token>` or `x-api-key`.
+	- `CORS_ALLOWED_ORIGINS` → comma-separated allowlist for browser origins.
 - Scaleway values (if destination is Scaleway Object Storage):
 	- `SCW_ACCESS_KEY`, `SCW_SECRET_KEY` → Scaleway Console → IAM → API Keys.
 	- `SCW_REGION`, `SCW_BUCKET`, optional `SCW_PREFIX` → Scaleway Object Storage settings.
@@ -35,6 +39,18 @@ Local tool to move media between providers (with a Takeout-first flow for full G
 - Quick health check:
 	- `curl.exe http://localhost:3000/health`
 
+## Security defaults
+
+- API authentication:
+	- Production requires `API_AUTH_TOKEN`.
+	- All routes except `/health` require that token when configured.
+- CORS:
+	- Restricted to `CORS_ALLOWED_ORIGINS` (no wildcard by default).
+- Network exposure:
+	- Docker ports are bound to localhost (`127.0.0.1`) by default.
+- Logging:
+	- Sensitive headers and common credential fields are redacted from API logs.
+
 ## 3) How to use the tool to transfer
 
 - Quick start (create one transfer via API)
@@ -60,7 +76,7 @@ Local tool to move media between providers (with a Takeout-first flow for full G
 	- Add these env values once: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_REGION`, `SCW_BUCKET`.
 	- One-time OAuth bootstrap (to obtain `GOOGLE_REFRESH_TOKEN`):
 		- Run `npx tsx scripts/test-google-connection.ts`.
-		- Complete consent in browser and copy the printed refresh token into `.env` as `GOOGLE_REFRESH_TOKEN`.
+		- Complete consent in browser; the script automatically writes `GOOGLE_REFRESH_TOKEN` into `.env`.
 		- Keep this token secret (same sensitivity as a password).
 		- If callback port is busy, set `GOOGLE_REDIRECT_URI` to a free port (example `http://localhost:3100/auth/google/callback`) and configure the exact same URI in Google OAuth client settings.
 	- Run batch loop:
