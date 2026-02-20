@@ -4,8 +4,8 @@ import type { Env } from '../config/env.js';
 /**
  * Create a configured Pino logger instance.
  *
- * - In development/test: uses pino-pretty for human-readable output.
- * - In production: outputs structured JSON (default Pino behaviour).
+ * - In development: uses pino-pretty for human-readable output.
+ * - In test/production: outputs structured JSON (default Pino behaviour).
  *
  * @param env - Partial env config; needs at least NODE_ENV and LOG_LEVEL.
  * @returns A Pino Logger instance.
@@ -13,12 +13,12 @@ import type { Env } from '../config/env.js';
 export function createLogger(
   env: Pick<Env, 'NODE_ENV' | 'LOG_LEVEL'>,
 ): Logger {
-  const isDev = env.NODE_ENV !== 'production';
+  const usePrettyTransport = env.NODE_ENV === 'development';
 
   const options: LoggerOptions = {
     name: 'mediatransfer',
     level: env.LOG_LEVEL,
-    ...(isDev && {
+    ...(usePrettyTransport && {
       transport: {
         target: 'pino-pretty',
         options: {

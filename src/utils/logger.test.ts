@@ -38,7 +38,7 @@ describe('createLogger', () => {
     expect(logger.level).toBe('info');
   });
 
-  it('should use pino-pretty transport in test environment', () => {
+  it('should use JSON output (no pretty transport) in test environment', () => {
     const logger = createLogger({ NODE_ENV: 'test', LOG_LEVEL: 'debug' });
     expect(logger).toBeDefined();
     expect(logger.level).toBe('debug');
