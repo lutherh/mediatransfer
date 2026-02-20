@@ -58,6 +58,10 @@ Local tool to move media between providers (with a Takeout-first flow for full G
 	- Create/list transfer jobs via `/transfers` endpoints.
 - Fully programmatic Google Photos batch mode (no manual batch steps):
 	- Add these env values once: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_REGION`, `SCW_BUCKET`.
+	- One-time OAuth bootstrap (to obtain `GOOGLE_REFRESH_TOKEN`):
+		- Run `npx tsx scripts/test-google-connection.ts`.
+		- Complete consent in browser and copy the printed refresh token into `.env` as `GOOGLE_REFRESH_TOKEN`.
+		- Keep this token secret (same sensitivity as a password).
 	- Run batch loop:
 		- `npm run transfer:google-batch:scaleway -- --batch-items 100 --batch-gb 2`
 	- What each batch does automatically:
@@ -73,6 +77,9 @@ Local tool to move media between providers (with a Takeout-first flow for full G
 		- `--state-path <path>` override checkpoint file.
 		- `--temp-dir <path>` override local temporary folder.
 		- `--dry-run` simulate without upload/delete.
+	- Important scope note:
+		- Google Photos Library API scopes used here are not equivalent to full historical-library export.
+		- For complete account migration at very large scale, keep using the Takeout flow above.
 - Useful checks:
 	- Type check: `npm run lint`
 	- Tests: `npm run test`
