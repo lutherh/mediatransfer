@@ -62,6 +62,7 @@ Local tool to move media between providers (with a Takeout-first flow for full G
 		- Run `npx tsx scripts/test-google-connection.ts`.
 		- Complete consent in browser and copy the printed refresh token into `.env` as `GOOGLE_REFRESH_TOKEN`.
 		- Keep this token secret (same sensitivity as a password).
+		- If callback port is busy, set `GOOGLE_REDIRECT_URI` to a free port (example `http://localhost:3100/auth/google/callback`) and configure the exact same URI in Google OAuth client settings.
 	- Run batch loop:
 		- `npm run transfer:google-batch:scaleway -- --batch-items 100 --batch-gb 2`
 	- What each batch does automatically:
