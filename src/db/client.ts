@@ -1,4 +1,5 @@
 import { PrismaClient } from '../generated/prisma/client.js';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 let prisma: PrismaClient | null = null;
 
@@ -8,10 +9,13 @@ let prisma: PrismaClient | null = null;
  */
 export function getPrismaClient(): PrismaClient {
   if (!prisma) {
-    // Adapter / connection options are injected via prisma.config.ts at runtime.
-    // The Prisma 7 constructor type demands adapter|accelerateUrl but the
-    // runtime engine resolves the datasource from the config file.
-    prisma = new (PrismaClient as unknown as new () => PrismaClient)();
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      throw new Error('DATABASE_URL is required to initialize Prisma client');
+    }
+
+    const adapter = new PrismaPg({ connectionString: databaseUrl });
+    prisma = new PrismaClient({ adapter });
   }
   return prisma;
 }
