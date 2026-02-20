@@ -270,7 +270,7 @@ Google Photos Picker remains for interactive subset transfers.
 ## Phase 9 — Docker & Deployment
 
 ### Step 27: Production Dockerfile
-`[~]`
+`[x]`
 - Multi-stage Dockerfile (build → production)
 - Update `docker-compose.yml` for full-stack local run (this is the primary deployment target)
 - Add npm scripts: `dev`, `build`, `start`, `test`, `lint`
@@ -286,7 +286,7 @@ Google Photos Picker remains for interactive subset transfers.
 ## Phase 10 (Optional) — Frontend
 
 ### Step 29: React frontend scaffold
-`[ ]`
+`[x]`
 - Scaffold with Vite + React + TypeScript
 - Install shadcn/ui, Tailwind, TanStack Query
 - Build pages: Transfers list, New Transfer form, Job detail view

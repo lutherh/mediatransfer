@@ -21,10 +21,17 @@ services:
       REDIS_URL: redis://redis:6379
       ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:-change-me-to-a-random-secret}
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:3000/health | grep -q \"ok\""]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3000/health',(r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 20s
 
   postgres:
     image: postgres:16-alpine

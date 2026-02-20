@@ -1,0 +1,1 @@
+{"root":["./src/app.test.tsx","./src/app.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/components/layout.tsx","./src/components/ui/button.tsx","./src/components/ui/card.tsx","./src/lib/api.ts","./src/lib/utils.ts","./src/pages/new-transfer-page.tsx","./src/pages/transfer-detail-page.tsx","./src/pages/transfers-list-page.tsx","./src/test/setup.ts"],"version":"5.9.3"}
