@@ -14,7 +14,7 @@ dotenv.config();
 const clientId = requiredEnv('GOOGLE_CLIENT_ID');
 const clientSecret = requiredEnv('GOOGLE_CLIENT_SECRET');
 const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? 'http://localhost:3000/auth/google/callback';
-const refreshToken = requiredEnv('GOOGLE_REFRESH_TOKEN');
+const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
 const accessToken = process.env.GOOGLE_ACCESS_TOKEN;
 const expiryDate = parseNumber(process.env.GOOGLE_TOKEN_EXPIRY_DATE);
 
@@ -28,12 +28,29 @@ const scalewayConfig = validateScalewayConfig({
 });
 
 const args = process.argv.slice(2);
+assertArgHasValue(args, '--batch-items');
+assertArgHasValue(args, '--batch-gb');
+assertArgHasValue(args, '--source-page-size');
+assertArgHasValue(args, '--max-batches');
+assertArgHasValue(args, '--state-path');
+assertArgHasValue(args, '--temp-dir');
+
 const batchItems = parsePositiveIntArg(args, '--batch-items') ?? 100;
 const batchGb = parsePositiveNumberArg(args, '--batch-gb') ?? 2;
 const batchBytes = Math.floor(batchGb * 1024 * 1024 * 1024);
 const sourcePageSize = parsePositiveIntArg(args, '--source-page-size') ?? 100;
 const maxBatches = parsePositiveIntArg(args, '--max-batches');
 const dryRun = args.includes('--dry-run');
+
+if (!refreshToken && !accessToken) {
+  throw new Error(
+    'Missing Google auth token. Set GOOGLE_REFRESH_TOKEN (recommended) or GOOGLE_ACCESS_TOKEN (short-lived).',
+  );
+}
+
+if (!refreshToken && accessToken) {
+  console.log('⚠️ Running with GOOGLE_ACCESS_TOKEN only. This may expire during long transfers.');
+}
 
 const statePath = path.resolve(
   readStringArg(args, '--state-path') ?? process.env.GOOGLE_BATCH_STATE_PATH ?? './data/takeout/google-api-state.json',
@@ -139,4 +156,16 @@ function readStringArg(args: string[], name: string): string | undefined {
     return undefined;
   }
   return args[index + 1];
+}
+
+function assertArgHasValue(args: string[], name: string): void {
+  const index = args.indexOf(name);
+  if (index === -1) {
+    return;
+  }
+
+  const next = args[index + 1];
+  if (!next || next.startsWith('--')) {
+    throw new Error(`Argument ${name} requires a value. Example: ${name} 2`);
+  }
 }

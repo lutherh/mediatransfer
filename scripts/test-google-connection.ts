@@ -3,7 +3,7 @@
  *
  * Usage:  npx tsx scripts/test-google-connection.ts
  *
- * 1. Starts a tiny HTTP server on localhost:3000
+ * 1. Starts a tiny HTTP server on GOOGLE_REDIRECT_URI host/port
  * 2. Opens the Google consent URL in your browser
  * 3. Handles the OAuth2 callback
  * 4. Lists up to 5 albums + 5 media items to confirm everything works
@@ -23,6 +23,11 @@ dotenv.config();
 const clientId = process.env.GOOGLE_CLIENT_ID;
 const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
 const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? 'http://localhost:3000/auth/google/callback';
+const redirectUrl = new URL(redirectUri);
+const callbackHost = redirectUrl.hostname;
+const callbackPort = Number(redirectUrl.port || (redirectUrl.protocol === 'https:' ? '443' : '80'));
+const callbackPath = redirectUrl.pathname;
+const callbackOrigin = `${redirectUrl.protocol}//${callbackHost}:${callbackPort}`;
 
 if (!clientId || !clientSecret) {
   console.error('❌  Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in .env');
@@ -40,9 +45,9 @@ exec(`start "" "${authUrl}"`);
 
 // Tiny HTTP server to catch the OAuth2 callback
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url ?? '/', `http://localhost:3000`);
+  const url = new URL(req.url ?? '/', callbackOrigin);
 
-  if (!url.pathname.startsWith('/auth/google/callback')) {
+  if (!url.pathname.startsWith(callbackPath)) {
     res.writeHead(404);
     res.end('Not found');
     return;
@@ -143,6 +148,17 @@ function shutdown(code: number) {
   }, 500);
 }
 
-server.listen(3000, () => {
-  console.log('⏳  Waiting for OAuth2 callback on http://localhost:3000 ...\n');
+server.listen(callbackPort, callbackHost, () => {
+  console.log(`⏳  Waiting for OAuth2 callback on ${callbackOrigin}${callbackPath} ...\n`);
+});
+
+server.on('error', (error) => {
+  if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+    console.error(`❌  Port ${callbackPort} is already in use for ${callbackHost}.`);
+    console.error('   Stop the app/container using that port, or set GOOGLE_REDIRECT_URI to another free port and update the same URI in Google OAuth client settings.');
+    process.exit(1);
+  }
+
+  console.error('❌  OAuth callback server failed to start:', error);
+  process.exit(1);
 });
