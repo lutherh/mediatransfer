@@ -111,6 +111,30 @@ function createServices(): ApiServices {
 }
 
 describe('api server', () => {
+  it('requires API auth token for protected routes when configured', async () => {
+    const app = await createApiServer({
+      services: createServices(),
+      apiAuthToken: 'test-token-1234567890',
+      corsAllowedOrigins: ['http://localhost:3000'],
+    });
+
+    const unauthorized = await app.inject({ method: 'GET', url: '/providers' });
+    expect(unauthorized.statusCode).toBe(401);
+    expect(unauthorized.json().error.code).toBe('UNAUTHORIZED');
+
+    const authorized = await app.inject({
+      method: 'GET',
+      url: '/providers',
+      headers: { 'x-api-key': 'test-token-1234567890' },
+    });
+    expect(authorized.statusCode).toBe(200);
+
+    const health = await app.inject({ method: 'GET', url: '/health' });
+    expect(health.statusCode).toBe(200);
+
+    await app.close();
+  });
+
   it('exposes health endpoint', async () => {
     const app = await createApiServer({ services: createServices() });
     const res = await app.inject({ method: 'GET', url: '/health' });

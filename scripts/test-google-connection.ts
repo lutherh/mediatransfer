@@ -10,6 +10,8 @@
  */
 import http from 'node:http';
 import { exec } from 'node:child_process';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import * as dotenv from 'dotenv';
 import {
   createOAuth2Client,
@@ -79,12 +81,7 @@ const server = http.createServer(async (req, res) => {
     console.log(`   Expiry       : ${tokens.expiryDate ? new Date(tokens.expiryDate).toISOString() : 'unknown'}\n`);
 
     if (tokens.refreshToken) {
-      console.log('📋  Copy these lines into your .env (keep secret):');
-      console.log(`   GOOGLE_REFRESH_TOKEN=${tokens.refreshToken}`);
-      if (tokens.expiryDate) {
-        console.log(`   GOOGLE_TOKEN_EXPIRY_DATE=${tokens.expiryDate}`);
-      }
-      console.log('');
+      await persistGoogleTokensToEnv(tokens);
     }
 
     // Quick raw fetch test before using the provider
@@ -155,6 +152,65 @@ function shutdown(code: number) {
     server.close();
     process.exit(code);
   }, 500);
+}
+
+async function persistGoogleTokensToEnv(tokens: { refreshToken?: string; accessToken: string; expiryDate?: number }): Promise<void> {
+  const envPath = path.resolve(process.cwd(), '.env');
+
+  const updates: Record<string, string> = {
+    GOOGLE_ACCESS_TOKEN: tokens.accessToken,
+  };
+
+  if (tokens.refreshToken) {
+    updates.GOOGLE_REFRESH_TOKEN = tokens.refreshToken;
+  }
+
+  if (tokens.expiryDate) {
+    updates.GOOGLE_TOKEN_EXPIRY_DATE = String(tokens.expiryDate);
+  }
+
+  try {
+    const current = await fs.readFile(envPath, 'utf8').catch(() => '');
+    const next = upsertEnvValues(current, updates);
+    await fs.writeFile(envPath, next, 'utf8');
+    console.log(`✅  Updated ${envPath} with Google token values.`);
+  } catch (error) {
+    console.warn('⚠️  Could not update .env automatically.');
+    console.warn(error instanceof Error ? error.message : String(error));
+    console.log('📋  Fallback values:');
+    console.log(`   GOOGLE_ACCESS_TOKEN=${tokens.accessToken}`);
+    if (tokens.refreshToken) {
+      console.log(`   GOOGLE_REFRESH_TOKEN=${tokens.refreshToken}`);
+    }
+    if (tokens.expiryDate) {
+      console.log(`   GOOGLE_TOKEN_EXPIRY_DATE=${tokens.expiryDate}`);
+    }
+  }
+}
+
+function upsertEnvValues(content: string, updates: Record<string, string>): string {
+  const lines = content.length > 0 ? content.split(/\r?\n/) : [];
+  const keys = Object.keys(updates);
+  const seen = new Set<string>();
+
+  for (let i = 0; i < lines.length; i += 1) {
+    for (const key of keys) {
+      const regex = new RegExp(`^\\s*${key}\\s*=`);
+      if (regex.test(lines[i])) {
+        lines[i] = `${key}=${updates[key]}`;
+        seen.add(key);
+      }
+    }
+  }
+
+  for (const key of keys) {
+    if (!seen.has(key)) {
+      lines.push(`${key}=${updates[key]}`);
+    }
+  }
+
+  const joined = lines.join('\n');
+  return joined.endsWith('\n') ? joined : `${joined}\n`;
 }
 
 server.listen(callbackPort, callbackHost, () => {
