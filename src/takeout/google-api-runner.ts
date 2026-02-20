@@ -34,6 +34,7 @@ export type GoogleApiBatchConfig = {
   batchMaxItems?: number;
   batchMaxBytes?: number;
   sourcePageSize?: number;
+  maxSourcePagesPerBatch?: number;
   maxBatches?: number;
   dryRun?: boolean;
 };
@@ -61,6 +62,7 @@ export type GoogleApiRunResult = {
 const DEFAULT_BATCH_MAX_ITEMS = 100;
 const DEFAULT_BATCH_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_SOURCE_PAGE_SIZE = 100;
+const DEFAULT_MAX_SOURCE_PAGES_PER_BATCH = 25;
 
 export async function runGoogleApiBatchTransferLoop(
   source: PhotosProvider,
@@ -71,6 +73,8 @@ export async function runGoogleApiBatchTransferLoop(
   const batchMaxItems = config.batchMaxItems ?? DEFAULT_BATCH_MAX_ITEMS;
   const batchMaxBytes = config.batchMaxBytes ?? DEFAULT_BATCH_MAX_BYTES;
   const sourcePageSize = config.sourcePageSize ?? DEFAULT_SOURCE_PAGE_SIZE;
+  const maxSourcePagesPerBatch =
+    config.maxSourcePagesPerBatch ?? DEFAULT_MAX_SOURCE_PAGES_PER_BATCH;
   const dryRun = config.dryRun ?? false;
 
   const batches: GoogleApiBatchResult[] = [];
@@ -85,6 +89,7 @@ export async function runGoogleApiBatchTransferLoop(
       batchMaxItems,
       batchMaxBytes,
       sourcePageSize,
+      maxSourcePagesPerBatch,
       batchNumber,
       dryRun,
     });
@@ -128,6 +133,7 @@ type SingleBatchConfig = {
   batchMaxItems: number;
   batchMaxBytes: number;
   sourcePageSize: number;
+  maxSourcePagesPerBatch: number;
   batchNumber: number;
   dryRun: boolean;
 };
@@ -139,7 +145,13 @@ async function runGoogleApiSingleBatch(
   config: SingleBatchConfig,
 ): Promise<GoogleApiBatchResult> {
   await fs.mkdir(config.tempDir, { recursive: true });
-  await fillPendingItems(source, state, config.sourcePageSize, config.statePath);
+  await fillPendingItems(
+    source,
+    state,
+    config.sourcePageSize,
+    config.maxSourcePagesPerBatch,
+    config.statePath,
+  );
 
   const selected = takePendingForBatch(state, config.batchMaxItems);
 
@@ -203,7 +215,13 @@ async function runGoogleApiSingleBatch(
     await persistGoogleApiTransferState(config.statePath, state);
   }
 
-  await fillPendingItems(source, state, config.sourcePageSize, config.statePath);
+  await fillPendingItems(
+    source,
+    state,
+    config.sourcePageSize,
+    config.maxSourcePagesPerBatch,
+    config.statePath,
+  );
   const completed = state.sourceExhausted && state.pending.length === 0;
 
   return {
@@ -221,13 +239,18 @@ async function fillPendingItems(
   source: PhotosProvider,
   state: GoogleApiTransferState,
   sourcePageSize: number,
+  maxPagesToScan: number,
   statePath: string,
 ): Promise<void> {
-  while (state.pending.length === 0 && !state.sourceExhausted) {
+  let pagesScanned = 0;
+
+  while (state.pending.length === 0 && !state.sourceExhausted && pagesScanned < maxPagesToScan) {
     const page = await source.listMediaItems({
       maxResults: sourcePageSize,
       pageToken: state.nextPageToken,
     });
+
+    pagesScanned += 1;
 
     const items = page.items
       .filter((item) => !state.transferred[item.id])

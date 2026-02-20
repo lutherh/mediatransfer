@@ -39,6 +39,7 @@ const batchItems = parsePositiveIntArg(args, '--batch-items') ?? 100;
 const batchGb = parsePositiveNumberArg(args, '--batch-gb') ?? 2;
 const batchBytes = Math.floor(batchGb * 1024 * 1024 * 1024);
 const sourcePageSize = parsePositiveIntArg(args, '--source-page-size') ?? 100;
+const maxSourcePages = parsePositiveIntArg(args, '--max-source-pages') ?? 25;
 const maxBatches = parsePositiveIntArg(args, '--max-batches');
 const dryRun = args.includes('--dry-run');
 
@@ -82,6 +83,7 @@ console.log('🔁 Starting fully programmatic Google Photos batch transfer');
 console.log(`   Batch limits: ${batchItems} files or ${batchGb} GB`);
 console.log(`   State path  : ${statePath}`);
 console.log(`   Temp dir    : ${tempDir}`);
+console.log(`   Max pages   : ${maxSourcePages} per batch`);
 console.log(`   Dry run     : ${dryRun}`);
 
 const result = await runGoogleApiBatchTransferLoop(source, destination, {
@@ -90,6 +92,7 @@ const result = await runGoogleApiBatchTransferLoop(source, destination, {
   batchMaxItems: batchItems,
   batchMaxBytes: batchBytes,
   sourcePageSize,
+  maxSourcePagesPerBatch: maxSourcePages,
   maxBatches,
   dryRun,
 });

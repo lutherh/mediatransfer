@@ -91,6 +91,7 @@ Local tool to move media between providers with two migration paths:
 		- Uses `GOOGLE_BATCH_STATE_PATH` checkpoint file; rerunning command resumes from last successful position.
 	- Useful options:
 		- `--max-batches <n>` limit a run window.
+		- `--max-source-pages <n>` cap how many Google API pages are scanned per batch.
 		- `--state-path <path>` override checkpoint file.
 		- `--temp-dir <path>` override local temporary folder.
 		- `--dry-run` simulate without upload/delete.
