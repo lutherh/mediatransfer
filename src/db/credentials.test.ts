@@ -3,10 +3,14 @@ import {
   createCredential,
   getCredentialById,
   listCredentials,
+  listCredentialSummaries,
   updateCredential,
   deleteCredential,
 } from './credentials.js';
 import type { CreateCredentialInput, UpdateCredentialInput } from './credentials.js';
+import { encryptString } from '../utils/crypto.js';
+
+const TEST_SECRET = 'unit-test-encryption-secret-123';
 
 // ── Mock Prisma client ────────────────────────────────────────
 
@@ -14,7 +18,7 @@ const mockCredential = {
   id: 'cred-1',
   name: 'My AWS Prod',
   provider: 's3',
-  config: 'encrypted-blob-here',
+  config: encryptString('{"accessKey":"abc"}', TEST_SECRET),
   createdAt: new Date('2026-01-01'),
   updatedAt: new Date('2026-01-01'),
 };
@@ -35,6 +39,7 @@ describe('db/credentials', () => {
   let prisma: ReturnType<typeof createMockPrisma>;
 
   beforeEach(() => {
+    process.env.ENCRYPTION_SECRET = TEST_SECRET;
     prisma = createMockPrisma();
   });
 
@@ -45,19 +50,17 @@ describe('db/credentials', () => {
       const input: CreateCredentialInput = {
         name: 'My AWS Prod',
         provider: 's3',
-        config: 'encrypted-blob-here',
+        config: '{"accessKey":"abc"}',
       };
 
       const result = await createCredential(input, prisma);
 
-      expect(prisma.cloudCredential.create).toHaveBeenCalledWith({
-        data: {
-          name: 'My AWS Prod',
-          provider: 's3',
-          config: 'encrypted-blob-here',
-        },
-      });
-      expect(result).toEqual(mockCredential);
+      const createCall = prisma.cloudCredential.create.mock.calls[0][0];
+      expect(createCall.data.name).toBe('My AWS Prod');
+      expect(createCall.data.provider).toBe('s3');
+      expect(createCall.data.config).toBeTypeOf('string');
+      expect(createCall.data.config).not.toBe('{"accessKey":"abc"}');
+      expect(result.config).toBe('{"accessKey":"abc"}');
     });
   });
 
@@ -70,7 +73,7 @@ describe('db/credentials', () => {
       expect(prisma.cloudCredential.findUnique).toHaveBeenCalledWith({
         where: { id: 'cred-1' },
       });
-      expect(result).toEqual(mockCredential);
+      expect(result?.config).toBe('{"accessKey":"abc"}');
     });
 
     it('should return null when credential is not found', async () => {
@@ -92,7 +95,8 @@ describe('db/credentials', () => {
         where: undefined,
         orderBy: { createdAt: 'desc' },
       });
-      expect(result).toEqual([mockCredential]);
+      expect(result).toHaveLength(1);
+      expect(result[0].config).toBe('{"accessKey":"abc"}');
     });
 
     it('should filter by provider', async () => {
@@ -101,6 +105,22 @@ describe('db/credentials', () => {
       expect(prisma.cloudCredential.findMany).toHaveBeenCalledWith({
         where: { provider: 's3' },
         orderBy: { createdAt: 'desc' },
+      });
+    });
+
+    it('should list credential summaries without selecting config', async () => {
+      await listCredentialSummaries(undefined, prisma);
+
+      expect(prisma.cloudCredential.findMany).toHaveBeenCalledWith({
+        where: undefined,
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          name: true,
+          provider: true,
+          createdAt: true,
+          updatedAt: true,
+        },
       });
     });
   });
@@ -118,17 +138,23 @@ describe('db/credentials', () => {
         data: { name: 'Renamed' },
       });
       expect(result.name).toBe('Renamed');
+      expect(result.config).toBe('{"accessKey":"abc"}');
     });
 
     it('should allow updating config', async () => {
-      const input: UpdateCredentialInput = { config: 'new-encrypted-blob' };
+      const input: UpdateCredentialInput = { config: '{"accessKey":"def"}' };
+
+      prisma.cloudCredential.update.mockImplementation(async (args: any) => ({
+        ...mockCredential,
+        config: args.data.config,
+      }));
 
       await updateCredential('cred-1', input, prisma);
 
-      expect(prisma.cloudCredential.update).toHaveBeenCalledWith({
-        where: { id: 'cred-1' },
-        data: { config: 'new-encrypted-blob' },
-      });
+      const updateCall = prisma.cloudCredential.update.mock.calls[0][0];
+      expect(updateCall.where).toEqual({ id: 'cred-1' });
+      expect(updateCall.data.config).toBeTypeOf('string');
+      expect(updateCall.data.config).not.toBe('{"accessKey":"def"}');
     });
   });
 

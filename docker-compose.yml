@@ -1,4 +1,31 @@
 services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mediatransfer-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mediatransfer}:${POSTGRES_PASSWORD:-mediatransfer}@postgres:5432/${POSTGRES_DB:-mediatransfer}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_URL: redis://redis:6379
+      ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:-change-me-to-a-random-secret}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:3000/health | grep -q \"ok\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   postgres:
     image: postgres:16-alpine
     container_name: mediatransfer-postgres

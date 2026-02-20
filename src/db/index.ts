@@ -7,3 +7,4 @@ export {
 } from './client.js';
 export * from './jobs.js';
 export * from './credentials.js';
+export * from './logs.js';

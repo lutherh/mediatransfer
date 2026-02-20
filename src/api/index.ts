@@ -1,14 +1,16 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import swagger from '@fastify/swagger';
+import { ZodError } from 'zod';
 import {
 	createCredential,
 	createJob,
 	deleteCredential,
 	deleteJob,
 	getJobById,
-	listCredentials,
+	listCredentialSummaries,
 	listJobs,
+	listTransferLogs,
 	updateJob,
 } from '../db/index.js';
 import { createRedisConnection } from '../jobs/connection.js';
@@ -32,6 +34,43 @@ export type CreateApiOptions = {
 
 export async function createApiServer(options?: CreateApiOptions): Promise<FastifyInstance> {
 	const app = Fastify({ logger: true });
+
+	app.setErrorHandler((error, request, reply) => {
+		if (error instanceof ZodError) {
+			return reply.status(400).send({
+				error: {
+					code: 'VALIDATION_ERROR',
+					message: 'Request validation failed',
+					details: error.issues.map((issue) => ({
+						path: issue.path.join('.'),
+						message: issue.message,
+					})),
+				},
+				requestId: request.id,
+			});
+		}
+
+		const statusCode =
+			typeof (error as { statusCode?: unknown }).statusCode === 'number' &&
+			(error as { statusCode: number }).statusCode >= 400 &&
+			(error as { statusCode: number }).statusCode < 600
+				? (error as { statusCode: number }).statusCode
+				: 500;
+
+		if (statusCode >= 500) {
+			request.log.error({ err: error }, 'Unhandled API error');
+		}
+
+		const errorMessage = error instanceof Error ? error.message : String(error);
+
+		return reply.status(statusCode).send({
+			error: {
+				code: statusCode >= 500 ? 'INTERNAL_ERROR' : 'REQUEST_ERROR',
+				message: statusCode >= 500 ? 'Internal server error' : errorMessage,
+			},
+			requestId: request.id,
+		});
+	});
 
 	await app.register(cors, {
 		origin: true,
@@ -71,7 +110,7 @@ function createDefaultServices(): { services: ApiServices; dispose: () => Promis
 	const services: ApiServices = {
 		credentials: {
 			create: (input) => createCredential(input),
-			list: (provider) => listCredentials(provider),
+			list: (provider) => listCredentialSummaries(provider),
 			delete: (id) => deleteCredential(id),
 		},
 		jobs: {
@@ -87,6 +126,7 @@ function createDefaultServices(): { services: ApiServices; dispose: () => Promis
 			get: (id) => getJobById(id),
 			update: (id, input) => updateJob(id, input),
 			delete: (id) => deleteJob(id),
+			listLogs: (id) => listTransferLogs(id),
 		},
 		providers: {
 			listNames: () => {
