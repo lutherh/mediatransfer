@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "transfer:picker:scaleway": "tsx scripts/picker-to-scaleway-transfer.ts",
+    "transfer:google-batch:scaleway": "tsx scripts/google-photos-batch-transfer.ts",
     "takeout:scan": "tsx scripts/takeout-scan.ts",
     "takeout:upload": "tsx scripts/takeout-upload.ts",
     "takeout:resume": "tsx scripts/takeout-resume.ts",
