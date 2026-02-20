@@ -187,8 +187,11 @@ export async function persistUploadState(
   state: UploadState,
 ): Promise<void> {
   state.updatedAt = new Date().toISOString();
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
-  await fs.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
+  const dir = path.dirname(statePath);
+  await fs.mkdir(dir, { recursive: true });
+  const tmpPath = `${statePath}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(state, null, 2), 'utf8');
+  await fs.rename(tmpPath, statePath);
 }
 
 function createEmptyState(): UploadState {
