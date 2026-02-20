@@ -56,6 +56,23 @@ Local tool to move media between providers (with a Takeout-first flow for full G
 	- Start API locally: `npm run dev`
 	- Health: `GET /health`
 	- Create/list transfer jobs via `/transfers` endpoints.
+- Fully programmatic Google Photos batch mode (no manual batch steps):
+	- Add these env values once: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_REGION`, `SCW_BUCKET`.
+	- Run batch loop:
+		- `npm run transfer:google-batch:scaleway -- --batch-items 100 --batch-gb 2`
+	- What each batch does automatically:
+		1. Downloads next media batch from Google Photos API (up to `--batch-items` or `--batch-gb`).
+		2. Uploads batch to Scaleway.
+		3. Verifies uploaded object presence + size.
+		4. Deletes local temporary file only after successful verification.
+		5. Saves checkpoint state and continues with the next batch until complete.
+	- Resume behavior:
+		- Uses `GOOGLE_BATCH_STATE_PATH` checkpoint file; rerunning command resumes from last successful position.
+	- Useful options:
+		- `--max-batches <n>` limit a run window.
+		- `--state-path <path>` override checkpoint file.
+		- `--temp-dir <path>` override local temporary folder.
+		- `--dry-run` simulate without upload/delete.
 - Useful checks:
 	- Type check: `npm run lint`
 	- Tests: `npm run test`

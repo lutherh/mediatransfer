@@ -39,6 +39,11 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().min(1).optional(),
   GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
   GOOGLE_REDIRECT_URI: z.string().url().default('http://localhost:3000/auth/google/callback'),
+  GOOGLE_REFRESH_TOKEN: z.string().min(1).optional(),
+  GOOGLE_ACCESS_TOKEN: z.string().min(1).optional(),
+  GOOGLE_TOKEN_EXPIRY_DATE: z.coerce.number().optional(),
+  GOOGLE_BATCH_STATE_PATH: z.string().min(1).default('./data/takeout/google-api-state.json'),
+  GOOGLE_BATCH_TEMP_DIR: z.string().min(1).default('./data/takeout/work/google-api-batches'),
 
   // Google Takeout migration settings (full-library path)
   TAKEOUT_INPUT_DIR: z.string().min(1).default('./data/takeout/input'),
