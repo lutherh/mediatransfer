@@ -28,6 +28,7 @@ dotenv.config();
 const clientId = process.env.GOOGLE_CLIENT_ID;
 const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
 const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? 'http://localhost:3000/auth/google/callback';
+const callbackConfig = resolveCallbackConfig(redirectUri);
 
 if (!clientId || !clientSecret) {
   console.error('❌ Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in .env');
@@ -51,9 +52,9 @@ console.log(`   ${authUrl}\n`);
 exec(`start "" "${authUrl}"`);
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url ?? '/', 'http://localhost:3000');
+  const url = new URL(req.url ?? '/', callbackConfig.origin);
 
-  if (!url.pathname.startsWith('/auth/google/callback')) {
+  if (url.pathname !== callbackConfig.pathname) {
     res.writeHead(404);
     res.end('Not found');
     return;
@@ -142,9 +143,39 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(3000, () => {
-  console.log('⏳ Waiting for OAuth callback on http://localhost:3000 ...\n');
+server.listen(callbackConfig.port, callbackConfig.hostname, () => {
+  console.log(`⏳ Waiting for OAuth callback on ${callbackConfig.origin}${callbackConfig.pathname} ...\n`);
 });
+
+function resolveCallbackConfig(uri: string): {
+  origin: string;
+  hostname: string;
+  port: number;
+  pathname: string;
+} {
+  let parsed: URL;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    throw new Error(`Invalid GOOGLE_REDIRECT_URI: ${uri}`);
+  }
+
+  if (parsed.protocol !== 'http:') {
+    throw new Error('GOOGLE_REDIRECT_URI must use http:// for local callback server');
+  }
+
+  const port = parsed.port ? Number(parsed.port) : 80;
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`Invalid callback port in GOOGLE_REDIRECT_URI: ${parsed.port}`);
+  }
+
+  return {
+    origin: parsed.origin,
+    hostname: parsed.hostname,
+    port,
+    pathname: parsed.pathname || '/',
+  };
+}
 
 async function waitForSelectionComplete(
   pickerClient: GooglePhotosPickerClient,
