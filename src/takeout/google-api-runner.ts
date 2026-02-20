@@ -176,7 +176,14 @@ async function runGoogleApiSingleBatch(
 
   for (const item of selected) {
     const localPath = path.join(config.tempDir, buildLocalFileName(item));
-    await downloadMediaToLocalFile(source, item.id, localPath);
+
+    try {
+      await downloadMediaToLocalFile(source, item.id, localPath);
+    } catch (downloadError) {
+      await fs.rm(localPath, { force: true });
+      throw downloadError;
+    }
+
     const stats = await fs.stat(localPath);
     const itemSize = stats.size;
 
@@ -192,7 +199,10 @@ async function runGoogleApiSingleBatch(
 
     const destinationKey = buildDestinationKey(item);
 
-    if (!config.dryRun) {
+    if (config.dryRun) {
+      await fs.rm(localPath, { force: true });
+      deletedLocalCount += 1;
+    } else {
       await destination.upload(destinationKey, createReadStream(localPath), item.mimeType);
       uploadedCount += 1;
 
@@ -204,15 +214,15 @@ async function runGoogleApiSingleBatch(
 
       await fs.rm(localPath, { force: true });
       deletedLocalCount += 1;
-    }
 
-    state.transferred[item.id] = {
-      status: 'uploaded',
-      destinationKey,
-      size: itemSize,
-      updatedAt: new Date().toISOString(),
-    };
-    await persistGoogleApiTransferState(config.statePath, state);
+      state.transferred[item.id] = {
+        status: 'uploaded',
+        destinationKey,
+        size: itemSize,
+        updatedAt: new Date().toISOString(),
+      };
+      await persistGoogleApiTransferState(config.statePath, state);
+    }
   }
 
   await fillPendingItems(
@@ -365,6 +375,9 @@ export async function persistGoogleApiTransferState(
   state: GoogleApiTransferState,
 ): Promise<void> {
   state.updatedAt = new Date().toISOString();
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
-  await fs.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
+  const dir = path.dirname(statePath);
+  await fs.mkdir(dir, { recursive: true });
+  const tmpPath = `${statePath}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(state, null, 2), 'utf8');
+  await fs.rename(tmpPath, statePath);
 }

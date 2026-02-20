@@ -242,11 +242,17 @@ function parseAuthToken(
 function safeEqual(left: string, right: string): boolean {
 	const leftBuffer = Buffer.from(left);
 	const rightBuffer = Buffer.from(right);
-	if (leftBuffer.length !== rightBuffer.length) {
-		return false;
-	}
 
-	return timingSafeEqual(leftBuffer, rightBuffer);
+	// Pad both to the same length to avoid leaking the expected token
+	// length through timing differences.
+	const maxLen = Math.max(leftBuffer.length, rightBuffer.length);
+	const paddedLeft = Buffer.alloc(maxLen);
+	const paddedRight = Buffer.alloc(maxLen);
+	paddedLeft.set(leftBuffer);
+	paddedRight.set(rightBuffer);
+
+	const match = timingSafeEqual(paddedLeft, paddedRight);
+	return match && leftBuffer.length === rightBuffer.length;
 }
 
 function buildCorsOriginHandler(allowedOrigins: string[]) {

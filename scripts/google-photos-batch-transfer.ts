@@ -34,6 +34,7 @@ assertArgHasValue(args, '--source-page-size');
 assertArgHasValue(args, '--max-batches');
 assertArgHasValue(args, '--state-path');
 assertArgHasValue(args, '--temp-dir');
+assertArgHasValue(args, '--max-source-pages');
 
 const batchItems = parsePositiveIntArg(args, '--batch-items') ?? 100;
 const batchGb = parsePositiveNumberArg(args, '--batch-gb') ?? 2;

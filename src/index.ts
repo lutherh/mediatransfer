@@ -1,5 +1,8 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadEnv } from './config/env.js';
 import { createApiServer } from './api/index.js';
+import { disconnectPrisma } from './db/index.js';
 
 export async function main(): Promise<void> {
   const env = loadEnv();
@@ -21,6 +24,7 @@ export async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     await app.close();
+    await disconnectPrisma();
     process.exit(0);
   };
 
@@ -30,6 +34,8 @@ export async function main(): Promise<void> {
   await app.listen({ port: env.PORT, host: env.HOST });
 }
 
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/'))) {
+const currentPath = fileURLToPath(import.meta.url);
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
+if (currentPath === invokedPath) {
   void main();
 }
