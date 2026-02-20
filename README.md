@@ -1,22 +1,52 @@
-# mediatransfer
-Local tool that transfers assets from one cloud to another. Runs entirely on your machine.
+# MediaTransfer
 
-## Run with Docker Compose
+Local tool to move media between providers (with a Takeout-first flow for full Google Photos migration).
 
-Start full stack (API + Postgres + Redis):
+## 1) Setup environment values
 
-```bash
-docker compose up --build -d
-```
+- Copy `.env.example` to `.env` in the project root.
+- Fill these first (required):
+	- `DATABASE_URL` → keep default for local Docker unless you use your own DB.
+	- `REDIS_URL` → keep default for local Docker unless you use your own Redis.
+	- `ENCRYPTION_SECRET` → random secret used to encrypt stored credentials.
+- Scaleway values (if destination is Scaleway Object Storage):
+	- `SCW_ACCESS_KEY`, `SCW_SECRET_KEY` → Scaleway Console → IAM → API Keys.
+	- `SCW_REGION`, `SCW_BUCKET`, optional `SCW_PREFIX` → Scaleway Object Storage settings.
+- Google OAuth values (if using Google API / picker flow):
+	- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` → Google Cloud Console → APIs & Services → Credentials (OAuth client).
+	- `GOOGLE_REDIRECT_URI` → must match redirect URI configured on that OAuth client.
+- Takeout values (for full-library migration):
+	- `TAKEOUT_INPUT_DIR` → folder containing downloaded Google Takeout archives.
+	- `TAKEOUT_WORK_DIR` → local unpack/staging folder.
+	- `TRANSFER_STATE_PATH` → resume checkpoint file path.
 
-Check API health:
+## 2) Needed prerequisites
 
-```bash
-curl http://localhost:3000/health
-```
+- Install Node.js 22+ and npm.
+- Install Docker Desktop (for Postgres + Redis + optional app container run).
+- Install Git (to clone/update the repo).
+- Run once in project root:
+	- `npm ci`
+	- `npm run prisma:generate`
+- Start local services:
+	- `docker compose up -d postgres redis`
+- Optional full-stack container run:
+	- `docker compose up --build -d`
+- Quick health check:
+	- `curl.exe http://localhost:3000/health`
 
-Stop services:
+## 3) How to use the tool to transfer
 
-```bash
-docker compose down
-```
+- Full library (recommended): Google Takeout → Scaleway
+	- Put Takeout archives in `TAKEOUT_INPUT_DIR`.
+	- Build manifest: `npm run takeout:scan`
+	- Upload: `npm run takeout:upload`
+	- Resume failed/interrupted uploads: `npm run takeout:resume`
+	- Verify output: `npm run takeout:verify`
+- API/server mode:
+	- Start API locally: `npm run dev`
+	- Health: `GET /health`
+	- Create/list transfer jobs via `/transfers` endpoints.
+- Useful checks:
+	- Type check: `npm run lint`
+	- Tests: `npm run test`
