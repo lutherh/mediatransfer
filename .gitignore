@@ -8,3 +8,4 @@ Thumbs.db
 src/generated/
 
 /src/generated/prisma
+data/takeout/google-api-state.json
