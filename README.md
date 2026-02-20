@@ -51,53 +51,48 @@ Local tool to move media between providers with two migration paths:
 - Logging:
 	- Sensitive headers and common credential fields are redacted from API logs.
 
-## 3) How to use the tool to transfer
+## 3) Transfer steps (short version)
 
-- Quick start (create one transfer via API)
-	- Ensure app is running (`docker compose up -d` **or** `npm run dev`).
-	- Create transfer job (PowerShell):
-		- `Invoke-WebRequest -UseBasicParsing -Uri http://localhost:3000/transfers -Method POST -ContentType "application/json" -Body '{"sourceProvider":"google-photos","destProvider":"scaleway","keys":["example.jpg"]}'`
-	- List jobs:
-		- `Invoke-WebRequest -UseBasicParsing http://localhost:3000/transfers | Select-Object -ExpandProperty Content`
-- Note about `npm run dev`
-	- If Docker app is already running on port `3000`, `npm run dev` will fail.
-	- Stop container app first (`docker compose stop app`) or keep using Docker API at `http://localhost:3000`.
-- Full library (recommended): Google Takeout → Scaleway
-	- Put Takeout archives in `TAKEOUT_INPUT_DIR`.
-	- Build manifest: `npm run takeout:scan`
-	- Upload: `npm run takeout:upload`
-	- Resume failed/interrupted uploads: `npm run takeout:resume`
-	- Verify output: `npm run takeout:verify`
-- API/server mode:
-	- Start API locally: `npm run dev`
-	- Health: `GET /health`
-	- Create/list transfer jobs via `/transfers` endpoints.
-- Fully programmatic Google Photos batch mode (no manual batch steps):
-	- Add these env values once: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_REGION`, `SCW_BUCKET`.
-	- One-time OAuth bootstrap (to obtain `GOOGLE_REFRESH_TOKEN`):
-		- Run `npx tsx scripts/test-google-connection.ts`.
-		- Complete consent in browser; the script automatically writes `GOOGLE_REFRESH_TOKEN` into `.env`.
-		- Keep this token secret (same sensitivity as a password).
-		- If callback port is busy, set `GOOGLE_REDIRECT_URI` to a free port (example `http://localhost:3100/auth/google/callback`) and configure the exact same URI in Google OAuth client settings.
-	- Run batch loop:
-		- `npm run transfer:google-batch:scaleway -- --batch-items 100 --batch-gb 2`
-	- What each batch does automatically:
-		1. Downloads next media batch from Google Photos API (up to `--batch-items` or `--batch-gb`).
-		2. Uploads batch to Scaleway.
-		3. Verifies uploaded object presence + size.
-		4. Deletes local temporary file only after successful verification.
-		5. Saves checkpoint state and continues with the next batch until complete.
-	- Resume behavior:
-		- Uses `GOOGLE_BATCH_STATE_PATH` checkpoint file; rerunning command resumes from last successful position.
-	- Useful options:
-		- `--max-batches <n>` limit a run window.
-		- `--max-source-pages <n>` cap how many Google API pages are scanned per batch.
-		- `--state-path <path>` override checkpoint file.
-		- `--temp-dir <path>` override local temporary folder.
-		- `--dry-run` simulate without upload/delete.
-	- Important scope note:
-		- Google Photos Library API scopes used here are not equivalent to full historical-library export.
-		- For complete account migration at very large scale, keep using the Takeout flow above.
-- Useful checks:
-	- Type check: `npm run lint`
-	- Tests: `npm run test`
+### A) Full Google Photos library (recommended)
+1. Download Google Takeout archives and place them in `data/takeout/input` (or your `TAKEOUT_INPUT_DIR`).
+2. Build manifest:
+   - `npm run takeout:scan`
+3. Upload to Scaleway:
+   - `npm run takeout:upload`
+4. Verify upload:
+   - `npm run takeout:verify`
+5. If interrupted, resume:
+   - `npm run takeout:resume`
+
+### B) API batch mode (app-created data only)
+1. Run one-time OAuth bootstrap:
+   - `npx tsx scripts/test-google-connection.ts`
+2. Start transfer loop:
+   - `npm run transfer:google-batch:scaleway -- --batch-items 100 --batch-gb 2`
+3. Re-run the same command to resume from checkpoint.
+
+### Important
+- API batch mode does **not** read your full historical Google Photos library.
+- Use Takeout flow for complete migration.
+
+### Useful checks
+- Type check: `npm run lint`
+- Tests: `npm run test`
+
+## 4) Catalog browser (Scaleway)
+
+Browse and verify transferred media directly in your browser with an infinite-scroll photo grid.
+
+- **Requires** `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_REGION`, and `SCW_BUCKET` in `.env`.
+- Start the API: `npm run dev` (or `docker compose up -d app`)
+- Open in browser: `http://localhost:3000/catalog`
+- If API auth is enabled, append your token:
+	- `http://localhost:3000/catalog?apiToken=<YOUR_API_AUTH_TOKEN>`
+
+### Features
+- Date-grouped image/video grid with lazy loading.
+- Infinite scroll — additional pages load automatically.
+- Click any thumbnail to preview the full-resolution image or play video.
+- Optional prefix filter to narrow results to a subfolder.
+- Scroll position is remembered across page reloads.
+- Returns `503` with a helpful message when Scaleway env vars are missing.

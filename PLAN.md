@@ -258,6 +258,66 @@ Google Photos Picker remains for interactive subset transfers.
 - Add `GET /transfers/:id/logs` endpoint
 - **Tests:** Test log entries written during transfer, test log retrieval endpoint
 
+---
+
+## Phase 9 — Scaleway Catalog Browser (Google-Photos-like verification)
+
+### Goal
+Provide a web catalog page to visually verify transferred media in Scaleway Object Storage, with smooth infinite scrolling behavior similar to a photo library browser.
+
+### Step 26: Catalog backend service
+`[x]`
+- Create `src/catalog/scaleway-catalog.ts` with:
+  - Paginated listing via S3 `ListObjectsV2` (`max`, `token`, optional `prefix`)
+  - Media type inference (image/video/other)
+  - Date grouping value extraction (`YYYY-MM-DD`)
+  - Base64url key encoding/decoding for safe URL routing
+- Add object streaming support via `GetObject`
+- **Tests:** Covered through API tests with mocked catalog service
+
+### Step 27: Catalog API routes
+`[x]`
+- Add `src/api/routes/catalog.ts` endpoints:
+  - `GET /catalog` → browser UI HTML
+  - `GET /catalog/api/items` → paged catalog JSON
+  - `GET /catalog/media/:encodedKey` → stream media bytes
+- Return clear `503` when Scaleway catalog env vars are missing
+- **Tests:** Added route assertions in `src/api/index.test.ts`
+
+### Step 28: Infinite-scroll browser UI
+`[x]`
+- Build lightweight UI served by `/catalog`:
+  - Sticky top bar with prefix filter + reload
+  - Date-sectioned grid of thumbnails
+  - Infinite scroll with `IntersectionObserver`
+  - Lazy media loading and click-to-preview modal
+  - Scroll-position persistence in `sessionStorage`
+  - Back-to-top control
+- **Tests:** Endpoint and API behavior verified in server test suite
+
+### Step 29: Auth compatibility for browser media fetches
+`[x]`
+- Support `apiToken` query parameter on `/catalog*` requests
+- Keep header auth support (`Authorization` / `x-api-key`) unchanged
+- Redact `req.query.apiToken` in logs
+- **Tests:** Existing auth tests remain green and catalog tests pass
+
+### Step 30: Validation and rollout
+`[x]`
+- Run `npm run lint` and `npm run test`
+- Manual smoke test:
+  1. Open `/catalog`
+  2. Scroll through multiple pages
+  3. Open image and video preview
+  4. Reload and verify scroll restoration
+- Document usage in `README.md`
+
+### Acceptance criteria
+- User can verify transferred Scaleway media visually from browser
+- Scrolling loads additional pages without freezing UI
+- Clicking an item previews full media stream
+- Works with and without API auth token
+
 ### Step 26: Error handling & resilience
 `[x]`
 - Global Fastify error handler with structured error responses
