@@ -37,6 +37,15 @@ Local tool to move media between providers (with a Takeout-first flow for full G
 
 ## 3) How to use the tool to transfer
 
+- Quick start (create one transfer via API)
+	- Ensure app is running (`docker compose up -d` **or** `npm run dev`).
+	- Create transfer job (PowerShell):
+		- `Invoke-WebRequest -UseBasicParsing -Uri http://localhost:3000/transfers -Method POST -ContentType "application/json" -Body '{"sourceProvider":"google-photos","destProvider":"scaleway","keys":["example.jpg"]}'`
+	- List jobs:
+		- `Invoke-WebRequest -UseBasicParsing http://localhost:3000/transfers | Select-Object -ExpandProperty Content`
+- Note about `npm run dev`
+	- If Docker app is already running on port `3000`, `npm run dev` will fail.
+	- Stop container app first (`docker compose stop app`) or keep using Docker API at `http://localhost:3000`.
 - Full library (recommended): Google Takeout → Scaleway
 	- Put Takeout archives in `TAKEOUT_INPUT_DIR`.
 	- Build manifest: `npm run takeout:scan`
