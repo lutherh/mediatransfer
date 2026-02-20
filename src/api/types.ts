@@ -1,9 +1,17 @@
 import type { BulkTransferResult } from '../jobs/bulk-transfer.js';
-import type { TransferJob, TransferStatus, CloudCredential } from '../generated/prisma/client.js';
+import type { TransferJob, TransferStatus, CloudCredential, TransferLog } from '../generated/prisma/client.js';
+
+export type CredentialSummary = {
+  id: string;
+  name: string;
+  provider: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
 
 export type CredentialsService = {
   create(input: { name: string; provider: string; config: string }): Promise<CloudCredential>;
-  list(provider?: string): Promise<CloudCredential[]>;
+  list(provider?: string): Promise<CredentialSummary[]>;
   delete(id: string): Promise<CloudCredential>;
 };
 
@@ -26,6 +34,7 @@ export type JobsService = {
     input: { status?: TransferStatus; progress?: number; errorMessage?: string | null },
   ): Promise<TransferJob>;
   delete(id: string): Promise<TransferJob>;
+  listLogs(id: string): Promise<TransferLog[]>;
 };
 
 export type ProvidersService = {

@@ -240,7 +240,7 @@ Google Photos Picker remains for interactive subset transfers.
 ## Phase 7 — Encryption & Security
 
 ### Step 24: Credential encryption
-`[ ]`
+`[x]`
 - Create `src/utils/crypto.ts`:
   - AES-256-GCM encryption/decryption for credential storage
   - Key derived from env secret via PBKDF2
@@ -252,14 +252,14 @@ Google Photos Picker remains for interactive subset transfers.
 ## Phase 8 — Observability & Polish
 
 ### Step 25: Progress events and logging
-`[ ]`
+`[x]`
 - Add structured log entries at each transfer stage (start, progress %, complete, error)
 - Store logs in `TransferLog` table
 - Add `GET /transfers/:id/logs` endpoint
 - **Tests:** Test log entries written during transfer, test log retrieval endpoint
 
 ### Step 26: Error handling & resilience
-`[ ]`
+`[x]`
 - Global Fastify error handler with structured error responses
 - Provider-specific retry strategies (exponential backoff)
 - Dead letter queue for permanently failed jobs
@@ -270,14 +270,14 @@ Google Photos Picker remains for interactive subset transfers.
 ## Phase 9 — Docker & Deployment
 
 ### Step 27: Production Dockerfile
-`[ ]`
+`[~]`
 - Multi-stage Dockerfile (build → production)
 - Update `docker-compose.yml` for full-stack local run (this is the primary deployment target)
 - Add npm scripts: `dev`, `build`, `start`, `test`, `lint`
 - **Tests:** Verify build succeeds, app starts in container locally
 
 ### Step 28: CI pipeline
-`[ ]`
+`[x]`
 - Create `.github/workflows/ci.yml`: lint → test → build (no cloud deployment step — tool runs locally)
 - **Tests:** Verify pipeline definition is valid (lint the YAML)
 

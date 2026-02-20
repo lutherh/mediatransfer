@@ -58,7 +58,19 @@ export async function registerTransferRoutes(
       return reply.code(404).send({ error: 'Transfer job not found' });
     }
 
-    return { job, logs: [] };
+    const logs = await jobs.listLogs(id);
+    return { job, logs };
+  });
+
+  app.get('/transfers/:id/logs', async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const job = await jobs.get(id);
+    if (!job) {
+      return reply.code(404).send({ error: 'Transfer job not found' });
+    }
+
+    const logs = await jobs.listLogs(id);
+    return { logs };
   });
 
   app.delete('/transfers/:id', async (req, reply) => {

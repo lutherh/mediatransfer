@@ -1,34 +1,48 @@
 import type { PrismaClient } from '../generated/prisma/client.js';
 import type { CloudCredential } from '../generated/prisma/client.js';
 import { getPrismaClient } from './client.js';
+import { decryptString, encryptString } from '../utils/crypto.js';
 
 export type CreateCredentialInput = {
   name: string;
   provider: string;
-  config: string; // Already encrypted by the caller
+  config: string;
 };
 
 export type UpdateCredentialInput = {
   name?: string;
-  config?: string; // Already encrypted by the caller
+  config?: string;
 };
+
+export type CredentialSummary = Pick<
+  CloudCredential,
+  'id' | 'name' | 'provider' | 'createdAt' | 'updatedAt'
+>;
+
+function decryptCredential(credential: CloudCredential): CloudCredential {
+  return {
+    ...credential,
+    config: decryptString(credential.config),
+  };
+}
 
 /**
  * Store a new cloud credential.
- * The `config` field should already be encrypted before calling this.
  */
 export async function createCredential(
   input: CreateCredentialInput,
   client?: PrismaClient,
 ): Promise<CloudCredential> {
   const prisma = client ?? getPrismaClient();
+  const encryptedConfig = encryptString(input.config);
+
   return prisma.cloudCredential.create({
     data: {
       name: input.name,
       provider: input.provider,
-      config: input.config,
+      config: encryptedConfig,
     },
-  });
+  }).then(decryptCredential);
 }
 
 /**
@@ -39,7 +53,8 @@ export async function getCredentialById(
   client?: PrismaClient,
 ): Promise<CloudCredential | null> {
   const prisma = client ?? getPrismaClient();
-  return prisma.cloudCredential.findUnique({ where: { id } });
+  const credential = await prisma.cloudCredential.findUnique({ where: { id } });
+  return credential ? decryptCredential(credential) : null;
 }
 
 /**
@@ -50,9 +65,31 @@ export async function listCredentials(
   client?: PrismaClient,
 ): Promise<CloudCredential[]> {
   const prisma = client ?? getPrismaClient();
+  const credentials = await prisma.cloudCredential.findMany({
+    where: provider ? { provider } : undefined,
+    orderBy: { createdAt: 'desc' },
+  });
+  return credentials.map(decryptCredential);
+}
+
+/**
+ * List credential metadata without decrypting sensitive config.
+ */
+export async function listCredentialSummaries(
+  provider?: string,
+  client?: PrismaClient,
+): Promise<CredentialSummary[]> {
+  const prisma = client ?? getPrismaClient();
   return prisma.cloudCredential.findMany({
     where: provider ? { provider } : undefined,
     orderBy: { createdAt: 'desc' },
+    select: {
+      id: true,
+      name: true,
+      provider: true,
+      createdAt: true,
+      updatedAt: true,
+    },
   });
 }
 
@@ -65,10 +102,14 @@ export async function updateCredential(
   client?: PrismaClient,
 ): Promise<CloudCredential> {
   const prisma = client ?? getPrismaClient();
+
   return prisma.cloudCredential.update({
     where: { id },
-    data: input,
-  });
+    data: {
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.config !== undefined ? { config: encryptString(input.config) } : {}),
+    },
+  }).then(decryptCredential);
 }
 
 /**

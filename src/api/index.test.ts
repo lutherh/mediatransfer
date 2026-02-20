@@ -81,6 +81,16 @@ function createServices(): ApiServices {
         startedAt: null,
         completedAt: null,
       })),
+      listLogs: vi.fn(async () => [
+        {
+          id: 'log-1',
+          jobId: 'job-1',
+          level: 'INFO',
+          message: 'Transfer job started',
+          meta: { totalItems: 2 },
+          createdAt: new Date('2025-01-01T00:00:00.000Z'),
+        },
+      ]),
     },
     providers: {
       listNames: vi.fn(() => ['scaleway']),
@@ -169,6 +179,79 @@ describe('api server', () => {
 
     expect(objectsRes.statusCode).toBe(200);
     expect(objectsRes.json().items).toHaveLength(1);
+
+    await app.close();
+  });
+
+  it('returns transfer logs endpoint payload', async () => {
+    const services = createServices();
+    services.jobs.get = vi.fn(async () => ({
+      id: 'job-1',
+      sourceProvider: 'google-photos',
+      destProvider: 'scaleway',
+      sourceConfig: null,
+      destConfig: null,
+      keys: [],
+      status: TransferStatus.IN_PROGRESS,
+      progress: 0.5,
+      errorMessage: null,
+      createdAt: new Date('2025-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2025-01-01T00:00:00.000Z'),
+      startedAt: new Date('2025-01-01T00:00:00.000Z'),
+      completedAt: null,
+    }));
+
+    const app = await createApiServer({ services });
+    const res = await app.inject({ method: 'GET', url: '/transfers/job-1/logs' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().logs).toHaveLength(1);
+    expect(services.jobs.listLogs).toHaveBeenCalledWith('job-1');
+
+    await app.close();
+  });
+
+  it('returns structured validation errors', async () => {
+    const app = await createApiServer({ services: createServices() });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/credentials',
+      payload: {
+        name: 'main',
+        config: '{"secret":true}',
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('VALIDATION_ERROR');
+    expect(res.json().error.message).toBe('Request validation failed');
+    expect(Array.isArray(res.json().error.details)).toBe(true);
+    expect(res.json()).toHaveProperty('requestId');
+
+    await app.close();
+  });
+
+  it('returns structured internal errors', async () => {
+    const services = createServices();
+    services.credentials.create = vi.fn(async () => {
+      throw new Error('db unavailable');
+    });
+
+    const app = await createApiServer({ services });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/credentials',
+      payload: {
+        name: 'main',
+        provider: 'scaleway',
+        config: '{"secret":true}',
+      },
+    });
+
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error.code).toBe('INTERNAL_ERROR');
+    expect(res.json().error.message).toBe('Internal server error');
+    expect(res.json()).toHaveProperty('requestId');
 
     await app.close();
   });
