@@ -149,7 +149,7 @@ export class ScalewayCatalogService implements CatalogService {
 
     return {
       stream,
-      contentType: response.ContentType,
+      contentType: response.ContentType ?? inferContentType(decodedKey),
     };
   }
 
@@ -216,4 +216,46 @@ function clamp(value: number, min: number, max: number): number {
     return max;
   }
   return value;
+}
+
+function inferContentType(key: string): string | undefined {
+  const ext = key.split('.').pop()?.toLowerCase() ?? '';
+  switch (ext) {
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'png':
+      return 'image/png';
+    case 'gif':
+      return 'image/gif';
+    case 'webp':
+      return 'image/webp';
+    case 'heic':
+      return 'image/heic';
+    case 'heif':
+      return 'image/heif';
+    case 'avif':
+      return 'image/avif';
+    case 'dng':
+      return 'image/x-adobe-dng';
+    case 'tif':
+    case 'tiff':
+      return 'image/tiff';
+    case 'mp4':
+      return 'video/mp4';
+    case 'mov':
+      return 'video/quicktime';
+    case 'avi':
+      return 'video/x-msvideo';
+    case 'm4v':
+      return 'video/x-m4v';
+    case '3gp':
+      return 'video/3gpp';
+    case 'mkv':
+      return 'video/x-matroska';
+    case 'webm':
+      return 'video/webm';
+    default:
+      return undefined;
+  }
 }
