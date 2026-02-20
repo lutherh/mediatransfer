@@ -22,10 +22,12 @@ import {
 	listProviderNames,
 	validateScalewayConfig,
 } from '../providers/index.js';
+import { ScalewayCatalogService } from '../catalog/scaleway-catalog.js';
 import { registerHealthRoutes } from './health.js';
 import { registerCredentialsRoutes } from './routes/credentials.js';
 import { registerTransferRoutes } from './routes/transfers.js';
 import { registerProviderRoutes } from './routes/providers.js';
+import { registerCatalogRoutes } from './routes/catalog.js';
 import type { ApiServices } from './types.js';
 
 export type CreateApiOptions = {
@@ -37,11 +39,15 @@ export type CreateApiOptions = {
 
 export async function createApiServer(options?: CreateApiOptions): Promise<FastifyInstance> {
 	const app = Fastify({
+		routerOptions: {
+			maxParamLength: 1000,
+		},
 		logger: {
 			redact: {
 				paths: [
 					'req.headers.authorization',
 					'req.headers.x-api-key',
+					'req.query.apiToken',
 					'req.body.config',
 					'body.config',
 					'config.secretKey',
@@ -67,7 +73,10 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 				return;
 			}
 
-			const headerToken = parseAuthToken(request.headers.authorization, request.headers['x-api-key']);
+			const queryToken = request.url.startsWith('/catalog')
+				? extractApiTokenFromUrl(request.url)
+				: undefined;
+			const headerToken = parseAuthToken(request.headers.authorization, request.headers['x-api-key'], queryToken);
 			if (!headerToken || !safeEqual(headerToken, apiAuthToken)) {
 				return reply.status(401).send({
 					error: {
@@ -140,6 +149,7 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	await registerCredentialsRoutes(app, runtime.services.credentials);
 	await registerTransferRoutes(app, runtime.services.jobs, runtime.services.queue);
 	await registerProviderRoutes(app, runtime.services.providers);
+	await registerCatalogRoutes(app, runtime.services.catalog);
 
 	app.addHook('onClose', async () => {
 		await runtime.dispose?.();
@@ -206,6 +216,7 @@ function createDefaultServices(): { services: ApiServices; dispose: () => Promis
 		queue: {
 			enqueueBulk: (input) => enqueueBulkTransfer(queue as any, input),
 		},
+		catalog: createCatalogServiceFromEnv(),
 	};
 
 	return {
@@ -222,7 +233,12 @@ export type { TransferJobPayload };
 function parseAuthToken(
 	authorizationHeader: string | undefined,
 	xApiKeyHeader: string | string[] | undefined,
+	queryApiToken?: string,
 ): string | undefined {
+	if (queryApiToken && queryApiToken.length > 0) {
+		return queryApiToken;
+	}
+
 	if (typeof xApiKeyHeader === 'string' && xApiKeyHeader.length > 0) {
 		return xApiKeyHeader;
 	}
@@ -237,6 +253,37 @@ function parseAuthToken(
 
 	const match = /^Bearer\s+(.+)$/i.exec(authorizationHeader);
 	return match?.[1];
+}
+
+function extractApiTokenFromUrl(url: string): string | undefined {
+	const queryStart = url.indexOf('?');
+	if (queryStart < 0) {
+		return undefined;
+	}
+
+	const params = new URLSearchParams(url.slice(queryStart + 1));
+	const value = params.get('apiToken');
+	return value && value.length > 0 ? value : undefined;
+}
+
+function createCatalogServiceFromEnv(): ScalewayCatalogService | undefined {
+	const region = process.env.SCW_REGION;
+	const bucket = process.env.SCW_BUCKET;
+	const accessKey = process.env.SCW_ACCESS_KEY;
+	const secretKey = process.env.SCW_SECRET_KEY;
+	const prefix = process.env.SCW_PREFIX;
+
+	if (!region || !bucket || !accessKey || !secretKey) {
+		return undefined;
+	}
+
+	return new ScalewayCatalogService({
+		region,
+		bucket,
+		accessKey,
+		secretKey,
+		prefix,
+	});
 }
 
 function safeEqual(left: string, right: string): boolean {

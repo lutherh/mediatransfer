@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { Readable } from 'node:stream';
 import { TransferStatus } from '../generated/prisma/client.js';
 import { createApiServer } from './index.js';
 import type { ApiServices } from './types.js';
@@ -106,6 +107,25 @@ function createServices(): ApiServices {
     },
     queue: {
       enqueueBulk: vi.fn(async () => ({ enqueuedCount: 2, queueJobIds: ['1', '2'] })),
+    },
+    catalog: {
+      listPage: vi.fn(async () => ({
+        items: [
+          {
+            key: '2026/02/20/photo.jpg',
+            encodedKey: 'MjAyNi8wMi8yMC9waG90by5qcGc',
+            size: 123,
+            lastModified: '2026-02-20T10:00:00.000Z',
+            mediaType: 'image',
+            sectionDate: '2026-02-20',
+          },
+        ],
+        nextToken: 'next-token',
+      })),
+      getObject: vi.fn(async () => ({
+        stream: Readable.from([Buffer.from('mock-image')]),
+        contentType: 'image/jpeg',
+      })),
     },
   };
 }
@@ -231,6 +251,92 @@ describe('api server', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().logs).toHaveLength(1);
     expect(services.jobs.listLogs).toHaveBeenCalledWith('job-1');
+
+    await app.close();
+  });
+
+  it('serves catalog browser and paginated items', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const pageRes = await app.inject({ method: 'GET', url: '/catalog' });
+    expect(pageRes.statusCode).toBe(200);
+    expect(pageRes.headers['content-type']).toContain('text/html');
+
+    const apiRes = await app.inject({ method: 'GET', url: '/catalog/api/items?max=30' });
+    expect(apiRes.statusCode).toBe(200);
+    expect(apiRes.json().items).toHaveLength(1);
+    expect(services.catalog?.listPage).toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('streams media from catalog endpoint', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const mediaRes = await app.inject({
+      method: 'GET',
+      url: '/catalog/media/MjAyNi8wMi8yMC9waG90by5qcGc',
+    });
+
+    expect(mediaRes.statusCode).toBe(200);
+    expect(mediaRes.headers['content-type']).toContain('image/jpeg');
+    expect(mediaRes.body.length).toBeGreaterThan(0);
+
+    await app.close();
+  });
+
+  it('streams media for long encoded keys', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+    const longEncodedKey = 'cGhvdG9zL2J5LWhhc2gvMDAvMjQvMDAyNDNiNmUzZThlMjhhNzhlMTFjZTdhOGY3OGEwMjUzZWFkYjFmNzA3OTRmN2IzZTMzODE2NGNhOWM3MDBhZi5IRUlD';
+
+    const mediaRes = await app.inject({
+      method: 'GET',
+      url: `/catalog/media/${longEncodedKey}`,
+    });
+
+    expect(mediaRes.statusCode).toBe(200);
+    expect(services.catalog?.getObject).toHaveBeenCalledWith(longEncodedKey);
+
+    await app.close();
+  });
+
+  it('returns 404 when catalog media object does not exist', async () => {
+    const services = createServices();
+    services.catalog!.getObject = vi.fn(async () => {
+      const err = Object.assign(new Error('NoSuchKey'), {
+        name: 'NoSuchKey',
+        $metadata: { httpStatusCode: 404 },
+      });
+      throw err;
+    });
+
+    const app = await createApiServer({ services });
+    const mediaRes = await app.inject({
+      method: 'GET',
+      url: '/catalog/media/MjAyNi8wMi8yMC9taXNzaW5nLmpwZw',
+    });
+
+    expect(mediaRes.statusCode).toBe(404);
+    expect(mediaRes.json().error.code).toBe('CATALOG_MEDIA_NOT_FOUND');
+
+    await app.close();
+  });
+
+  it('rejects malformed encoded media key', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const mediaRes = await app.inject({
+      method: 'GET',
+      url: '/catalog/media/not-valid+base64',
+    });
+
+    expect(mediaRes.statusCode).toBe(400);
+    expect(mediaRes.json().error.code).toBe('VALIDATION_ERROR');
+    expect(services.catalog?.getObject).not.toHaveBeenCalled();
 
     await app.close();
   });

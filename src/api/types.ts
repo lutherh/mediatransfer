@@ -1,5 +1,6 @@
 import type { BulkTransferResult } from '../jobs/bulk-transfer.js';
 import type { TransferJob, TransferStatus, CloudCredential, TransferLog } from '../generated/prisma/client.js';
+import type { CatalogItem, CatalogObject } from '../catalog/scaleway-catalog.js';
 
 export type CredentialSummary = {
   id: string;
@@ -55,9 +56,15 @@ export type QueueService = {
   }): Promise<BulkTransferResult>;
 };
 
+export type CatalogService = {
+  listPage(input?: { max?: number; token?: string; prefix?: string }): Promise<{ items: CatalogItem[]; nextToken?: string }>;
+  getObject(encodedKey: string): Promise<CatalogObject>;
+};
+
 export type ApiServices = {
   credentials: CredentialsService;
   jobs: JobsService;
   providers: ProvidersService;
   queue: QueueService;
+  catalog?: CatalogService;
 };
