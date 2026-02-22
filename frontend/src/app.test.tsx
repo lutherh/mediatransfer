@@ -6,6 +6,7 @@ import { Layout } from '@/components/layout';
 import { TransfersListPage } from '@/pages/transfers-list-page';
 import { NewTransferPage } from '@/pages/new-transfer-page';
 import { TransferDetailPage } from '@/pages/transfer-detail-page';
+import { TakeoutProgressPage } from '@/pages/takeout-progress-page';
 
 vi.mock('@/lib/api', () => ({
   fetchTransfers: vi.fn(async () => [
@@ -36,6 +37,24 @@ vi.mock('@/lib/api', () => ({
       },
     ],
   })),
+  fetchTakeoutStatus: vi.fn(async () => ({
+    paths: {
+      manifestPath: 'data/takeout/work/manifest.jsonl',
+      statePath: 'data/takeout/state.json',
+    },
+    counts: {
+      total: 18,
+      processed: 18,
+      pending: 0,
+      uploaded: 10,
+      skipped: 8,
+      failed: 0,
+    },
+    progress: 1,
+    stateUpdatedAt: new Date().toISOString(),
+    recentFailures: [],
+    isComplete: true,
+  })),
   createTransfer: vi.fn(),
 }));
 
@@ -47,6 +66,7 @@ function renderRoute(path: string) {
         <Routes>
           <Route element={<Layout />} path="/">
             <Route element={<TransfersListPage />} index />
+            <Route element={<TakeoutProgressPage />} path="takeout" />
             <Route element={<NewTransferPage />} path="transfers/new" />
             <Route element={<TransferDetailPage />} path="transfers/:id" />
           </Route>
@@ -71,6 +91,12 @@ describe('frontend pages', () => {
     renderRoute('/transfers/new');
     expect(await screen.findByRole('heading', { name: 'New Transfer' })).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: /create transfer/i })).toBeInTheDocument();
+  });
+
+  it('renders takeout progress page', async () => {
+    renderRoute('/takeout');
+    expect(await screen.findByRole('heading', { name: 'Takeout Transfer Progress' })).toBeInTheDocument();
+    expect(await screen.findByText('Overall progress')).toBeInTheDocument();
   });
 
   it('renders transfer detail page', async () => {

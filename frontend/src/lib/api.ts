@@ -16,6 +16,30 @@ export type TransferLog = {
   createdAt: string;
 };
 
+export type TakeoutStatus = {
+  paths: {
+    manifestPath: string;
+    statePath: string;
+  };
+  counts: {
+    total: number;
+    processed: number;
+    pending: number;
+    uploaded: number;
+    skipped: number;
+    failed: number;
+  };
+  progress: number;
+  stateUpdatedAt: string;
+  recentFailures: Array<{
+    key: string;
+    error?: string;
+    updatedAt: string;
+    attempts: number;
+  }>;
+  isComplete: boolean;
+};
+
 export async function fetchTransfers(): Promise<TransferJob[]> {
   const response = await fetch(`${API_BASE_URL}/transfers`);
   if (!response.ok) {
@@ -45,6 +69,15 @@ export async function createTransfer(payload: {
 
   if (!response.ok) {
     throw new Error('Failed to create transfer');
+  }
+
+  return response.json();
+}
+
+export async function fetchTakeoutStatus(): Promise<TakeoutStatus> {
+  const response = await fetch(`${API_BASE_URL}/takeout/status`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch takeout status');
   }
 
   return response.json();

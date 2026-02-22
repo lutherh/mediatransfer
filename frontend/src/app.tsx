@@ -4,6 +4,7 @@ import { Layout } from '@/components/layout';
 import { TransfersListPage } from '@/pages/transfers-list-page';
 import { NewTransferPage } from '@/pages/new-transfer-page';
 import { TransferDetailPage } from '@/pages/transfer-detail-page';
+import { TakeoutProgressPage } from '@/pages/takeout-progress-page';
 
 const queryClient = new QueryClient();
 
@@ -14,6 +15,7 @@ export function App() {
         <Routes>
           <Route element={<Layout />} path="/">
             <Route element={<TransfersListPage />} index />
+            <Route element={<TakeoutProgressPage />} path="takeout" />
             <Route element={<NewTransferPage />} path="transfers/new" />
             <Route element={<TransferDetailPage />} path="transfers/:id" />
           </Route>

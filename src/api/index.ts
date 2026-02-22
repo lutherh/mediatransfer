@@ -28,6 +28,7 @@ import { registerCredentialsRoutes } from './routes/credentials.js';
 import { registerTransferRoutes } from './routes/transfers.js';
 import { registerProviderRoutes } from './routes/providers.js';
 import { registerCatalogRoutes } from './routes/catalog.js';
+import { registerTakeoutRoutes } from './routes/takeout.js';
 import type { ApiServices } from './types.js';
 
 export type CreateApiOptions = {
@@ -150,6 +151,7 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	await registerTransferRoutes(app, runtime.services.jobs, runtime.services.queue);
 	await registerProviderRoutes(app, runtime.services.providers);
 	await registerCatalogRoutes(app, runtime.services.catalog);
+	await registerTakeoutRoutes(app);
 
 	app.addHook('onClose', async () => {
 		await runtime.dispose?.();
