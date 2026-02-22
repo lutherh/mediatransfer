@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Stepper, type StepDef } from '@/components/ui/stepper';
 import { ConnectGoogleStep } from '@/components/steps/connect-google-step';
 import { PickPhotosStep } from '@/components/steps/pick-photos-step';
@@ -13,11 +13,79 @@ const STEPS: StepDef[] = [
   { label: 'Transfer', description: 'Upload to cloud' },
 ];
 
+const WIZARD_STATE_STORAGE_KEY = 'photo-transfer-wizard-state-v1';
+
+type WizardState = {
+  currentStep: number;
+  selectedItems: PickedMediaItem[];
+  sessionId: string;
+  jobId: string;
+};
+
+function clampStep(step: number): number {
+  if (!Number.isFinite(step)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(step, STEPS.length - 1));
+}
+
+function sanitizeWizardState(partial: Partial<WizardState>): WizardState {
+  const selectedItems = Array.isArray(partial.selectedItems)
+    ? partial.selectedItems.filter((item): item is PickedMediaItem => Boolean(item?.id))
+    : [];
+  const sessionId = typeof partial.sessionId === 'string' ? partial.sessionId : '';
+  const jobId = typeof partial.jobId === 'string' ? partial.jobId : '';
+
+  let currentStep = clampStep(typeof partial.currentStep === 'number' ? partial.currentStep : 0);
+
+  if (currentStep >= 2 && (selectedItems.length === 0 || sessionId.length === 0)) {
+    currentStep = 1;
+  }
+
+  if (currentStep >= 3 && jobId.length === 0) {
+    currentStep = 2;
+  }
+
+  return {
+    currentStep,
+    selectedItems,
+    sessionId,
+    jobId,
+  };
+}
+
+function readPersistedWizardState(): WizardState {
+  try {
+    const raw = window.sessionStorage.getItem(WIZARD_STATE_STORAGE_KEY);
+    if (!raw) {
+      return sanitizeWizardState({});
+    }
+
+    const parsed = JSON.parse(raw) as Partial<WizardState>;
+    return sanitizeWizardState(parsed);
+  } catch {
+    return sanitizeWizardState({});
+  }
+}
+
 export function PhotoTransferPage() {
-  const [currentStep, setCurrentStep] = useState(0);
-  const [selectedItems, setSelectedItems] = useState<PickedMediaItem[]>([]);
-  const [sessionId, setSessionId] = useState<string>('');
-  const [jobId, setJobId] = useState<string>('');
+  const [initialState] = useState<WizardState>(() => readPersistedWizardState());
+  const [currentStep, setCurrentStep] = useState(initialState.currentStep);
+  const [selectedItems, setSelectedItems] = useState<PickedMediaItem[]>(initialState.selectedItems);
+  const [sessionId, setSessionId] = useState<string>(initialState.sessionId);
+  const [jobId, setJobId] = useState<string>(initialState.jobId);
+
+  useEffect(() => {
+    const persisted = sanitizeWizardState({
+      currentStep,
+      selectedItems,
+      sessionId,
+      jobId,
+    });
+
+    window.sessionStorage.setItem(WIZARD_STATE_STORAGE_KEY, JSON.stringify(persisted));
+  }, [currentStep, selectedItems, sessionId, jobId]);
 
   const handleConnected = useCallback(() => {
     setCurrentStep(1);
@@ -39,6 +107,7 @@ export function PhotoTransferPage() {
     setSelectedItems([]);
     setSessionId('');
     setJobId('');
+    window.sessionStorage.removeItem(WIZARD_STATE_STORAGE_KEY);
   }, []);
 
   return (

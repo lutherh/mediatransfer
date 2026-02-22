@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { PhotoTransferPage } from '@/pages/photo-transfer-page';
@@ -41,6 +41,7 @@ function renderPage() {
 describe('PhotoTransferPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.sessionStorage.clear();
   });
 
   it('renders page title and stepper', async () => {
@@ -153,5 +154,24 @@ describe('PhotoTransferPage', () => {
 
     expect(await screen.findByText('Transfer Status')).toBeInTheDocument();
     expect(screen.getAllByText('In Progress').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('restores Review step when returning to page', async () => {
+    window.sessionStorage.setItem(
+      'photo-transfer-wizard-state-v1',
+      JSON.stringify({
+        currentStep: 2,
+        selectedItems: [
+          { id: 'restore-1', mimeType: 'image/jpeg', filename: 'restored.jpg' },
+        ],
+        sessionId: 'restore-session',
+        jobId: '',
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: 'Review Transfer' })).toBeInTheDocument();
+    expect(screen.getByText('Google Photos')).toBeInTheDocument();
   });
 });
