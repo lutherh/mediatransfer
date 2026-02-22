@@ -53,7 +53,7 @@ export function TransfersListPage() {
                     <td className="px-3 py-2 border-b border-slate-100 text-slate-800">{job.destProvider}</td>
                     <td className="px-3 py-2 border-b border-slate-100">
                       <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[job.status] ?? 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
-                        {job.status}
+                        {job.status === 'CANCELLED' ? 'PAUSED' : job.status}
                       </span>
                     </td>
                     <td className="px-3 py-2 border-b border-slate-100 text-right tabular-nums text-slate-700">

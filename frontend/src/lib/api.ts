@@ -68,6 +68,32 @@ export async function fetchTransferDetail(id: string): Promise<{ job: TransferJo
   return response.json();
 }
 
+export async function pauseTransfer(id: string): Promise<{ message: string }> {
+  const response = await fetch(`${API_BASE_URL}/transfers/${id}/pause`, {
+    method: 'POST',
+  });
+
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to pause transfer');
+  }
+
+  return response.json();
+}
+
+export async function resumeTransfer(id: string): Promise<{ message: string }> {
+  const response = await fetch(`${API_BASE_URL}/transfers/${id}/resume`, {
+    method: 'POST',
+  });
+
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to resume transfer');
+  }
+
+  return response.json();
+}
+
 export async function createTransfer(payload: {
   sourceProvider: string;
   destProvider: string;

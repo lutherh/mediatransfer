@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { fetchTransferDetail } from '@/lib/api';
+import { fetchTransferDetail, pauseTransfer, resumeTransfer } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
@@ -17,11 +17,12 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   IN_PROGRESS: { label: 'In Progress', color: 'text-blue-600' },
   COMPLETED: { label: 'Completed', color: 'text-green-600' },
   FAILED: { label: 'Failed', color: 'text-red-600' },
-  CANCELLED: { label: 'Cancelled', color: 'text-slate-500' },
+  CANCELLED: { label: 'Paused', color: 'text-slate-500' },
 };
 
 export function TransferProgressStep({ jobId, totalItems, onStartNew }: TransferProgressStepProps) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['transfer', jobId],
@@ -32,6 +33,26 @@ export function TransferProgressStep({ jobId, totalItems, onStartNew }: Transfer
         return false;
       }
       return 2000;
+    },
+  });
+
+  const pauseMutation = useMutation({
+    mutationFn: pauseTransfer,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['transfer', jobId] }),
+        queryClient.invalidateQueries({ queryKey: ['transfers'] }),
+      ]);
+    },
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: resumeTransfer,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['transfer', jobId] }),
+        queryClient.invalidateQueries({ queryKey: ['transfers'] }),
+      ]);
     },
   });
 
@@ -58,6 +79,9 @@ export function TransferProgressStep({ jobId, totalItems, onStartNew }: Transfer
   const { job, logs } = data;
   const statusInfo = STATUS_LABELS[job.status] ?? { label: job.status, color: 'text-slate-600' };
   const isFinished = job.status === 'COMPLETED' || job.status === 'FAILED' || job.status === 'CANCELLED';
+  const canPause = job.status === 'PENDING' || job.status === 'IN_PROGRESS';
+  const canResume = job.status === 'CANCELLED';
+  const isActionPending = pauseMutation.isPending || resumeMutation.isPending;
 
   return (
     <div className="space-y-4">
@@ -143,6 +167,23 @@ export function TransferProgressStep({ jobId, totalItems, onStartNew }: Transfer
 
       {/* Actions */}
       <div className="flex gap-3">
+        {canPause && (
+          <Button
+            className="bg-amber-600 text-white hover:bg-amber-700"
+            onClick={() => pauseMutation.mutate(jobId)}
+            disabled={isActionPending}
+          >
+            Pause transfer
+          </Button>
+        )}
+        {canResume && (
+          <Button
+            onClick={() => resumeMutation.mutate(jobId)}
+            disabled={isActionPending}
+          >
+            Resume transfer
+          </Button>
+        )}
         {isFinished && (
           <Button onClick={onStartNew}>
             Start New Transfer
@@ -161,6 +202,15 @@ export function TransferProgressStep({ jobId, totalItems, onStartNew }: Transfer
           All Transfers
         </Button>
       </div>
+      {(pauseMutation.isError || resumeMutation.isError) && (
+        <Alert variant="error">
+          {pauseMutation.error instanceof Error
+            ? pauseMutation.error.message
+            : resumeMutation.error instanceof Error
+              ? resumeMutation.error.message
+              : 'Failed to update transfer state.'}
+        </Alert>
+      )}
     </div>
   );
 }

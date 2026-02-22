@@ -10,6 +10,8 @@ export type TransferJobPayload = {
   keys: string[];
   sourceConfig?: Record<string, unknown>;
   destConfig?: Record<string, unknown>;
+  startIndex?: number;
+  totalKeys?: number;
 };
 
 export type TransferDeadLetterPayload = TransferJobPayload & {
