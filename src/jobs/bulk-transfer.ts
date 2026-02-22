@@ -24,21 +24,26 @@ export async function enqueueBulkTransfer(
   const keys = normalizeKeys(input.keys, input.prefix);
   const jobIds: string[] = [];
 
-  for (const key of keys) {
-    const id = await enqueueTransferJob(queue, {
-      transferJobId: input.transferJobId,
-      sourceProvider: input.sourceProvider,
-      destProvider: input.destProvider,
-      keys: [key],
-      sourceConfig: input.sourceConfig,
-      destConfig: input.destConfig,
-    });
-
-    jobIds.push(id);
+  if (keys.length === 0) {
+    return {
+      enqueuedCount: 0,
+      queueJobIds: [],
+    };
   }
 
+  const id = await enqueueTransferJob(queue, {
+    transferJobId: input.transferJobId,
+    sourceProvider: input.sourceProvider,
+    destProvider: input.destProvider,
+    keys,
+    sourceConfig: input.sourceConfig,
+    destConfig: input.destConfig,
+  });
+
+  jobIds.push(id);
+
   return {
-    enqueuedCount: jobIds.length,
+    enqueuedCount: keys.length,
     queueJobIds: jobIds,
   };
 }
