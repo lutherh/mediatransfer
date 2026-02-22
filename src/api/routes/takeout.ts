@@ -166,6 +166,9 @@ function runAction(action: TakeoutAction): void {
     RUN_STATUS.finishedAt = new Date().toISOString();
     RUN_STATUS.exitCode = typeof code === 'number' ? code : -1;
     RUN_STATUS.success = code === 0;
+    if (action === 'start-services' && RUN_STATUS.success === false) {
+      appendStartServicesFailureHints();
+    }
     appendOutput(`Action finished with code ${RUN_STATUS.exitCode}`);
     currentProcess = null;
     if (currentTimeout) {
@@ -177,7 +180,7 @@ function runAction(action: TakeoutAction): void {
 
 function resolveActionCommand(action: TakeoutAction): string {
   if (action === 'start-services') {
-    return 'docker compose up -d postgres redis';
+    return 'docker compose up -d postgres redis || docker-compose up -d postgres redis';
   }
 
   const scriptByAction: Record<Exclude<TakeoutAction, 'start-services'>, string> = {
@@ -188,6 +191,27 @@ function resolveActionCommand(action: TakeoutAction): string {
   };
 
   return `npm run ${scriptByAction[action]}`;
+}
+
+function appendStartServicesFailureHints(): void {
+  const fullOutput = RUN_STATUS.output.join('\n').toLowerCase();
+
+  if (fullOutput.includes('docker is not recognized') || fullOutput.includes('docker-compose is not recognized')) {
+    appendOutput('Hint: Docker CLI was not found in PATH. Install Docker Desktop and reopen your terminal/editor.');
+    return;
+  }
+
+  if (fullOutput.includes('cannot connect to the docker daemon') || fullOutput.includes('error during connect')) {
+    appendOutput('Hint: Docker daemon is not running. Start Docker Desktop and retry Start Services.');
+    return;
+  }
+
+  if (fullOutput.includes('address already in use') || fullOutput.includes('port is already allocated')) {
+    appendOutput('Hint: A required port is already in use (likely 5432 or 6379). Stop conflicting services and retry.');
+    return;
+  }
+
+  appendOutput('Hint: Service startup failed. Run "docker compose logs postgres redis" and fix reported issues, then retry.');
 }
 
 function appendOutput(chunk: string): void {
