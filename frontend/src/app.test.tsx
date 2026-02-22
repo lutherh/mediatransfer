@@ -55,6 +55,14 @@ vi.mock('@/lib/api', () => ({
     recentFailures: [],
     isComplete: true,
   })),
+  fetchTakeoutActionStatus: vi.fn(async () => ({
+    running: false,
+    action: 'verify',
+    success: true,
+    exitCode: 0,
+    output: [],
+  })),
+  runTakeoutAction: vi.fn(),
   createTransfer: vi.fn(),
 }));
 

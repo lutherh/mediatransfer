@@ -39,23 +39,7 @@ npm run prisma:generate
 docker compose up -d postgres redis
 ```
 
-### Step 6: Start transfer
-Run these commands in order:
-
-```bash
-npm run takeout:scan
-npm run takeout:upload
-npm run takeout:verify
-```
-
-### Step 7: If transfer stops halfway
-Run:
-
-```bash
-npm run takeout:resume
-```
-
-### Step 8: See progress in the browser
+### Step 6: Start the app
 1. Start API server:
 
 ```bash
@@ -71,8 +55,34 @@ npm run dev
 ```
 
 3. Open the URL shown by Vite (usually `http://localhost:5173`) and go to:
-	- `/takeout` for live transfer progress
+	- `/takeout` for live transfer progress and controls
 	- `/catalog` (API URL `http://localhost:3000/catalog`) to browse uploaded media
+
+### Step 7: Run transfer with buttons (no terminal)
+On `/takeout`, click these buttons in order:
+1. **Start Services**
+2. **Scan**
+3. **Upload**
+4. **Verify**
+
+If upload is interrupted, click **Resume**.
+
+### Step 8: Watch progress
+- The page shows:
+  - overall progress bar
+  - counts (`Total`, `Processed`, `Pending`, `Uploaded`, `Skipped`, `Failed`)
+  - recent failures (if any)
+  - live command output
+
+### Terminal fallback (optional)
+If you prefer terminal, the equivalent commands are:
+
+```bash
+npm run takeout:scan
+npm run takeout:upload
+npm run takeout:verify
+npm run takeout:resume
+```
 
 ### Done checklist
 - `takeout:verify` shows `Missing: 0`
@@ -93,6 +103,13 @@ docker compose up -d postgres redis
 ```bash
 npm run dev
 ```
+
+	- If frontend fails to start, make sure you are inside the `frontend` folder:
+
+	```bash
+	cd frontend
+	npm run dev
+	```
 
 ## 1) Setup environment values
 
