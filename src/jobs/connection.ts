@@ -8,7 +8,7 @@ export function getRedisOptionsFromEnv(overrides?: Partial<RedisOptions>): Redis
     port: env.REDIS_PORT,
     maxRetriesPerRequest: null,
     enableReadyCheck: true,
-    lazyConnect: false,
+    lazyConnect: true,
     ...overrides,
   };
 }
