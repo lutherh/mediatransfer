@@ -40,6 +40,7 @@ export type VerifySummary = {
 export type UploadRunOptions = {
   dryRun?: boolean;
   maxFailures?: number;
+  uploadConcurrency?: number;
   includeFilter?: string;
   excludeFilter?: string;
   reportDir?: string;
@@ -85,6 +86,7 @@ export async function runTakeoutUpload(
     provider,
     entries,
     statePath: config.statePath,
+    uploadConcurrency: options.uploadConcurrency ?? config.uploadConcurrency,
     retryCount: config.uploadRetryCount,
     dryRun: options.dryRun,
     maxFailures: options.maxFailures,
@@ -121,19 +123,39 @@ export async function runTakeoutVerify(
   manifestPath = path.join(config.workDir, DEFAULT_MANIFEST_FILE),
 ): Promise<VerifySummary> {
   const entries = await loadManifestJsonl(manifestPath);
-
+  const indexedKeys = await preloadVerifyDestinationIndex(provider, entries);
+  const existingCache = new Map<string, boolean>();
   const missingKeys: string[] = [];
   let present = 0;
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(config.uploadConcurrency, 1), Math.max(entries.length, 1));
 
-  for (const entry of entries) {
-    const objects = await provider.list({ prefix: entry.destinationKey, maxResults: 20 });
-    const exists = objects.some((obj) => obj.key === entry.destinationKey);
-    if (exists) {
-      present += 1;
-    } else {
-      missingKeys.push(entry.destinationKey);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+
+      if (index >= entries.length) {
+        return;
+      }
+
+      const key = entries[index].destinationKey;
+
+      if (indexedKeys.has(key)) {
+        present += 1;
+        continue;
+      }
+
+      const exists = await objectExistsCached(provider, key, existingCache);
+      if (exists) {
+        present += 1;
+      } else {
+        missingKeys.push(key);
+      }
     }
-  }
+  });
+
+  await Promise.all(workers);
 
   return {
     total: entries.length,
@@ -152,3 +174,49 @@ export function withDefaults(partial: Partial<TakeoutConfig>): TakeoutConfig {
     uploadRetryCount: partial.uploadRetryCount ?? 5,
   };
  }
+
+async function preloadVerifyDestinationIndex(
+  provider: CloudProvider,
+  entries: Array<{ destinationKey: string }>,
+): Promise<Set<string>> {
+  const prefixes = collectDatePrefixes(entries);
+  const keys = new Set<string>();
+
+  for (const prefix of prefixes) {
+    const listed = await provider.list({ prefix });
+    for (const item of listed) {
+      keys.add(item.key);
+    }
+  }
+
+  return keys;
+}
+
+function collectDatePrefixes(entries: Array<{ destinationKey: string }>): string[] {
+  const prefixes = new Set<string>();
+
+  for (const entry of entries) {
+    const match = /^(\d{4}\/\d{2}\/\d{2})\//.exec(entry.destinationKey);
+    if (match?.[1]) {
+      prefixes.add(`${match[1]}/`);
+    }
+  }
+
+  return [...prefixes].sort((a, b) => a.localeCompare(b));
+}
+
+async function objectExistsCached(
+  provider: CloudProvider,
+  key: string,
+  existingCache: Map<string, boolean>,
+): Promise<boolean> {
+  const cached = existingCache.get(key);
+  if (typeof cached === 'boolean') {
+    return cached;
+  }
+
+  const objects = await provider.list({ prefix: key, maxResults: 20 });
+  const exists = objects.some((obj) => obj.key === key);
+  existingCache.set(key, exists);
+  return exists;
+}

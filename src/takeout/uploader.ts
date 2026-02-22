@@ -32,10 +32,13 @@ export type UploadOptions = {
   provider: CloudProvider;
   entries: ManifestEntry[];
   statePath: string;
+  uploadConcurrency?: number;
   retryCount?: number;
   baseDelayMs?: number;
   dryRun?: boolean;
   maxFailures?: number;
+  persistEvery?: number;
+  flushIntervalMs?: number;
   includeFilter?: string;
   excludeFilter?: string;
   sleep?: (ms: number) => Promise<void>;
@@ -43,6 +46,9 @@ export type UploadOptions = {
 
 const DEFAULT_RETRY_COUNT = 5;
 const DEFAULT_BASE_DELAY_MS = 300;
+const DEFAULT_UPLOAD_CONCURRENCY = 1;
+const DEFAULT_PERSIST_EVERY = 25;
+const DEFAULT_FLUSH_INTERVAL_MS = 3000;
 
 const CONTENT_TYPES: Record<string, string> = {
   '.jpg': 'image/jpeg',
@@ -70,9 +76,22 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
   const baseDelayMs = options.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
   const sleep = options.sleep ?? defaultSleep;
   const dryRun = options.dryRun ?? false;
+  const uploadConcurrency = Math.max(1, Math.floor(options.uploadConcurrency ?? DEFAULT_UPLOAD_CONCURRENCY));
+  const persistEvery = Math.max(1, Math.floor(options.persistEvery ?? DEFAULT_PERSIST_EVERY));
+  const flushIntervalMs = Math.max(250, Math.floor(options.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS));
 
   const state = await loadUploadState(options.statePath);
   const entries = applyFilters(options.entries, options.includeFilter, options.excludeFilter);
+  const preloadedExistingKeys = await preloadDestinationIndex(options.provider, entries);
+  const confirmedExistingKeys = new Set<string>(preloadedExistingKeys);
+  const existenceCache = new Map<string, boolean>();
+  const checkpointManager = new StateCheckpointManager(
+    options.statePath,
+    state,
+    persistEvery,
+    flushIntervalMs,
+  );
+
   const summary: UploadSummary = {
     total: entries.length,
     processed: 0,
@@ -84,34 +103,42 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
     failureLimitReached: false,
   };
 
-  for (const entry of entries) {
+  let nextIndex = 0;
+  let stopScheduling = false;
+
+  const processEntry = async (entry: ManifestEntry): Promise<void> => {
     const existingState = state.items[entry.destinationKey];
     if (existingState?.status === 'uploaded' || existingState?.status === 'skipped') {
       summary.skipped += 1;
       summary.processed += 1;
-      continue;
+      return;
     }
 
-    const destinationExists = await objectExists(options.provider, entry.destinationKey);
+    const destinationExists = await objectExistsCached(
+      options.provider,
+      entry.destinationKey,
+      confirmedExistingKeys,
+      existenceCache,
+    );
+
     if (destinationExists) {
       state.items[entry.destinationKey] = {
         status: 'skipped',
         attempts: existingState?.attempts ?? 0,
         updatedAt: new Date().toISOString(),
       };
+      checkpointManager.markDirty();
       summary.skipped += 1;
       summary.processed += 1;
-      await persistUploadState(options.statePath, state);
-      continue;
+      return;
     }
 
     if (dryRun) {
       summary.uploaded += 1;
       summary.processed += 1;
-      continue;
+      return;
     }
 
-    let uploaded = false;
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= retryCount + 1; attempt += 1) {
@@ -123,16 +150,17 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
           contentTypeForPath(entry.sourcePath),
         );
 
+        confirmedExistingKeys.add(entry.destinationKey);
+        existenceCache.set(entry.destinationKey, true);
         state.items[entry.destinationKey] = {
           status: 'uploaded',
           attempts: attempt,
           updatedAt: new Date().toISOString(),
         };
+        checkpointManager.markDirty();
         summary.uploaded += 1;
         summary.processed += 1;
-        uploaded = true;
-        await persistUploadState(options.statePath, state);
-        break;
+        return;
       } catch (error) {
         lastError = error;
 
@@ -148,21 +176,47 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
           updatedAt: new Date().toISOString(),
           error: error instanceof Error ? error.message : String(error),
         };
+        checkpointManager.markDirty();
         summary.failed += 1;
         summary.processed += 1;
-        await persistUploadState(options.statePath, state);
       }
     }
 
     if (options.maxFailures !== undefined && summary.failed >= options.maxFailures) {
       summary.stoppedEarly = true;
       summary.failureLimitReached = true;
-      break;
+      stopScheduling = true;
     }
 
-    if (!uploaded && lastError) {
-      // continue processing other files; failures are checkpointed
+    if (!lastError) {
+      return;
     }
+  };
+
+  const workerCount = Math.min(uploadConcurrency, Math.max(entries.length, 1));
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (!stopScheduling) {
+      const index = nextIndex;
+      nextIndex += 1;
+
+      if (index >= entries.length) {
+        return;
+      }
+
+      await processEntry(entries[index]);
+
+      if (options.maxFailures !== undefined && summary.failed >= options.maxFailures) {
+        summary.stoppedEarly = true;
+        summary.failureLimitReached = true;
+        stopScheduling = true;
+      }
+    }
+  });
+
+  try {
+    await Promise.all(workers);
+  } finally {
+    await checkpointManager.stopAndFlush();
   }
 
   return summary;
@@ -205,6 +259,111 @@ function createEmptyState(): UploadState {
 async function objectExists(provider: CloudProvider, key: string): Promise<boolean> {
   const items = await provider.list({ prefix: key, maxResults: 20 });
   return items.some((item) => item.key === key);
+}
+
+async function objectExistsCached(
+  provider: CloudProvider,
+  key: string,
+  confirmedExistingKeys: Set<string>,
+  existenceCache: Map<string, boolean>,
+): Promise<boolean> {
+  if (confirmedExistingKeys.has(key)) {
+    return true;
+  }
+
+  const cached = existenceCache.get(key);
+  if (typeof cached === 'boolean') {
+    return cached;
+  }
+
+  const exists = await objectExists(provider, key);
+  existenceCache.set(key, exists);
+  if (exists) {
+    confirmedExistingKeys.add(key);
+  }
+  return exists;
+}
+
+async function preloadDestinationIndex(
+  provider: CloudProvider,
+  entries: ManifestEntry[],
+): Promise<Set<string>> {
+  const prefixes = collectDatePrefixes(entries);
+  const keys = new Set<string>();
+
+  for (const prefix of prefixes) {
+    const listed = await provider.list({ prefix });
+    for (const item of listed) {
+      keys.add(item.key);
+    }
+  }
+
+  return keys;
+}
+
+function collectDatePrefixes(entries: ManifestEntry[]): string[] {
+  const prefixes = new Set<string>();
+
+  for (const entry of entries) {
+    const match = /^(\d{4}\/\d{2}\/\d{2})\//.exec(entry.destinationKey);
+    if (match?.[1]) {
+      prefixes.add(`${match[1]}/`);
+    }
+  }
+
+  return [...prefixes].sort((a, b) => a.localeCompare(b));
+}
+
+class StateCheckpointManager {
+  private dirty = false;
+  private dirtyUpdates = 0;
+  private writeChain: Promise<void> = Promise.resolve();
+  private flushError: unknown;
+  private readonly timer: NodeJS.Timeout;
+
+  constructor(
+    private readonly statePath: string,
+    private readonly state: UploadState,
+    private readonly persistEvery: number,
+    flushIntervalMs: number,
+  ) {
+    this.timer = setInterval(() => {
+      this.enqueueFlush();
+    }, flushIntervalMs);
+  }
+
+  markDirty(): void {
+    this.dirty = true;
+    this.dirtyUpdates += 1;
+
+    if (this.dirtyUpdates >= this.persistEvery) {
+      this.enqueueFlush();
+    }
+  }
+
+  async stopAndFlush(): Promise<void> {
+    clearInterval(this.timer);
+    this.enqueueFlush();
+    await this.writeChain;
+
+    if (this.flushError) {
+      throw this.flushError;
+    }
+  }
+
+  private enqueueFlush(): void {
+    this.dirtyUpdates = 0;
+    this.writeChain = this.writeChain.then(async () => {
+      if (!this.dirty) {
+        return;
+      }
+
+      await persistUploadState(this.statePath, this.state);
+      this.dirty = false;
+    }).catch((error) => {
+      this.flushError = error;
+    });
+  }
 }
 
 function computeBackoffDelay(baseDelayMs: number, attempt: number): number {
