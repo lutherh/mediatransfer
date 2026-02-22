@@ -28,15 +28,30 @@ export async function registerTransferRoutes(
       keys: input.keys,
     });
 
-    const enqueueResult = await queue.enqueueBulk({
-      transferJobId: job.id,
-      sourceProvider: input.sourceProvider,
-      destProvider: input.destProvider,
-      keys: input.keys,
-      prefix: input.prefix,
-      sourceConfig: input.sourceConfig,
-      destConfig: input.destConfig,
-    });
+    let enqueueResult;
+    try {
+      enqueueResult = await queue.enqueueBulk({
+        transferJobId: job.id,
+        sourceProvider: input.sourceProvider,
+        destProvider: input.destProvider,
+        keys: input.keys,
+        prefix: input.prefix,
+        sourceConfig: input.sourceConfig,
+        destConfig: input.destConfig,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await jobs.update(job.id, {
+        status: TransferStatus.FAILED,
+        progress: 0,
+        errorMessage: `Failed to enqueue transfer job: ${message}`,
+      });
+
+      return reply.code(503).send({
+        error: 'Transfer queue is unavailable. Start services and try again.',
+        jobId: job.id,
+      });
+    }
 
     return reply.code(201).send({ job, enqueueResult });
   });
