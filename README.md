@@ -4,6 +4,81 @@ Local tool to move media between providers with two migration paths:
 - Takeout-first flow for complete Google Photos exports at scale.
 - Fully programmatic Google Photos API batch flow (download → upload → verify → cleanup) with automatic `.env` token persistence and resumable checkpoints.
 
+## Quick start (for non-technical users)
+
+If you just want to move your Google Photos files to Scaleway, follow this exact flow.
+
+### Step 1: Install required apps (one time)
+- Install **Node.js** (version 22 or newer).
+- Install **Docker Desktop**.
+- Install **Git**.
+
+### Step 2: Open this project
+- Open the `mediatransfer` folder in VS Code.
+- Open Terminal in VS Code (`Terminal` → `New Terminal`).
+
+### Step 3: Set your credentials
+1. Copy `.env.example` to `.env`.
+2. Open `.env` and fill in:
+	- `SCW_ACCESS_KEY`
+	- `SCW_SECRET_KEY`
+	- `SCW_REGION`
+	- `SCW_BUCKET`
+3. Leave other values as default unless you know you need to change them.
+
+### Step 4: Put your Takeout files in the input folder
+- Put all your Google Takeout photo/video files in:
+  - `data/takeout/input`
+
+### Step 5: Run setup commands (copy/paste)
+Run these commands in the project terminal, one by one:
+
+```bash
+npm ci
+npm run prisma:generate
+docker compose up -d postgres redis
+```
+
+### Step 6: Start transfer
+Run these commands in order:
+
+```bash
+npm run takeout:scan
+npm run takeout:upload
+npm run takeout:verify
+```
+
+### Step 7: If transfer stops halfway
+Run:
+
+```bash
+npm run takeout:resume
+```
+
+### Step 8: See progress in the browser
+1. Start API server:
+
+```bash
+npm run dev
+```
+
+2. In another terminal, start frontend:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+3. Open the URL shown by Vite (usually `http://localhost:5173`) and go to:
+	- `/takeout` for live transfer progress
+	- `/catalog` (API URL `http://localhost:3000/catalog`) to browse uploaded media
+
+### Done checklist
+- `takeout:verify` shows `Missing: 0`
+- `/takeout` shows `100%`
+- You can see your files in Scaleway bucket
+
 ## 1) Setup environment values
 
 - Copy `.env.example` to `.env` in the project root.
