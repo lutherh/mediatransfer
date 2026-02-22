@@ -1,12 +1,40 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { ReactElement } from 'react';
+import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { fetchTakeoutStatus } from '@/lib/api';
+import {
+  fetchTakeoutActionStatus,
+  fetchTakeoutStatus,
+  runTakeoutAction,
+  type TakeoutAction,
+} from '@/lib/api';
 
 export function TakeoutProgressPage() {
+  const queryClient = useQueryClient();
+
   const { data, isLoading, error } = useQuery({
     queryKey: ['takeout-status'],
     queryFn: fetchTakeoutStatus,
     refetchInterval: 3000,
+  });
+
+  const {
+    data: actionStatus,
+    isLoading: isLoadingActionStatus,
+  } = useQuery({
+    queryKey: ['takeout-action-status'],
+    queryFn: fetchTakeoutActionStatus,
+    refetchInterval: 1500,
+  });
+
+  const actionMutation = useMutation({
+    mutationFn: runTakeoutAction,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['takeout-action-status'] }),
+        queryClient.invalidateQueries({ queryKey: ['takeout-status'] }),
+      ]);
+    },
   });
 
   if (isLoading) {
@@ -18,10 +46,76 @@ export function TakeoutProgressPage() {
   }
 
   const progressPercent = Math.round(data.progress * 100);
+  const isActionRunning = Boolean(actionStatus?.running);
+  const lastOutput = actionStatus?.output ?? [];
+  const hasManifest = data.counts.total > 0;
+  const mutationErrorMessage = actionMutation.error instanceof Error
+    ? actionMutation.error.message
+    : 'Failed to start action.';
 
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold">Takeout Transfer Progress</h1>
+
+      <Card className="space-y-3">
+        <p className="text-sm font-medium text-slate-900">Run transfer actions (no terminal)</p>
+        <div className="flex flex-wrap gap-2">
+          <ActionButton
+            action="start-services"
+            isRunning={isActionRunning}
+            isPending={actionMutation.isPending}
+            onRun={actionMutation.mutate}
+          >
+            1) Start Services
+          </ActionButton>
+          <ActionButton
+            action="scan"
+            isRunning={isActionRunning}
+            isPending={actionMutation.isPending}
+            onRun={actionMutation.mutate}
+          >
+            2) Scan
+          </ActionButton>
+          <ActionButton
+            action="upload"
+            isRunning={isActionRunning}
+            isPending={actionMutation.isPending}
+            disabled={!hasManifest}
+            onRun={actionMutation.mutate}
+          >
+            3) Upload
+          </ActionButton>
+          <ActionButton
+            action="verify"
+            isRunning={isActionRunning}
+            isPending={actionMutation.isPending}
+            disabled={!hasManifest}
+            onRun={actionMutation.mutate}
+          >
+            4) Verify
+          </ActionButton>
+          <ActionButton
+            action="resume"
+            isRunning={isActionRunning}
+            isPending={actionMutation.isPending}
+            disabled={!hasManifest}
+            onRun={actionMutation.mutate}
+          >
+            Resume
+          </ActionButton>
+        </div>
+        {actionMutation.isError ? (
+          <p className="text-xs text-red-600">{mutationErrorMessage}</p>
+        ) : null}
+        {!hasManifest ? (
+          <p className="text-xs text-slate-600">No manifest found yet. Run <strong>Scan</strong> first.</p>
+        ) : null}
+        {isLoadingActionStatus ? null : (
+          <p className="text-xs text-slate-600">
+            {renderActionStatus(actionStatus?.action, isActionRunning, actionStatus?.success, actionStatus?.exitCode)}
+          </p>
+        )}
+      </Card>
 
       <Card className="space-y-3">
         <div className="flex items-center justify-between">
@@ -69,11 +163,67 @@ export function TakeoutProgressPage() {
           </Card>
         )}
       </div>
+
+      <Card className="space-y-2">
+        <p className="text-sm font-medium text-slate-900">Latest command output</p>
+        {lastOutput.length ? (
+          <pre className="max-h-64 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">
+            {lastOutput.join('\n')}
+          </pre>
+        ) : (
+          <p className="text-sm text-slate-600">No command has been run yet.</p>
+        )}
+      </Card>
     </div>
   );
 }
 
-function MetricCard({ label, value }: { label: string; value: number }): JSX.Element {
+function ActionButton({
+  action,
+  isRunning,
+  isPending,
+  disabled,
+  onRun,
+  children,
+}: {
+  action: TakeoutAction;
+  isRunning: boolean;
+  isPending: boolean;
+  disabled?: boolean;
+  onRun: (action: TakeoutAction) => void;
+  children: string;
+}): ReactElement {
+  return (
+    <Button
+      type="button"
+      disabled={disabled || isRunning || isPending}
+      onClick={() => onRun(action)}
+    >
+      {children}
+    </Button>
+  );
+}
+
+function renderActionStatus(
+  action: TakeoutAction | undefined,
+  running: boolean,
+  success: boolean | undefined,
+  exitCode: number | undefined,
+): string {
+  if (running && action) {
+    return `Running: ${action}`;
+  }
+
+  if (typeof success === 'boolean' && action) {
+    return success
+      ? `Last run: ${action} completed successfully`
+      : `Last run: ${action} failed (exit code ${typeof exitCode === 'number' ? exitCode : 'unknown'})`;
+  }
+
+  return 'No action is running.';
+}
+
+function MetricCard({ label, value }: { label: string; value: number }): ReactElement {
   return (
     <Card>
       <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
