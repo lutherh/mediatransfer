@@ -5,6 +5,8 @@ import { TransfersListPage } from '@/pages/transfers-list-page';
 import { NewTransferPage } from '@/pages/new-transfer-page';
 import { TransferDetailPage } from '@/pages/transfer-detail-page';
 import { TakeoutProgressPage } from '@/pages/takeout-progress-page';
+import { PhotoTransferPage } from '@/pages/photo-transfer-page';
+import { OAuthCallbackPage } from '@/pages/oauth-callback-page';
 
 const queryClient = new QueryClient();
 
@@ -13,9 +15,12 @@ export function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
+          {/* OAuth callback renders outside the main layout */}
+          <Route element={<OAuthCallbackPage />} path="auth/google/callback" />
           <Route element={<Layout />} path="/">
-            <Route element={<TransfersListPage />} index />
+            <Route element={<PhotoTransferPage />} index />
             <Route element={<TakeoutProgressPage />} path="takeout" />
+            <Route element={<TransfersListPage />} path="transfers" />
             <Route element={<NewTransferPage />} path="transfers/new" />
             <Route element={<TransferDetailPage />} path="transfers/:id" />
           </Route>

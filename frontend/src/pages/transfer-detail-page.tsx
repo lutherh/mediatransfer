@@ -1,10 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { fetchTransferDetail } from '@/lib/api';
 import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 
 export function TransferDetailPage() {
   const { id = '' } = useParams();
+  const navigate = useNavigate();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['transfer', id],
@@ -23,6 +25,26 @@ export function TransferDetailPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold">Transfer Detail</h1>
+      <div className="flex gap-3">
+        <Button
+          className="bg-white text-slate-700 border border-slate-300 hover:bg-slate-50"
+          onClick={() => navigate(-1)}
+        >
+          Back
+        </Button>
+        <Button
+          className="bg-white text-slate-700 border border-slate-300 hover:bg-slate-50"
+          onClick={() => navigate('/')}
+        >
+          Photo Transfer
+        </Button>
+        <Button
+          className="bg-white text-slate-700 border border-slate-300 hover:bg-slate-50"
+          onClick={() => navigate('/transfers')}
+        >
+          All Transfers
+        </Button>
+      </div>
       <Card>
         <p className="font-medium">{data.job.sourceProvider} → {data.job.destProvider}</p>
         <p className="text-sm text-slate-600">Status: {data.job.status}</p>

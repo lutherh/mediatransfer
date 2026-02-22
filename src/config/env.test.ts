@@ -159,7 +159,7 @@ describe('loadEnv', () => {
 
   it('should default GOOGLE_REDIRECT_URI and leave other Google vars undefined', () => {
     const env = loadEnv(validEnv);
-    expect(env.GOOGLE_REDIRECT_URI).toBe('http://localhost:3000/auth/google/callback');
+      expect(env.GOOGLE_REDIRECT_URI).toBe('http://localhost:5173/auth/google/callback');
     expect(env.GOOGLE_CLIENT_ID).toBeUndefined();
     expect(env.GOOGLE_CLIENT_SECRET).toBeUndefined();
   });

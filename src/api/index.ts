@@ -2,10 +2,12 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import swagger from '@fastify/swagger';
 import { timingSafeEqual } from 'node:crypto';
+import { Readable } from 'node:stream';
 import { ZodError } from 'zod';
 import {
 	createCredential,
 	createJob,
+	createTransferLog,
 	deleteCredential,
 	deleteJob,
 	getJobById,
@@ -16,12 +18,23 @@ import {
 } from '../db/index.js';
 import { createRedisConnection } from '../jobs/connection.js';
 import { enqueueBulkTransfer } from '../jobs/bulk-transfer.js';
-import { createTransferQueue, type TransferJobPayload } from '../jobs/queue.js';
 import {
+	createTransferDeadLetterQueue,
+	createTransferQueue,
+	createTransferWorker,
+	type TransferJobPayload,
+} from '../jobs/queue.js';
+import {
+	createOAuth2Client,
 	createScalewayProvider,
+	getValidAccessToken,
+	GooglePhotosPickerClient,
+	isTokenExpired,
+	setTokens,
 	listProviderNames,
 	validateScalewayConfig,
 } from '../providers/index.js';
+import { TransferStatus } from '../generated/prisma/client.js';
 import { ScalewayCatalogService } from '../catalog/scaleway-catalog.js';
 import { registerHealthRoutes } from './health.js';
 import { registerCredentialsRoutes } from './routes/credentials.js';
@@ -29,6 +42,8 @@ import { registerTransferRoutes } from './routes/transfers.js';
 import { registerProviderRoutes } from './routes/providers.js';
 import { registerCatalogRoutes } from './routes/catalog.js';
 import { registerTakeoutRoutes } from './routes/takeout.js';
+import { registerGoogleAuthRoutes } from './routes/google-auth.js';
+import { getStoredTokens, setStoredTokens } from './routes/google-token-store.js';
 import type { ApiServices } from './types.js';
 
 export type CreateApiOptions = {
@@ -152,6 +167,7 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	await registerProviderRoutes(app, runtime.services.providers);
 	await registerCatalogRoutes(app, runtime.services.catalog);
 	await registerTakeoutRoutes(app);
+	await registerGoogleAuthRoutes(app);
 
 	app.addHook('onClose', async () => {
 		await runtime.dispose?.();
@@ -163,6 +179,16 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 function createDefaultServices(): { services: ApiServices; dispose: () => Promise<void> } {
 	const redis = createRedisConnection();
 	const queue = createTransferQueue(redis);
+	const deadLetterQueue = createTransferDeadLetterQueue(redis);
+	const worker = createTransferWorker(
+		redis,
+		async (payload) => processQueuedTransfer(payload),
+		{ connection: redis as any, deadLetterQueue },
+	);
+
+	worker.on('error', (err) => {
+		console.error('[transfer-worker] Worker error', err);
+	});
 
 	const services: ApiServices = {
 		credentials: {
@@ -224,10 +250,219 @@ function createDefaultServices(): { services: ApiServices; dispose: () => Promis
 	return {
 		services,
 		dispose: async () => {
+			await worker.close();
+			await deadLetterQueue.close();
 			await queue.close();
 			await redis.quit();
 		},
 	};
+}
+
+async function processQueuedTransfer(payload: TransferJobPayload): Promise<void> {
+	const total = payload.keys.length;
+
+	await updateJob(payload.transferJobId, {
+		status: TransferStatus.IN_PROGRESS,
+		progress: total === 0 ? 1 : 0,
+		errorMessage: null,
+		startedAt: new Date(),
+		completedAt: null,
+	});
+
+	await createTransferLog({
+		jobId: payload.transferJobId,
+		message: `Transfer worker started (${total} item${total === 1 ? '' : 's'})`,
+	});
+
+	try {
+		if (payload.sourceProvider !== 'google-photos' || payload.destProvider !== 'scaleway') {
+			throw new Error(`Unsupported transfer route: ${payload.sourceProvider} -> ${payload.destProvider}`);
+		}
+
+		if (total === 0) {
+			await updateJob(payload.transferJobId, {
+				status: TransferStatus.COMPLETED,
+				progress: 1,
+				completedAt: new Date(),
+				errorMessage: null,
+			});
+			await createTransferLog({
+				jobId: payload.transferJobId,
+				message: 'Transfer completed (no items)',
+			});
+			return;
+		}
+
+		for (let index = 0; index < payload.keys.length; index += 1) {
+			const mediaItemId = payload.keys[index];
+			const result = await transferPickedMediaItemToScaleway(payload, mediaItemId);
+			const progress = (index + 1) / total;
+
+			await updateJob(payload.transferJobId, {
+				progress,
+				status: progress >= 1 ? TransferStatus.COMPLETED : TransferStatus.IN_PROGRESS,
+				completedAt: progress >= 1 ? new Date() : null,
+				errorMessage: null,
+			});
+
+			await createTransferLog({
+				jobId: payload.transferJobId,
+				message: result.skipped
+					? `Skipped existing ${result.filename ?? mediaItemId}`
+					: `Uploaded ${result.filename ?? mediaItemId}`,
+				meta: {
+					mediaItemId,
+					destinationKey: result.destinationKey,
+					skipped: result.skipped,
+					progress,
+				},
+			});
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		await updateJob(payload.transferJobId, {
+			status: TransferStatus.FAILED,
+			errorMessage: message,
+			completedAt: new Date(),
+		});
+		await createTransferLog({
+			jobId: payload.transferJobId,
+			level: 'ERROR',
+			message: `Transfer failed: ${message}`,
+		});
+		throw error;
+	}
+}
+
+async function transferPickedMediaItemToScaleway(
+	payload: TransferJobPayload,
+	mediaItemId: string,
+): Promise<{ destinationKey: string; filename?: string; skipped: boolean }> {
+	const tokens = getStoredTokens();
+	if (!tokens) {
+		throw new Error('Google session expired: not connected. Please reconnect and retry.');
+	}
+
+	const googleConfig = getGoogleOAuthConfigFromEnv();
+	const sourceConfig = payload.sourceConfig as Record<string, unknown> | undefined;
+	const sessionId = sourceConfig?.sessionId;
+	if (typeof sessionId !== 'string' || sessionId.trim().length === 0) {
+		throw new Error('Missing sourceConfig.sessionId for Google Picker transfer.');
+	}
+
+	const oauthClient = createOAuth2Client(googleConfig);
+	setTokens(oauthClient, tokens);
+
+	let activeTokens = tokens;
+	if (isTokenExpired(activeTokens)) {
+		activeTokens = await getValidAccessToken(oauthClient);
+		setStoredTokens(activeTokens);
+	}
+
+	const pickerClient = new GooglePhotosPickerClient(oauthClient, activeTokens);
+	const media = await findPickedMediaItemInSession(pickerClient, sessionId, mediaItemId);
+
+	if (!media.baseUrl) {
+		throw new Error(`Picked media item ${mediaItemId} is missing baseUrl.`);
+	}
+
+	const scaleway = createScalewayProvider(getScalewayConfigFromEnv());
+	const destinationKey = buildDestinationKey(
+		media.filename ?? `${mediaItemId}.bin`,
+		mediaItemId,
+		media.createTime,
+	);
+	const existing = await scaleway.list({ prefix: destinationKey, maxResults: 1 });
+	if (existing.some((item) => item.key === destinationKey)) {
+		return { destinationKey, filename: media.filename, skipped: true };
+	}
+
+	const downloadUrl = media.mimeType?.startsWith('video/')
+		? `${media.baseUrl}=dv`
+		: `${media.baseUrl}=d`;
+
+	let response = await fetch(downloadUrl, {
+		headers: { Authorization: `Bearer ${activeTokens.accessToken}` },
+	});
+
+	if (response.status === 401 || response.status === 403) {
+		activeTokens = await getValidAccessToken(oauthClient);
+		setStoredTokens(activeTokens);
+		response = await fetch(downloadUrl, {
+			headers: { Authorization: `Bearer ${activeTokens.accessToken}` },
+		});
+	}
+
+	if (!response.ok || !response.body) {
+		const body = await response.text();
+		throw new Error(`Failed to download picked media ${mediaItemId}: ${response.status} ${body}`);
+	}
+
+	await scaleway.upload(
+		destinationKey,
+		Readable.fromWeb(response.body as any),
+		media.mimeType,
+	);
+
+	return { destinationKey, filename: media.filename, skipped: false };
+}
+
+async function findPickedMediaItemInSession(
+	pickerClient: GooglePhotosPickerClient,
+	sessionId: string,
+	mediaItemId: string,
+): Promise<{ id: string; mimeType?: string; filename?: string; createTime?: string; baseUrl?: string }> {
+	let pageToken: string | undefined;
+
+	do {
+		const page = await pickerClient.listPickedMediaItems(sessionId, pageToken, 100);
+		const found = page.mediaItems.find((item) => item.id === mediaItemId);
+		if (found) {
+			return found;
+		}
+		pageToken = page.nextPageToken;
+	} while (pageToken);
+
+	throw new Error(`Picked media item ${mediaItemId} not found in picker session ${sessionId}.`);
+}
+
+function getGoogleOAuthConfigFromEnv(): { clientId: string; clientSecret: string; redirectUri: string } {
+	const clientId = process.env.GOOGLE_CLIENT_ID;
+	const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+	const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? 'http://localhost:5173/auth/google/callback';
+
+	if (!clientId || !clientSecret) {
+		throw new Error('Missing GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET in environment.');
+	}
+
+	return { clientId, clientSecret, redirectUri };
+}
+
+function getScalewayConfigFromEnv() {
+	return validateScalewayConfig({
+		provider: 'scaleway',
+		region: process.env.SCW_REGION,
+		bucket: process.env.SCW_BUCKET,
+		accessKey: process.env.SCW_ACCESS_KEY,
+		secretKey: process.env.SCW_SECRET_KEY,
+		prefix: process.env.SCW_PREFIX,
+	});
+}
+
+function buildDestinationKey(filename: string, itemId: string, createTime?: string): string {
+	const sanitized = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+	const date = createDatePath(createTime);
+	return `${date}/${itemId}-${sanitized}`;
+}
+
+function createDatePath(createTime?: string): string {
+	const date = createTime ? new Date(createTime) : new Date();
+	if (Number.isNaN(date.getTime())) {
+		const now = new Date();
+		return `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}/${String(now.getUTCDate()).padStart(2, '0')}`;
+	}
+
+	return `${date.getUTCFullYear()}/${String(date.getUTCMonth() + 1).padStart(2, '0')}/${String(date.getUTCDate()).padStart(2, '0')}`;
 }
 
 export type { TransferJobPayload };

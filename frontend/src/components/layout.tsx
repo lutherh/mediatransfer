@@ -9,14 +9,14 @@ export function Layout() {
             MediaTransfer
           </Link>
           <nav className="flex gap-4 text-sm">
-            <NavLink to="/" className={({ isActive }) => (isActive ? 'font-semibold text-slate-900' : 'text-slate-600')}>
-              Transfers
+            <NavLink to="/" end className={({ isActive }) => (isActive ? 'font-semibold text-slate-900' : 'text-slate-600')}>
+              Photo Transfer
             </NavLink>
             <NavLink to="/takeout" className={({ isActive }) => (isActive ? 'font-semibold text-slate-900' : 'text-slate-600')}>
               Takeout Progress
             </NavLink>
-            <NavLink to="/transfers/new" className={({ isActive }) => (isActive ? 'font-semibold text-slate-900' : 'text-slate-600')}>
-              New Transfer
+            <NavLink to="/transfers" className={({ isActive }) => (isActive ? 'font-semibold text-slate-900' : 'text-slate-600')}>
+              Transfers
             </NavLink>
           </nav>
         </div>
