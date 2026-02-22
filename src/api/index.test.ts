@@ -204,6 +204,73 @@ describe('api server', () => {
     await app.close();
   });
 
+  it('pauses an in-progress transfer job', async () => {
+    const services = createServices();
+    services.jobs.get = vi.fn(async () => ({
+      id: 'job-1',
+      sourceProvider: 'google-photos',
+      destProvider: 'scaleway',
+      sourceConfig: { sessionId: 'picker-1' },
+      destConfig: null,
+      keys: ['a.jpg', 'b.jpg'],
+      status: TransferStatus.IN_PROGRESS,
+      progress: 0.5,
+      errorMessage: null,
+      createdAt: new Date('2025-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2025-01-01T00:00:00.000Z'),
+      startedAt: new Date('2025-01-01T00:00:00.000Z'),
+      completedAt: null,
+    }));
+
+    const app = await createApiServer({ services });
+    const res = await app.inject({ method: 'POST', url: '/transfers/job-1/pause' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().message).toBe('Transfer paused');
+    expect(services.jobs.update).toHaveBeenCalledWith('job-1', {
+      status: TransferStatus.CANCELLED,
+      errorMessage: 'Paused by user',
+    });
+
+    await app.close();
+  });
+
+  it('resumes a paused transfer job from remaining keys', async () => {
+    const services = createServices();
+    const pausedJob = {
+      id: 'job-1',
+      sourceProvider: 'google-photos',
+      destProvider: 'scaleway',
+      sourceConfig: { sessionId: 'picker-1' },
+      destConfig: null,
+      keys: ['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg'],
+      status: TransferStatus.CANCELLED,
+      progress: 0.5,
+      errorMessage: 'Paused by user',
+      createdAt: new Date('2025-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2025-01-01T00:00:00.000Z'),
+      startedAt: new Date('2025-01-01T00:00:00.000Z'),
+      completedAt: null,
+    };
+
+    services.jobs.get = vi.fn(async () => pausedJob);
+
+    const app = await createApiServer({ services });
+    const res = await app.inject({ method: 'POST', url: '/transfers/job-1/resume' });
+
+    expect(res.statusCode).toBe(200);
+    expect(services.queue.enqueueBulk).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transferJobId: 'job-1',
+        keys: ['c.jpg', 'd.jpg'],
+        startIndex: 2,
+        totalKeys: 4,
+      }),
+    );
+
+    await app.close();
+  });
+
   it('returns provider list and object listing', async () => {
     const app = await createApiServer({ services: createServices() });
 

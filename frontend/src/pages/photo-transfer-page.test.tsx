@@ -11,6 +11,8 @@ const mockPollPickerSession = vi.fn();
 const mockFetchPickedItems = vi.fn();
 const mockCreateTransfer = vi.fn();
 const mockFetchTransferDetail = vi.fn();
+const mockPauseTransfer = vi.fn();
+const mockResumeTransfer = vi.fn();
 
 vi.mock('@/lib/api', () => ({
   fetchGoogleAuthStatus: (...args: unknown[]) => mockFetchGoogleAuthStatus(...args),
@@ -23,6 +25,8 @@ vi.mock('@/lib/api', () => ({
   deletePickerSession: vi.fn(),
   createTransfer: (...args: unknown[]) => mockCreateTransfer(...args),
   fetchTransferDetail: (...args: unknown[]) => mockFetchTransferDetail(...args),
+  pauseTransfer: (...args: unknown[]) => mockPauseTransfer(...args),
+  resumeTransfer: (...args: unknown[]) => mockResumeTransfer(...args),
 }));
 
 function renderPage() {

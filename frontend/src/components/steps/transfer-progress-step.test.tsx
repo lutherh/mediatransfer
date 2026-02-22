@@ -5,9 +5,13 @@ import { MemoryRouter } from 'react-router-dom';
 import { TransferProgressStep } from '@/components/steps/transfer-progress-step';
 
 const mockFetchTransferDetail = vi.fn();
+const mockPauseTransfer = vi.fn();
+const mockResumeTransfer = vi.fn();
 
 vi.mock('@/lib/api', () => ({
   fetchTransferDetail: (...args: unknown[]) => mockFetchTransferDetail(...args),
+  pauseTransfer: (...args: unknown[]) => mockPauseTransfer(...args),
+  resumeTransfer: (...args: unknown[]) => mockResumeTransfer(...args),
 }));
 
 function renderStep(jobId = 'job-1', totalItems = 5, onStartNew = vi.fn()) {

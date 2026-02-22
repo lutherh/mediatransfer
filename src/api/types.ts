@@ -53,6 +53,8 @@ export type QueueService = {
     prefix?: string;
     sourceConfig?: Record<string, unknown>;
     destConfig?: Record<string, unknown>;
+    startIndex?: number;
+    totalKeys?: number;
   }): Promise<BulkTransferResult>;
 };
 

@@ -259,11 +259,18 @@ function createDefaultServices(): { services: ApiServices; dispose: () => Promis
 }
 
 async function processQueuedTransfer(payload: TransferJobPayload): Promise<void> {
-	const total = payload.keys.length;
+	const total = payload.totalKeys ?? payload.keys.length;
+	const startIndex = Math.max(0, Math.min(payload.startIndex ?? 0, total));
+	const initialProgress = total === 0 ? 1 : startIndex / total;
+
+	const shouldStop = async (): Promise<boolean> => {
+		const latest = await getJobById(payload.transferJobId);
+		return latest?.status === TransferStatus.CANCELLED;
+	};
 
 	await updateJob(payload.transferJobId, {
 		status: TransferStatus.IN_PROGRESS,
-		progress: total === 0 ? 1 : 0,
+		progress: initialProgress,
 		errorMessage: null,
 		startedAt: new Date(),
 		completedAt: null,
@@ -294,9 +301,26 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 		}
 
 		for (let index = 0; index < payload.keys.length; index += 1) {
+			if (await shouldStop()) {
+				await createTransferLog({
+					jobId: payload.transferJobId,
+					message: 'Transfer paused by user',
+				});
+				return;
+			}
+
 			const mediaItemId = payload.keys[index];
 			const result = await transferPickedMediaItemToScaleway(payload, mediaItemId);
-			const progress = (index + 1) / total;
+
+			if (await shouldStop()) {
+				await createTransferLog({
+					jobId: payload.transferJobId,
+					message: 'Transfer paused by user',
+				});
+				return;
+			}
+
+			const progress = total === 0 ? 1 : (startIndex + index + 1) / total;
 
 			await updateJob(payload.transferJobId, {
 				progress,

@@ -10,6 +10,8 @@ export type BulkTransferInput = {
   prefix?: string;
   sourceConfig?: Record<string, unknown>;
   destConfig?: Record<string, unknown>;
+  startIndex?: number;
+  totalKeys?: number;
 };
 
 export type BulkTransferResult = {
@@ -38,6 +40,8 @@ export async function enqueueBulkTransfer(
     keys,
     sourceConfig: input.sourceConfig,
     destConfig: input.destConfig,
+    startIndex: input.startIndex,
+    totalKeys: input.totalKeys,
   });
 
   jobIds.push(id);
