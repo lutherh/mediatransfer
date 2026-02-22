@@ -3,12 +3,81 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 body {
   margin: 0;
   font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-  background: #f8fafc;
-  color: #0f172a;
+  background: #020617;
+  color: #f8fafc;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+@layer utilities {
+  .bg-white {
+    background-color: #0f172a !important;
+  }
+
+  .bg-slate-50 {
+    background-color: #111827 !important;
+  }
+
+  .bg-slate-100 {
+    background-color: #1e293b !important;
+  }
+
+  .bg-slate-200 {
+    background-color: #334155 !important;
+  }
+
+  .bg-slate-900 {
+    background-color: #0f172a !important;
+  }
+
+  .bg-slate-950 {
+    background-color: #020617 !important;
+  }
+
+  .text-slate-900 {
+    color: #f8fafc !important;
+  }
+
+  .text-slate-800 {
+    color: #e2e8f0 !important;
+  }
+
+  .text-slate-700 {
+    color: #cbd5e1 !important;
+  }
+
+  .text-slate-600 {
+    color: #94a3b8 !important;
+  }
+
+  .text-slate-500,
+  .text-slate-400 {
+    color: #64748b !important;
+  }
+
+  .border-slate-100,
+  .border-slate-200,
+  .border-slate-300 {
+    border-color: #334155 !important;
+  }
+
+  .hover\:bg-slate-50:hover {
+    background-color: #1e293b !important;
+  }
+
+  .odd\:bg-white:nth-child(odd) {
+    background-color: #0f172a !important;
+  }
+
+  .even\:bg-slate-50\/40:nth-child(even) {
+    background-color: rgba(30, 41, 59, 0.45) !important;
+  }
 }
