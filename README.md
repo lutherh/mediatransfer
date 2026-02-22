@@ -79,6 +79,21 @@ npm run dev
 - `/takeout` shows `100%`
 - You can see your files in Scaleway bucket
 
+### Troubleshooting (common)
+- If you see `ECONNREFUSED ... 6379` after `npm run dev`:
+	1. Open **Docker Desktop** and wait until it says running.
+	2. In terminal run:
+
+```bash
+docker compose up -d postgres redis
+```
+
+	3. Then run:
+
+```bash
+npm run dev
+```
+
 ## 1) Setup environment values
 
 - Copy `.env.example` to `.env` in the project root.
