@@ -8,7 +8,7 @@ function createQueueMock() {
 }
 
 describe('jobs/bulk-transfer', () => {
-  it('enqueues one queue job per key', async () => {
+  it('enqueues one queue job containing all keys', async () => {
     const queue = createQueueMock();
 
     const result = await enqueueBulkTransfer(queue, {
@@ -19,7 +19,13 @@ describe('jobs/bulk-transfer', () => {
     });
 
     expect(result.enqueuedCount).toBe(2);
-    expect(result.queueJobIds).toEqual(['a.jpg', 'b.jpg']);
+    expect(result.queueJobIds).toEqual(['a.jpg']);
+    expect(queue.add).toHaveBeenCalledOnce();
+    expect(queue.add).toHaveBeenCalledWith(
+      'transfer-file-batch',
+      expect.objectContaining({ keys: ['a.jpg', 'b.jpg'] }),
+      expect.any(Object),
+    );
   });
 
   it('supports prefix fallback when keys are absent', async () => {
