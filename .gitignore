@@ -9,3 +9,8 @@ src/generated/
 
 /src/generated/prisma
 data/takeout/google-api-state.json
+data/takeout/input/
+data/takeout/work/
+data/takeout/state.json
+data/takeout/state.backup.json
+debug-output.txt
