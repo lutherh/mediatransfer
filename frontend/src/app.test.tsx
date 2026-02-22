@@ -7,6 +7,8 @@ import { TransfersListPage } from '@/pages/transfers-list-page';
 import { NewTransferPage } from '@/pages/new-transfer-page';
 import { TransferDetailPage } from '@/pages/transfer-detail-page';
 import { TakeoutProgressPage } from '@/pages/takeout-progress-page';
+import { PhotoTransferPage } from '@/pages/photo-transfer-page';
+import { OAuthCallbackPage } from '@/pages/oauth-callback-page';
 
 vi.mock('@/lib/api', () => ({
   fetchTransfers: vi.fn(async () => [
@@ -64,17 +66,32 @@ vi.mock('@/lib/api', () => ({
   })),
   runTakeoutAction: vi.fn(),
   createTransfer: vi.fn(),
+  fetchGoogleAuthStatus: vi.fn(async () => ({
+    configured: true,
+    connected: false,
+  })),
+  fetchGoogleAuthUrl: vi.fn(async () => ({ url: 'https://accounts.google.com/o/oauth2/auth' })),
+  submitGoogleAuthCode: vi.fn(async () => ({ connected: true })),
+  disconnectGoogle: vi.fn(),
+  createPickerSession: vi.fn(),
+  pollPickerSession: vi.fn(),
+  fetchPickedItems: vi.fn(),
+  deletePickerSession: vi.fn(),
 }));
 
 function renderRoute(path: string) {
-  const queryClient = new QueryClient();
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
+          <Route element={<OAuthCallbackPage />} path="auth/google/callback" />
           <Route element={<Layout />} path="/">
-            <Route element={<TransfersListPage />} index />
+            <Route element={<PhotoTransferPage />} index />
             <Route element={<TakeoutProgressPage />} path="takeout" />
+            <Route element={<TransfersListPage />} path="transfers" />
             <Route element={<NewTransferPage />} path="transfers/new" />
             <Route element={<TransferDetailPage />} path="transfers/:id" />
           </Route>
@@ -89,8 +106,14 @@ describe('frontend pages', () => {
     vi.clearAllMocks();
   });
 
-  it('renders transfers list page', async () => {
+  it('renders photo transfer page (home) with connect step', async () => {
     renderRoute('/');
+    expect(await screen.findByRole('heading', { name: 'Photo Transfer' })).toBeInTheDocument();
+    expect(await screen.findByText('Connect Google Account')).toBeInTheDocument();
+  });
+
+  it('renders transfers list page', async () => {
+    renderRoute('/transfers');
     expect(await screen.findByText('Transfers')).toBeInTheDocument();
     expect(await screen.findByText(/google-photos/i)).toBeInTheDocument();
   });
@@ -111,5 +134,12 @@ describe('frontend pages', () => {
     renderRoute('/transfers/job-1');
     expect(await screen.findByText('Transfer Detail')).toBeInTheDocument();
     expect(await screen.findByText(/transfer job started/i)).toBeInTheDocument();
+  });
+
+  it('shows navigation links', async () => {
+    renderRoute('/');
+    expect(await screen.findByRole('link', { name: 'Photo Transfer' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Takeout Progress' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Transfers' })).toBeInTheDocument();
   });
 });

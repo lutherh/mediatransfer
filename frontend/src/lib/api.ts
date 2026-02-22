@@ -72,6 +72,8 @@ export async function createTransfer(payload: {
   sourceProvider: string;
   destProvider: string;
   keys?: string[];
+  sourceConfig?: Record<string, unknown>;
+  destConfig?: Record<string, unknown>;
 }): Promise<{ job: TransferJob }> {
   const response = await fetch(`${API_BASE_URL}/transfers`, {
     method: 'POST',
@@ -80,7 +82,8 @@ export async function createTransfer(payload: {
   });
 
   if (!response.ok) {
-    throw new Error('Failed to create transfer');
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to create transfer');
   }
 
   return response.json();
@@ -132,3 +135,100 @@ function parseApiErrorMessage(raw: string): string | undefined {
 
   return raw;
 }
+
+// ── Google Auth ────────────────────────────────────────────────
+
+export type GoogleAuthStatus = {
+  configured: boolean;
+  connected: boolean;
+  expired?: boolean;
+  hasRefreshToken?: boolean;
+  message?: string;
+};
+
+export async function fetchGoogleAuthStatus(): Promise<GoogleAuthStatus> {
+  const response = await fetch(`${API_BASE_URL}/auth/google/status`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch Google auth status');
+  }
+  return response.json();
+}
+
+export async function fetchGoogleAuthUrl(): Promise<{ url: string }> {
+  const response = await fetch(`${API_BASE_URL}/auth/google/url`);
+  if (!response.ok) {
+    throw new Error('Failed to get Google auth URL');
+  }
+  return response.json();
+}
+
+export async function submitGoogleAuthCode(code: string): Promise<{ connected: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/auth/google/callback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to exchange auth code');
+  }
+  return response.json();
+}
+
+export async function disconnectGoogle(): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/auth/google/disconnect`, { method: 'POST' });
+  if (!response.ok) {
+    throw new Error('Failed to disconnect Google account');
+  }
+}
+
+// ── Picker ─────────────────────────────────────────────────────
+
+export type PickerSession = {
+  sessionId: string;
+  pickerUri?: string;
+  mediaItemsSet?: boolean;
+};
+
+export type PickedMediaItem = {
+  id: string;
+  mimeType?: string;
+  filename?: string;
+  createTime?: string;
+  baseUrl?: string;
+};
+
+export async function createPickerSession(): Promise<PickerSession> {
+  const response = await fetch(`${API_BASE_URL}/picker/session`, { method: 'POST' });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to create picker session');
+  }
+  return response.json();
+}
+
+export async function pollPickerSession(sessionId: string): Promise<PickerSession> {
+  const response = await fetch(`${API_BASE_URL}/picker/session/${sessionId}`);
+  if (!response.ok) {
+    throw new Error('Failed to poll picker session');
+  }
+  return response.json();
+}
+
+export async function fetchPickedItems(
+  sessionId: string,
+  pageToken?: string,
+): Promise<{ mediaItems: PickedMediaItem[]; nextPageToken?: string }> {
+  const params = new URLSearchParams();
+  if (pageToken) params.set('pageToken', pageToken);
+  const response = await fetch(`${API_BASE_URL}/picker/session/${sessionId}/items?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch picked items');
+  }
+  return response.json();
+}
+
+export async function deletePickerSession(sessionId: string): Promise<void> {
+  await fetch(`${API_BASE_URL}/picker/session/${sessionId}`, { method: 'DELETE' });
+}
+
