@@ -11,7 +11,10 @@ import {
   type ArchiveExtractor,
 } from './unpack.js';
 import {
+  collectDatePrefixes,
   loadUploadState,
+  objectExistsCached,
+  preloadDestinationIndex,
   uploadManifest,
   type UploadSummary,
 } from './uploader.js';
@@ -123,10 +126,14 @@ export async function runTakeoutVerify(
   manifestPath = path.join(config.workDir, DEFAULT_MANIFEST_FILE),
 ): Promise<VerifySummary> {
   const entries = await loadManifestJsonl(manifestPath);
-  const indexedKeys = await preloadVerifyDestinationIndex(provider, entries);
-  const existingCache = new Map<string, boolean>();
+  const indexedKeys = await preloadDestinationIndex(provider, entries);
+  const confirmedExistingKeys = new Set<string>(indexedKeys);
+  const existenceCache = new Map<string, boolean>();
   const missingKeys: string[] = [];
   let present = 0;
+
+  // Safe: nextIndex++ and counter mutations are synchronous between awaits
+  // in single-threaded Node.js — no two workers touch them in the same microtick.
   let nextIndex = 0;
   const workerCount = Math.min(Math.max(config.uploadConcurrency, 1), Math.max(entries.length, 1));
 
@@ -141,12 +148,12 @@ export async function runTakeoutVerify(
 
       const key = entries[index].destinationKey;
 
-      if (indexedKeys.has(key)) {
+      if (confirmedExistingKeys.has(key)) {
         present += 1;
         continue;
       }
 
-      const exists = await objectExistsCached(provider, key, existingCache);
+      const exists = await objectExistsCached(provider, key, confirmedExistingKeys, existenceCache);
       if (exists) {
         present += 1;
       } else {
@@ -175,48 +182,4 @@ export function withDefaults(partial: Partial<TakeoutConfig>): TakeoutConfig {
   };
  }
 
-async function preloadVerifyDestinationIndex(
-  provider: CloudProvider,
-  entries: Array<{ destinationKey: string }>,
-): Promise<Set<string>> {
-  const prefixes = collectDatePrefixes(entries);
-  const keys = new Set<string>();
 
-  for (const prefix of prefixes) {
-    const listed = await provider.list({ prefix });
-    for (const item of listed) {
-      keys.add(item.key);
-    }
-  }
-
-  return keys;
-}
-
-function collectDatePrefixes(entries: Array<{ destinationKey: string }>): string[] {
-  const prefixes = new Set<string>();
-
-  for (const entry of entries) {
-    const match = /^(\d{4}\/\d{2}\/\d{2})\//.exec(entry.destinationKey);
-    if (match?.[1]) {
-      prefixes.add(`${match[1]}/`);
-    }
-  }
-
-  return [...prefixes].sort((a, b) => a.localeCompare(b));
-}
-
-async function objectExistsCached(
-  provider: CloudProvider,
-  key: string,
-  existingCache: Map<string, boolean>,
-): Promise<boolean> {
-  const cached = existingCache.get(key);
-  if (typeof cached === 'boolean') {
-    return cached;
-  }
-
-  const objects = await provider.list({ prefix: key, maxResults: 20 });
-  const exists = objects.some((obj) => obj.key === key);
-  existingCache.set(key, exists);
-  return exists;
-}

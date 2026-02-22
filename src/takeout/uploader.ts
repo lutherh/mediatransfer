@@ -103,6 +103,8 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
     failureLimitReached: false,
   };
 
+  // Safe: nextIndex++ and summary mutations are synchronous between awaits
+  // in single-threaded Node.js — no two workers touch them in the same microtick.
   let nextIndex = 0;
   let stopScheduling = false;
 
@@ -261,7 +263,7 @@ async function objectExists(provider: CloudProvider, key: string): Promise<boole
   return items.some((item) => item.key === key);
 }
 
-async function objectExistsCached(
+export async function objectExistsCached(
   provider: CloudProvider,
   key: string,
   confirmedExistingKeys: Set<string>,
@@ -284,24 +286,35 @@ async function objectExistsCached(
   return exists;
 }
 
-async function preloadDestinationIndex(
+const PRELOAD_CONCURRENCY = 4;
+
+export async function preloadDestinationIndex(
   provider: CloudProvider,
-  entries: ManifestEntry[],
+  entries: Array<{ destinationKey: string }>,
 ): Promise<Set<string>> {
   const prefixes = collectDatePrefixes(entries);
   const keys = new Set<string>();
 
-  for (const prefix of prefixes) {
-    const listed = await provider.list({ prefix });
-    for (const item of listed) {
-      keys.add(item.key);
+  // Fetch prefix listings in parallel, bounded to PRELOAD_CONCURRENCY
+  let prefixIndex = 0;
+  const workers = Array.from({ length: Math.min(PRELOAD_CONCURRENCY, prefixes.length || 1) }, async () => {
+    while (true) {
+      const i = prefixIndex;
+      prefixIndex += 1;
+      if (i >= prefixes.length) return;
+
+      const listed = await provider.list({ prefix: prefixes[i] });
+      for (const item of listed) {
+        keys.add(item.key);
+      }
     }
-  }
+  });
+  await Promise.all(workers);
 
   return keys;
 }
 
-function collectDatePrefixes(entries: ManifestEntry[]): string[] {
+export function collectDatePrefixes(entries: Array<{ destinationKey: string }>): string[] {
   const prefixes = new Set<string>();
 
   for (const entry of entries) {

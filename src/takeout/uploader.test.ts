@@ -5,7 +5,7 @@ import { Readable } from 'node:stream';
 import { describe, it, expect } from 'vitest';
 import type { CloudProvider, ObjectInfo } from '../providers/types.js';
 import type { ManifestEntry } from './manifest.js';
-import { uploadManifest, loadUploadState } from './uploader.js';
+import { uploadManifest, loadUploadState, collectDatePrefixes, preloadDestinationIndex } from './uploader.js';
 
 class MockProvider implements CloudProvider {
   readonly name = 'MockProvider';
@@ -270,5 +270,106 @@ describe('takeout/uploader', () => {
       expect(provider.objects.has(a.destinationKey)).toBe(true);
       expect(provider.objects.has(b.destinationKey)).toBe(false);
     });
+  });
+
+  it('uploads concurrently with multiple workers without corrupting state', async () => {
+    await withTempDir(async (dir) => {
+      const provider = new MockProvider();
+      const entries: ManifestEntry[] = [];
+
+      for (let i = 0; i < 20; i += 1) {
+        entries.push(
+          await createEntry(dir, `Album/IMG_C${i}.jpg`, `2025/12/13/Album/IMG_C${i}.jpg`),
+        );
+      }
+
+      const statePath = path.join(dir, 'state.json');
+
+      const summary = await uploadManifest({
+        provider,
+        entries,
+        statePath,
+        uploadConcurrency: 4,
+        retryCount: 1,
+        sleep: async () => {},
+      });
+
+      expect(summary.uploaded).toBe(20);
+      expect(summary.skipped).toBe(0);
+      expect(summary.failed).toBe(0);
+      expect(summary.processed).toBe(20);
+      expect(summary.total).toBe(20);
+      expect(provider.objects.size).toBe(20);
+
+      const state = await loadUploadState(statePath);
+      const uploadedKeys = Object.entries(state.items)
+        .filter(([, v]) => v.status === 'uploaded')
+        .map(([k]) => k);
+      expect(uploadedKeys.length).toBe(20);
+    });
+  });
+
+  it('batches state persistence according to persistEvery', async () => {
+    await withTempDir(async (dir) => {
+      const provider = new MockProvider();
+      const entries: ManifestEntry[] = [];
+
+      for (let i = 0; i < 9; i += 1) {
+        entries.push(
+          await createEntry(dir, `Album/IMG_P${i}.jpg`, `2025/12/13/Album/IMG_P${i}.jpg`),
+        );
+      }
+
+      const statePath = path.join(dir, 'state.json');
+
+      const summary = await uploadManifest({
+        provider,
+        entries,
+        statePath,
+        uploadConcurrency: 1,
+        retryCount: 0,
+        persistEvery: 3,
+        flushIntervalMs: 60_000,  // effectively disabled — only count-based flushes
+        sleep: async () => {},
+      });
+
+      expect(summary.uploaded).toBe(9);
+
+      // After flush, all 9 items must be in state
+      const state = await loadUploadState(statePath);
+      expect(Object.keys(state.items).length).toBe(9);
+
+      for (const entry of entries) {
+        expect(state.items[entry.destinationKey]?.status).toBe('uploaded');
+      }
+    });
+  });
+
+  it('preloads destination index across multiple date prefixes', async () => {
+    const provider = new MockProvider();
+
+    // Simulate objects in two different date directories
+    provider.objects.add('2025/12/13/Album/IMG_1.jpg');
+    provider.objects.add('2025/12/13/Album/IMG_2.jpg');
+    provider.objects.add('2026/01/05/Trip/IMG_3.jpg');
+    provider.objects.add('2026/01/05/Trip/IMG_4.jpg');
+    provider.objects.add('2026/02/20/Other/IMG_5.jpg');
+
+    const entries = [
+      { destinationKey: '2025/12/13/Album/IMG_1.jpg' },
+      { destinationKey: '2025/12/13/Album/IMG_2.jpg' },
+      { destinationKey: '2026/01/05/Trip/IMG_3.jpg' },
+      { destinationKey: '2026/01/05/Trip/IMG_4.jpg' },
+      { destinationKey: '2026/02/20/Other/IMG_5.jpg' },
+    ];
+
+    const prefixes = collectDatePrefixes(entries);
+    expect(prefixes).toEqual(['2025/12/13/', '2026/01/05/', '2026/02/20/']);
+
+    const index = await preloadDestinationIndex(provider, entries as ManifestEntry[]);
+    expect(index.size).toBe(5);
+    expect(index.has('2025/12/13/Album/IMG_1.jpg')).toBe(true);
+    expect(index.has('2026/01/05/Trip/IMG_3.jpg')).toBe(true);
+    expect(index.has('2026/02/20/Other/IMG_5.jpg')).toBe(true);
   });
 });
