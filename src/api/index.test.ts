@@ -271,6 +271,42 @@ describe('api server', () => {
     await app.close();
   });
 
+  it('resumes a failed transfer job from remaining keys', async () => {
+    const services = createServices();
+    const failedJob = {
+      id: 'job-1',
+      sourceProvider: 'google-photos',
+      destProvider: 'scaleway',
+      sourceConfig: { sessionId: 'picker-1' },
+      destConfig: null,
+      keys: ['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg'],
+      status: TransferStatus.FAILED,
+      progress: 0.5,
+      errorMessage: 'Transfer failed: fetch failed',
+      createdAt: new Date('2025-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2025-01-01T00:00:00.000Z'),
+      startedAt: new Date('2025-01-01T00:00:00.000Z'),
+      completedAt: null,
+    };
+
+    services.jobs.get = vi.fn(async () => failedJob);
+
+    const app = await createApiServer({ services });
+    const res = await app.inject({ method: 'POST', url: '/transfers/job-1/resume' });
+
+    expect(res.statusCode).toBe(200);
+    expect(services.queue.enqueueBulk).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transferJobId: 'job-1',
+        keys: ['c.jpg', 'd.jpg'],
+        startIndex: 2,
+        totalKeys: 4,
+      }),
+    );
+
+    await app.close();
+  });
+
   it('returns provider list and object listing', async () => {
     const app = await createApiServer({ services: createServices() });
 
