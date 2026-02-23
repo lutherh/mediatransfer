@@ -119,9 +119,9 @@ export async function registerTransferRoutes(
       return reply.code(404).send({ error: 'Transfer job not found' });
     }
 
-    if (job.status !== TransferStatus.CANCELLED) {
+    if (job.status !== TransferStatus.CANCELLED && job.status !== TransferStatus.FAILED) {
       return reply.code(409).send({
-        error: `Transfer can only be resumed from status ${TransferStatus.CANCELLED}`,
+        error: `Transfer can only be resumed from status ${TransferStatus.CANCELLED} or ${TransferStatus.FAILED}`,
       });
     }
 

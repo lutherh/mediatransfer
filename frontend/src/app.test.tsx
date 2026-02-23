@@ -39,6 +39,8 @@ vi.mock('@/lib/api', () => ({
       },
     ],
   })),
+  pauseTransfer: vi.fn(async () => ({ message: 'Paused' })),
+  resumeTransfer: vi.fn(async () => ({ message: 'Resumed' })),
   fetchTakeoutStatus: vi.fn(async () => ({
     paths: {
       manifestPath: 'data/takeout/work/manifest.jsonl',
@@ -133,6 +135,7 @@ describe('frontend pages', () => {
   it('renders transfer detail page', async () => {
     renderRoute('/transfers/job-1');
     expect(await screen.findByText('Transfer Detail')).toBeInTheDocument();
+    expect(await screen.findByText('Transfer in progress')).toBeInTheDocument();
     expect(await screen.findByText(/transfer job started/i)).toBeInTheDocument();
   });
 

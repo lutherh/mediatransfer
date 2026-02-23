@@ -31,7 +31,18 @@ If you just want to move your Google Photos files to Scaleway, follow this exact
 3. Leave other values as default unless you know you need to change them.
 
 ### Step 4: Run setup commands (copy/paste)
-Run these commands in the project terminal, one by one:
+Run this once in the project terminal:
+
+```bash
+npm run app:setup
+```
+
+It automatically does all non-sensitive setup steps:
+- installs missing backend/frontend dependencies,
+- starts Docker services (`postgres`, `redis`),
+- generates Prisma client.
+
+If you prefer manual commands, you can still run:
 
 ```bash
 npm ci
@@ -40,21 +51,13 @@ docker compose up -d postgres redis
 ```
 
 ### Step 5: Start the app
-1. Start API server:
+Run a single command:
 
 ```bash
-npm run dev
+npm run app:dev
 ```
 
-2. In another terminal, start frontend:
-
-```bash
-cd frontend
-npm ci
-npm run dev
-```
-
-3. Open the URL shown by Vite (usually `http://localhost:5173`).
+This starts backend and frontend together, so you can open `http://localhost:5173` right away.
 
 ### Step 6: Transfer photos with the wizard (no terminal needed)
 

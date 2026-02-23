@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "app:setup": "node scripts/local-dev.mjs --setup-only",
+    "app:dev": "node scripts/local-dev.mjs",
     "prisma:generate": "prisma generate",
     "db:push": "prisma db push --schema prisma/schema.prisma",
     "build": "tsc",
