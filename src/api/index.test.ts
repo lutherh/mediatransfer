@@ -125,6 +125,9 @@ function createServices(): ApiServices {
       getObject: vi.fn(async () => ({
         stream: Readable.from([Buffer.from('mock-image')]),
         contentType: 'image/jpeg',
+        etag: '"mock-etag-1"',
+        lastModified: '2026-02-20T10:00:00.000Z',
+        contentLength: 10,
       })),
     },
     cloudUsage: {
@@ -438,7 +441,25 @@ describe('api server', () => {
 
     expect(mediaRes.statusCode).toBe(200);
     expect(mediaRes.headers['content-type']).toContain('image/jpeg');
+    expect(mediaRes.headers['etag']).toBe('"mock-etag-1"');
+    expect(mediaRes.headers['cache-control']).toContain('max-age=86400');
     expect(mediaRes.body.length).toBeGreaterThan(0);
+
+    await app.close();
+  });
+
+  it('returns 304 for catalog media when ETag matches', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const mediaRes = await app.inject({
+      method: 'GET',
+      url: '/catalog/media/MjAyNi8wMi8yMC9waG90by5qcGc',
+      headers: { 'if-none-match': '"mock-etag-1"' },
+    });
+
+    expect(mediaRes.statusCode).toBe(304);
+    expect(mediaRes.body).toBe('');
 
     await app.close();
   });
