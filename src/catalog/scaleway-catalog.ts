@@ -26,6 +26,9 @@ export type CatalogPage = {
 export type CatalogObject = {
   stream: Readable;
   contentType?: string;
+  etag?: string;
+  lastModified?: string;
+  contentLength?: number;
 };
 
 export type CatalogService = {
@@ -150,6 +153,9 @@ export class ScalewayCatalogService implements CatalogService {
     return {
       stream,
       contentType: response.ContentType ?? inferContentType(decodedKey),
+      etag: response.ETag,
+      lastModified: response.LastModified?.toISOString(),
+      contentLength: response.ContentLength,
     };
   }
 

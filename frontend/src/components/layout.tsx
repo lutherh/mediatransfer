@@ -18,6 +18,9 @@ export function Layout() {
             <NavLink to="/transfers" className={({ isActive }) => (isActive ? 'font-semibold text-slate-900' : 'text-slate-600')}>
               Transfers
             </NavLink>
+            <NavLink to="/catalog" className={({ isActive }) => (isActive ? 'font-semibold text-slate-900' : 'text-slate-600')}>
+              Catalog
+            </NavLink>
             <NavLink to="/costs" className={({ isActive }) => (isActive ? 'font-semibold text-slate-900' : 'text-slate-600')}>
               Costs
             </NavLink>

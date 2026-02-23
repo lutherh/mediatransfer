@@ -75,12 +75,59 @@ export async function registerCatalogRoutes(
       throw error;
     }
 
+    const normalizedEtag = normalizeEtag(media.etag);
+    const ifNoneMatch = req.headers['if-none-match'];
+    if (normalizedEtag && ifNoneMatch && normalizeEtag(ifNoneMatch) === normalizedEtag) {
+      reply.header('Cache-Control', 'private, max-age=86400, stale-while-revalidate=604800');
+      reply.header('ETag', normalizedEtag);
+      return reply.code(304).send();
+    }
+
+    const ifModifiedSinceHeader = req.headers['if-modified-since'];
+    if (ifModifiedSinceHeader && media.lastModified) {
+      const modifiedAt = Date.parse(media.lastModified);
+      const requestedAt = Date.parse(ifModifiedSinceHeader);
+      if (!Number.isNaN(modifiedAt) && !Number.isNaN(requestedAt) && modifiedAt <= requestedAt) {
+        reply.header('Cache-Control', 'private, max-age=86400, stale-while-revalidate=604800');
+        if (normalizedEtag) {
+          reply.header('ETag', normalizedEtag);
+        }
+        reply.header('Last-Modified', new Date(modifiedAt).toUTCString());
+        return reply.code(304).send();
+      }
+    }
+
     if (media.contentType) {
       reply.type(media.contentType);
     }
-    reply.header('Cache-Control', 'private, max-age=60');
+    reply.header('Cache-Control', 'private, max-age=86400, stale-while-revalidate=604800');
+    if (normalizedEtag) {
+      reply.header('ETag', normalizedEtag);
+    }
+    if (media.lastModified) {
+      const lastModified = Date.parse(media.lastModified);
+      if (!Number.isNaN(lastModified)) {
+        reply.header('Last-Modified', new Date(lastModified).toUTCString());
+      }
+    }
+    if (typeof media.contentLength === 'number' && Number.isFinite(media.contentLength) && media.contentLength >= 0) {
+      reply.header('Content-Length', String(media.contentLength));
+    }
     return reply.send(media.stream);
   });
+}
+
+function normalizeEtag(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  return trimmed.startsWith('"') ? trimmed : `"${trimmed}"`;
 }
 
 function isCatalogObjectNotFound(error: unknown): boolean {
@@ -103,12 +150,12 @@ function buildCatalogHtml(): string {
     :root { color-scheme: light dark; }
     body { margin:0; font-family: Inter, system-ui, sans-serif; background:#0f1115; color:#e8ecf3; }
     .topbar { position:sticky; top:0; z-index:10; display:flex; gap:10px; align-items:center; padding:10px 12px; background:#141923cc; backdrop-filter:blur(6px); border-bottom:1px solid #252b39; }
-    .topbar input { height:34px; border-radius:8px; border:1px solid #31384a; padding:0 10px; background:#0f131c; color:#e8ecf3; }
+    .topbar input, .topbar select { height:34px; border-radius:8px; border:1px solid #31384a; padding:0 10px; background:#0f131c; color:#e8ecf3; }
     .topbar button { height:34px; border-radius:8px; border:1px solid #31384a; background:#1f2633; color:#e8ecf3; padding:0 12px; cursor:pointer; }
     .content { padding:8px; }
     .section-title { position:sticky; top:56px; z-index:5; margin:0; padding:8px 6px; font-size:13px; color:#c8d0df; background:#0f1115f2; }
     .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:6px; }
-    .tile { position:relative; width:100%; aspect-ratio:1/1; border-radius:8px; overflow:hidden; background:#161c28; cursor:pointer; }
+    .tile { position:relative; width:100%; aspect-ratio:1/1; border-radius:8px; overflow:hidden; background:#161c28; cursor:pointer; content-visibility:auto; contain-intrinsic-size:170px 170px; }
     .tile img, .tile video { width:100%; height:100%; object-fit:cover; display:block; }
     .tile .meta { position:absolute; left:0; right:0; bottom:0; font-size:11px; padding:4px 6px; background:linear-gradient(to top, rgba(0,0,0,.65), rgba(0,0,0,0)); }
     .status { text-align:center; color:#9aa6bf; font-size:13px; padding:14px; }
@@ -126,6 +173,19 @@ function buildCatalogHtml(): string {
   <div class="topbar">
     <strong>Scaleway Catalog</strong>
     <input id="prefix" placeholder="Prefix (optional)" />
+    <select id="mediaType" title="Filter by media type">
+      <option value="all">All media</option>
+      <option value="image">Photos only</option>
+      <option value="video">Videos only</option>
+    </select>
+    <select id="sortOrder" title="Arrange order">
+      <option value="date-desc">Newest first</option>
+      <option value="date-asc">Oldest first</option>
+      <option value="key-asc">Name A→Z</option>
+      <option value="key-desc">Name Z→A</option>
+      <option value="size-desc">Largest first</option>
+      <option value="size-asc">Smallest first</option>
+    </select>
     <button id="reloadBtn">Reload</button>
     <span id="stats" style="font-size:12px;color:#9aa6bf"></span>
   </div>
@@ -150,6 +210,8 @@ function buildCatalogHtml(): string {
     const statsEl = document.getElementById('stats');
     const sentinel = document.getElementById('sentinel');
     const prefixInput = document.getElementById('prefix');
+    const mediaTypeSelect = document.getElementById('mediaType');
+    const sortOrderSelect = document.getElementById('sortOrder');
     const reloadBtn = document.getElementById('reloadBtn');
     const toTop = document.getElementById('toTop');
     const modal = document.getElementById('modal');
@@ -164,6 +226,8 @@ function buildCatalogHtml(): string {
     let loading = false;
     let hasMore = true;
     let loaded = 0;
+    let allItems = [];
+    let renderVersion = 0;
 
     const sections = new Map();
 
@@ -192,18 +256,76 @@ function buildCatalogHtml(): string {
         if (!res.ok) throw new Error('Request failed: ' + res.status);
 
         const page = await res.json();
-        for (const item of page.items || []) renderItem(item);
-
-        loaded += (page.items || []).length;
-        statsEl.textContent = loaded + ' items';
+        const newItems = page.items || [];
+        allItems.push(...newItems);
+        loaded += newItems.length;
+        renderAllItems();
+        updateStats();
         nextToken = page.nextToken || null;
         hasMore = Boolean(nextToken);
-        statusEl.textContent = hasMore ? 'Scroll for more' : (loaded ? 'Completed' : 'No items found');
+        statusEl.textContent = hasMore ? 'Scroll for more' : (allItems.length ? 'Completed' : 'No items found');
       } catch (err) {
         statusEl.textContent = 'Error loading catalog';
       } finally {
         loading = false;
       }
+    }
+
+    function updateStats() {
+      const visible = getVisibleItems().length;
+      statsEl.textContent = visible + ' shown / ' + loaded + ' loaded';
+    }
+
+    function getVisibleItems() {
+      const selectedType = mediaTypeSelect.value;
+      return allItems.filter((item) => {
+        if (selectedType === 'all') return true;
+        return item.mediaType === selectedType;
+      });
+    }
+
+    function parseDateValue(item) {
+      if (!item.sectionDate) return 0;
+      const time = Date.parse(item.sectionDate);
+      return Number.isNaN(time) ? 0 : time;
+    }
+
+    function compareItems(a, b) {
+      const sortOrder = sortOrderSelect.value;
+      if (sortOrder === 'date-asc') return parseDateValue(a) - parseDateValue(b);
+      if (sortOrder === 'date-desc') return parseDateValue(b) - parseDateValue(a);
+      if (sortOrder === 'key-asc') return String(a.key || '').localeCompare(String(b.key || ''));
+      if (sortOrder === 'key-desc') return String(b.key || '').localeCompare(String(a.key || ''));
+      if (sortOrder === 'size-asc') return Number(a.size || 0) - Number(b.size || 0);
+      if (sortOrder === 'size-desc') return Number(b.size || 0) - Number(a.size || 0);
+      return 0;
+    }
+
+    function renderAllItems() {
+      sections.clear();
+      content.innerHTML = '';
+
+      const items = getVisibleItems().slice().sort(compareItems);
+      const version = ++renderVersion;
+      let index = 0;
+      const batchSize = 150;
+
+      function renderChunk() {
+        if (version !== renderVersion) {
+          return;
+        }
+
+        const end = Math.min(index + batchSize, items.length);
+        for (; index < end; index += 1) {
+          renderItem(items[index]);
+        }
+
+        if (index < items.length) {
+          requestAnimationFrame(renderChunk);
+        }
+      }
+
+      requestAnimationFrame(renderChunk);
     }
 
     function getSection(dateStr) {
@@ -234,10 +356,12 @@ function buildCatalogHtml(): string {
       const src = mediaUrl(item.encodedKey);
       const media = document.createElement(item.mediaType === 'video' ? 'video' : 'img');
       media.loading = 'lazy';
+      media.decoding = 'async';
       media.src = src;
       if (item.mediaType === 'video') {
         media.muted = true;
         media.playsInline = true;
+        media.preload = 'metadata';
       }
 
       const meta = document.createElement('div');
@@ -281,12 +405,22 @@ function buildCatalogHtml(): string {
       hasMore = true;
       loading = false;
       loaded = 0;
+      allItems = [];
       sections.clear();
       content.innerHTML = '';
+      updateStats();
       loadMore();
     }
 
     reloadBtn.addEventListener('click', resetAndReload);
+    mediaTypeSelect.addEventListener('change', () => {
+      renderAllItems();
+      updateStats();
+    });
+    sortOrderSelect.addEventListener('change', () => {
+      renderAllItems();
+      updateStats();
+    });
     closeModal.addEventListener('click', () => {
       modal.classList.remove('open');
       modalBody.innerHTML = '';
