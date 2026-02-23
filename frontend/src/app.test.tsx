@@ -9,6 +9,7 @@ import { TransferDetailPage } from '@/pages/transfer-detail-page';
 import { TakeoutProgressPage } from '@/pages/takeout-progress-page';
 import { PhotoTransferPage } from '@/pages/photo-transfer-page';
 import { OAuthCallbackPage } from '@/pages/oauth-callback-page';
+import { CostsPage } from '@/pages/costs-page';
 
 vi.mock('@/lib/api', () => ({
   fetchTransfers: vi.fn(async () => [
@@ -111,6 +112,7 @@ function renderRoute(path: string) {
             <Route element={<PhotoTransferPage />} index />
             <Route element={<TakeoutProgressPage />} path="takeout" />
             <Route element={<TransfersListPage />} path="transfers" />
+            <Route element={<CostsPage />} path="costs" />
             <Route element={<NewTransferPage />} path="transfers/new" />
             <Route element={<TransferDetailPage />} path="transfers/:id" />
           </Route>
@@ -156,10 +158,17 @@ describe('frontend pages', () => {
     expect(await screen.findByText(/transfer job started/i)).toBeInTheDocument();
   });
 
+  it('renders costs page', async () => {
+    renderRoute('/costs');
+    expect(await screen.findByRole('heading', { name: 'Costs' })).toBeInTheDocument();
+    expect(await screen.findByText('Detailed cost estimate')).toBeInTheDocument();
+  });
+
   it('shows navigation links', async () => {
     renderRoute('/');
     expect(await screen.findByRole('link', { name: 'Photo Transfer' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Takeout Progress' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Transfers' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Costs' })).toBeInTheDocument();
   });
 });

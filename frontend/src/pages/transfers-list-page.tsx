@@ -4,6 +4,25 @@ import { Link } from 'react-router-dom';
 import { fetchCloudUsage, fetchTransfers, type CloudUsageBucketType } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 
+const BUCKET_TYPE_SETTING_KEY = 'cloudUsage.bucketType';
+
+function readBucketTypeSetting(): CloudUsageBucketType {
+  if (
+    typeof window === 'undefined' ||
+    !window.localStorage ||
+    typeof window.localStorage.getItem !== 'function'
+  ) {
+    return 'standard';
+  }
+
+  const stored = window.localStorage.getItem(BUCKET_TYPE_SETTING_KEY);
+  if (stored === 'standard' || stored === 'infrequent' || stored === 'archive') {
+    return stored;
+  }
+
+  return 'standard';
+}
+
 const STATUS_STYLES: Record<string, string> = {
   PENDING: 'bg-amber-50 text-amber-700 border border-amber-200',
   IN_PROGRESS: 'bg-blue-50 text-blue-700 border border-blue-200',
@@ -13,7 +32,7 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 export function TransfersListPage() {
-  const [bucketType, setBucketType] = useState<CloudUsageBucketType>('standard');
+  const [bucketType, setBucketType] = useState<CloudUsageBucketType>(readBucketTypeSetting);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['transfers'],
@@ -26,6 +45,17 @@ export function TransfersListPage() {
     retry: false,
     staleTime: 30_000,
   });
+
+  const handleBucketTypeChange = (value: CloudUsageBucketType) => {
+    setBucketType(value);
+    if (
+      typeof window !== 'undefined' &&
+      window.localStorage &&
+      typeof window.localStorage.setItem === 'function'
+    ) {
+      window.localStorage.setItem(BUCKET_TYPE_SETTING_KEY, value);
+    }
+  };
 
   if (isLoading) {
     return <p>Loading transfers...</p>;
@@ -43,20 +73,25 @@ export function TransfersListPage() {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-sm font-medium text-slate-900">Cloud usage (S3)</p>
-            <p className="text-xs text-slate-600">Total uploaded size and estimated monthly storage cost.</p>
+            <p className="text-xs text-slate-600">Simple storage cost overview. Open Costs tab for detailed estimate.</p>
           </div>
-          <label className="text-xs text-slate-700">
-            Bucket type
-            <select
-              className="ml-2 rounded border border-slate-300 bg-white px-2 py-1 text-xs"
-              value={bucketType}
-              onChange={(event) => setBucketType(event.target.value as CloudUsageBucketType)}
-            >
-              <option value="standard">Standard</option>
-              <option value="infrequent">Infrequent</option>
-              <option value="archive">Archive</option>
-            </select>
-          </label>
+          <div className="flex items-center gap-3">
+            <label className="text-xs text-slate-700">
+              Bucket type
+              <select
+                className="ml-2 rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                value={bucketType}
+                onChange={(event) => handleBucketTypeChange(event.target.value as CloudUsageBucketType)}
+              >
+                <option value="standard">Standard</option>
+                <option value="infrequent">Infrequent</option>
+                <option value="archive">Archive</option>
+              </select>
+            </label>
+            <Link className="text-xs font-medium text-blue-600 hover:underline" to="/costs">
+              Detailed costs
+            </Link>
+          </div>
         </div>
 
         {cloudUsageQuery.isLoading ? (

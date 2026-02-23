@@ -341,7 +341,7 @@ describe('api server', () => {
     await app.close();
   });
 
-  it('returns cloud usage totals and monthly estimate', async () => {
+  it('returns cloud usage totals and monthly estimate (with default VAT)', async () => {
     const app = await createApiServer({ services: createServices() });
 
     const res = await app.inject({ method: 'GET', url: '/usage/cloud?bucketType=standard' });
@@ -353,7 +353,32 @@ describe('api server', () => {
     expect(body.totalGB).toBe(25);
     expect(body.pricing.currency).toBe('USD');
     expect(body.pricing.pricePerGBMonthly).toBe(0.023);
-    expect(body.estimatedMonthlyCost).toBe(0.575);
+    expect(body.estimatedMonthlyCost).toBe(0.72);
+
+    await app.close();
+  });
+
+  it('applies advanced cloud usage assumptions and returns detailed breakdown', async () => {
+    const app = await createApiServer({ services: createServices() });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/usage/cloud?bucketType=standard&putRequests=10000&getRequests=50000&listRequests=2000&lifecycleTransitionGB=3&retrievalGB=10&egressGB=5&vatRate=0.25',
+    });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json();
+    expect(body.assumptions.putRequests).toBe(10000);
+    expect(body.assumptions.getRequests).toBe(50000);
+    expect(body.assumptions.listRequests).toBe(2000);
+    expect(body.breakdown.storageCost).toBeCloseTo(0.575, 4);
+    expect(body.breakdown.requestCost).toBeCloseTo(0.08, 4);
+    expect(body.breakdown.lifecycleTransitionCost).toBeCloseTo(0.03, 4);
+    expect(body.breakdown.retrievalCost).toBeCloseTo(0, 4);
+    expect(body.breakdown.egressCost).toBeCloseTo(0.45, 4);
+    expect(body.breakdown.subtotalExclVat).toBeCloseTo(1.135, 4);
+    expect(body.breakdown.vatAmount).toBeCloseTo(0.2838, 4);
+    expect(body.estimatedMonthlyCost).toBeCloseTo(1.42, 2);
 
     await app.close();
   });
