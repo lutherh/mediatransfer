@@ -18,6 +18,16 @@ export type TransferLog = {
 
 export type CloudUsageBucketType = 'standard' | 'infrequent' | 'archive';
 
+export type CloudUsageAssumptions = {
+  putRequests: number;
+  getRequests: number;
+  listRequests: number;
+  lifecycleTransitionGB: number;
+  retrievalGB: number;
+  egressGB: number;
+  vatRate: number;
+};
+
 export type CloudUsageSummary = {
   provider: 'scaleway';
   bucket: string;
@@ -27,9 +37,39 @@ export type CloudUsageSummary = {
   totalBytes: number;
   totalGB: number;
   bucketType: CloudUsageBucketType;
+  assumptions: CloudUsageAssumptions;
   pricing: {
     currency: 'USD';
     pricePerGBMonthly: number;
+    requestPer1000: {
+      put: number;
+      get: number;
+      list: number;
+    };
+    lifecycleTransitionPerGB: number;
+    retrievalPerGB: number;
+    egressPerGB: number;
+  };
+  providerRules: {
+    requestBillingUnit: number;
+    lineItemRoundingDecimals: number;
+    invoiceRoundingDecimals: number;
+    minimumMonthlyChargeUSD: number;
+  };
+  breakdown: {
+    storageCost: number;
+    putRequestCost: number;
+    getRequestCost: number;
+    listRequestCost: number;
+    requestCost: number;
+    lifecycleTransitionCost: number;
+    retrievalCost: number;
+    egressCost: number;
+    subtotalBeforeMinimum: number;
+    minimumChargeAdjustment: number;
+    subtotalExclVat: number;
+    vatAmount: number;
+    totalInclVat: number;
   };
   estimatedMonthlyCost: number;
   measuredAt: string;
@@ -88,8 +128,23 @@ export async function fetchTransferDetail(id: string): Promise<{ job: TransferJo
   return response.json();
 }
 
-export async function fetchCloudUsage(bucketType: CloudUsageBucketType): Promise<CloudUsageSummary> {
-  const response = await fetch(`${API_BASE_URL}/usage/cloud?bucketType=${bucketType}`);
+export async function fetchCloudUsage(
+  bucketType: CloudUsageBucketType,
+  assumptions?: Partial<CloudUsageAssumptions>,
+): Promise<CloudUsageSummary> {
+  const params = new URLSearchParams({ bucketType });
+
+  if (assumptions) {
+    if (assumptions.putRequests !== undefined) params.set('putRequests', String(assumptions.putRequests));
+    if (assumptions.getRequests !== undefined) params.set('getRequests', String(assumptions.getRequests));
+    if (assumptions.listRequests !== undefined) params.set('listRequests', String(assumptions.listRequests));
+    if (assumptions.lifecycleTransitionGB !== undefined) params.set('lifecycleTransitionGB', String(assumptions.lifecycleTransitionGB));
+    if (assumptions.retrievalGB !== undefined) params.set('retrievalGB', String(assumptions.retrievalGB));
+    if (assumptions.egressGB !== undefined) params.set('egressGB', String(assumptions.egressGB));
+    if (assumptions.vatRate !== undefined) params.set('vatRate', String(assumptions.vatRate));
+  }
+
+  const response = await fetch(`${API_BASE_URL}/usage/cloud?${params.toString()}`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch cloud usage');
