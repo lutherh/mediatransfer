@@ -63,10 +63,23 @@ export type CatalogService = {
   getObject(encodedKey: string): Promise<CatalogObject>;
 };
 
+export type CloudUsageService = {
+  getSummary(): Promise<{
+    provider: 'scaleway';
+    bucket: string;
+    region: string;
+    prefix?: string;
+    totalObjects: number;
+    totalBytes: number;
+    measuredAt: string;
+  }>;
+};
+
 export type ApiServices = {
   credentials: CredentialsService;
   jobs: JobsService;
   providers: ProvidersService;
   queue: QueueService;
   catalog?: CatalogService;
+  cloudUsage?: CloudUsageService;
 };

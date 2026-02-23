@@ -16,6 +16,26 @@ export type TransferLog = {
   createdAt: string;
 };
 
+export type CloudUsageBucketType = 'standard' | 'infrequent' | 'archive';
+
+export type CloudUsageSummary = {
+  provider: 'scaleway';
+  bucket: string;
+  region: string;
+  prefix?: string;
+  totalObjects: number;
+  totalBytes: number;
+  totalGB: number;
+  bucketType: CloudUsageBucketType;
+  pricing: {
+    currency: 'USD';
+    pricePerGBMonthly: number;
+  };
+  estimatedMonthlyCost: number;
+  measuredAt: string;
+  note: string;
+};
+
 export type TakeoutStatus = {
   paths: {
     manifestPath: string;
@@ -64,6 +84,15 @@ export async function fetchTransferDetail(id: string): Promise<{ job: TransferJo
   const response = await fetch(`${API_BASE_URL}/transfers/${id}`);
   if (!response.ok) {
     throw new Error('Failed to fetch transfer detail');
+  }
+  return response.json();
+}
+
+export async function fetchCloudUsage(bucketType: CloudUsageBucketType): Promise<CloudUsageSummary> {
+  const response = await fetch(`${API_BASE_URL}/usage/cloud?bucketType=${bucketType}`);
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch cloud usage');
   }
   return response.json();
 }

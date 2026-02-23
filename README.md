@@ -122,6 +122,13 @@ npm run dev
 | `/transfers/:id` | Transfer Detail | Detailed view of a single transfer |
 | `/auth/google/callback` | OAuth Callback | Handles Google OAuth redirect (standalone, no layout) |
 
+On `/transfers`, a **Cloud usage (S3)** card shows:
+- total uploaded size in GB,
+- total object count,
+- estimated monthly storage cost by bucket type (`standard`, `infrequent`, `archive`).
+
+The estimate is storage-only in USD; request/transfer/retrieval costs are not included.
+
 ## 1) Setup environment values
 
 - Copy `.env.example` to `.env` in the project root.
