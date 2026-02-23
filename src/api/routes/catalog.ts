@@ -228,6 +228,7 @@ function buildCatalogHtml(): string {
     let loaded = 0;
     let allItems = [];
     let renderVersion = 0;
+    let prefetchingAll = false;
 
     const sections = new Map();
 
@@ -243,7 +244,7 @@ function buildCatalogHtml(): string {
       statusEl.textContent = 'Loading…';
 
       const params = new URLSearchParams();
-      params.set('max', '90');
+      params.set('max', isDateSortSelected() ? '200' : '90');
       if (nextToken) params.set('token', nextToken);
       const prefix = prefixInput.value.trim();
       if (prefix) params.set('prefix', prefix);
@@ -263,11 +264,36 @@ function buildCatalogHtml(): string {
         updateStats();
         nextToken = page.nextToken || null;
         hasMore = Boolean(nextToken);
-        statusEl.textContent = hasMore ? 'Scroll for more' : (allItems.length ? 'Completed' : 'No items found');
+        if (prefetchingAll && hasMore) {
+          statusEl.textContent = 'Loading all items for date sorting…';
+        } else {
+          statusEl.textContent = hasMore ? 'Scroll for more' : (allItems.length ? 'Completed' : 'No items found');
+        }
       } catch (err) {
         statusEl.textContent = 'Error loading catalog';
       } finally {
         loading = false;
+      }
+    }
+
+    function isDateSortSelected() {
+      const value = sortOrderSelect.value;
+      return value === 'date-desc' || value === 'date-asc';
+    }
+
+    async function prefetchAllForDateSort() {
+      if (prefetchingAll || !isDateSortSelected() || !hasMore) {
+        return;
+      }
+
+      prefetchingAll = true;
+      try {
+        while (hasMore) {
+          await loadMore();
+        }
+      } finally {
+        prefetchingAll = false;
+        statusEl.textContent = allItems.length ? 'Completed' : 'No items found';
       }
     }
 
@@ -285,9 +311,17 @@ function buildCatalogHtml(): string {
     }
 
     function parseDateValue(item) {
-      if (!item.sectionDate) return 0;
-      const time = Date.parse(item.sectionDate);
-      return Number.isNaN(time) ? 0 : time;
+      if (item.lastModified) {
+        const precise = Date.parse(item.lastModified);
+        if (!Number.isNaN(precise)) return precise;
+      }
+
+      if (item.sectionDate) {
+        const dayLevel = Date.parse(item.sectionDate);
+        if (!Number.isNaN(dayLevel)) return dayLevel;
+      }
+
+      return 0;
     }
 
     function compareItems(a, b) {
@@ -406,10 +440,15 @@ function buildCatalogHtml(): string {
       loading = false;
       loaded = 0;
       allItems = [];
+      prefetchingAll = false;
       sections.clear();
       content.innerHTML = '';
       updateStats();
-      loadMore();
+      if (isDateSortSelected()) {
+        prefetchAllForDateSort();
+      } else {
+        loadMore();
+      }
     }
 
     reloadBtn.addEventListener('click', resetAndReload);
@@ -420,6 +459,9 @@ function buildCatalogHtml(): string {
     sortOrderSelect.addEventListener('change', () => {
       renderAllItems();
       updateStats();
+      if (isDateSortSelected() && hasMore) {
+        prefetchAllForDateSort();
+      }
     });
     closeModal.addEventListener('click', () => {
       modal.classList.remove('open');
