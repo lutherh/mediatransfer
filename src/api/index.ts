@@ -43,6 +43,7 @@ import { registerProviderRoutes } from './routes/providers.js';
 import { registerCatalogRoutes } from './routes/catalog.js';
 import { registerTakeoutRoutes } from './routes/takeout.js';
 import { registerGoogleAuthRoutes } from './routes/google-auth.js';
+import { registerCloudUsageRoutes } from './routes/cloud-usage.js';
 import { getStoredTokens, setStoredTokens } from './routes/google-token-store.js';
 import type { ApiServices } from './types.js';
 
@@ -166,6 +167,7 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	await registerTransferRoutes(app, runtime.services.jobs, runtime.services.queue);
 	await registerProviderRoutes(app, runtime.services.providers);
 	await registerCatalogRoutes(app, runtime.services.catalog);
+	await registerCloudUsageRoutes(app, runtime.services.cloudUsage);
 	await registerTakeoutRoutes(app);
 	await registerGoogleAuthRoutes(app);
 
@@ -245,6 +247,7 @@ function createDefaultServices(): { services: ApiServices; dispose: () => Promis
 			enqueueBulk: (input) => enqueueBulkTransfer(queue as any, input),
 		},
 		catalog: createCatalogServiceFromEnv(),
+		cloudUsage: createCloudUsageServiceFromEnv(),
 	};
 
 	return {
@@ -545,6 +548,75 @@ function createCatalogServiceFromEnv(): ScalewayCatalogService | undefined {
 		secretKey,
 		prefix,
 	});
+}
+
+function createCloudUsageServiceFromEnv() {
+	const region = process.env.SCW_REGION;
+	const bucket = process.env.SCW_BUCKET;
+	const accessKey = process.env.SCW_ACCESS_KEY;
+	const secretKey = process.env.SCW_SECRET_KEY;
+	const prefix = process.env.SCW_PREFIX;
+
+	if (!region || !bucket || !accessKey || !secretKey) {
+		return undefined;
+	}
+
+	const provider = createScalewayProvider(
+		validateScalewayConfig({
+			provider: 'scaleway',
+			region,
+			bucket,
+			accessKey,
+			secretKey,
+			prefix,
+		}),
+	);
+
+	type UsageCache = {
+		measuredAtMs: number;
+		totalObjects: number;
+		totalBytes: number;
+	};
+
+	let cache: UsageCache | null = null;
+	const cacheTtlMs = 30_000;
+
+	return {
+		async getSummary() {
+			const now = Date.now();
+			if (cache && now - cache.measuredAtMs < cacheTtlMs) {
+				return {
+					provider: 'scaleway' as const,
+					bucket,
+					region,
+					prefix,
+					totalObjects: cache.totalObjects,
+					totalBytes: cache.totalBytes,
+					measuredAt: new Date(cache.measuredAtMs).toISOString(),
+				};
+			}
+
+			const items = await provider.list();
+			const totalBytes = items.reduce((sum, item) => sum + item.size, 0);
+			const measuredAtMs = Date.now();
+
+			cache = {
+				measuredAtMs,
+				totalObjects: items.length,
+				totalBytes,
+			};
+
+			return {
+				provider: 'scaleway' as const,
+				bucket,
+				region,
+				prefix,
+				totalObjects: items.length,
+				totalBytes,
+				measuredAt: new Date(measuredAtMs).toISOString(),
+			};
+		},
+	};
 }
 
 function safeEqual(left: string, right: string): boolean {

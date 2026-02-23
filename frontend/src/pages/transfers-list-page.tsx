@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { fetchTransfers } from '@/lib/api';
+import { fetchCloudUsage, fetchTransfers, type CloudUsageBucketType } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 
 const STATUS_STYLES: Record<string, string> = {
@@ -12,9 +13,18 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 export function TransfersListPage() {
+  const [bucketType, setBucketType] = useState<CloudUsageBucketType>('standard');
+
   const { data, isLoading, error } = useQuery({
     queryKey: ['transfers'],
     queryFn: fetchTransfers,
+  });
+
+  const cloudUsageQuery = useQuery({
+    queryKey: ['cloud-usage', bucketType],
+    queryFn: () => fetchCloudUsage(bucketType),
+    retry: false,
+    staleTime: 30_000,
   });
 
   if (isLoading) {
@@ -28,6 +38,43 @@ export function TransfersListPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold">Transfers</h1>
+
+      <Card>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-sm font-medium text-slate-900">Cloud usage (S3)</p>
+            <p className="text-xs text-slate-600">Total uploaded size and estimated monthly storage cost.</p>
+          </div>
+          <label className="text-xs text-slate-700">
+            Bucket type
+            <select
+              className="ml-2 rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+              value={bucketType}
+              onChange={(event) => setBucketType(event.target.value as CloudUsageBucketType)}
+            >
+              <option value="standard">Standard</option>
+              <option value="infrequent">Infrequent</option>
+              <option value="archive">Archive</option>
+            </select>
+          </label>
+        </div>
+
+        {cloudUsageQuery.isLoading ? (
+          <p className="mt-3 text-sm text-slate-600">Loading cloud usage...</p>
+        ) : cloudUsageQuery.isError ? (
+          <p className="mt-3 text-sm text-amber-700">
+            {cloudUsageQuery.error instanceof Error ? cloudUsageQuery.error.message : 'Cloud usage unavailable.'}
+          </p>
+        ) : cloudUsageQuery.data ? (
+          <div className="mt-3 grid gap-2 text-sm text-slate-700 sm:grid-cols-2 lg:grid-cols-4">
+            <p><span className="font-medium">Uploaded:</span> {cloudUsageQuery.data.totalGB.toFixed(2)} GB</p>
+            <p><span className="font-medium">Objects:</span> {cloudUsageQuery.data.totalObjects.toLocaleString()}</p>
+            <p><span className="font-medium">Monthly:</span> ${cloudUsageQuery.data.estimatedMonthlyCost.toFixed(2)} / mo</p>
+            <p><span className="font-medium">Rate:</span> ${cloudUsageQuery.data.pricing.pricePerGBMonthly.toFixed(4)} / GB</p>
+          </div>
+        ) : null}
+      </Card>
+
       {data?.length ? (
         <Card className="p-0 overflow-hidden">
           <div className="max-h-[70vh] overflow-auto">

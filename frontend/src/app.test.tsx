@@ -39,6 +39,23 @@ vi.mock('@/lib/api', () => ({
       },
     ],
   })),
+  fetchCloudUsage: vi.fn(async () => ({
+    provider: 'scaleway',
+    bucket: 'photos-bucket',
+    region: 'nl-ams',
+    prefix: 'photos',
+    totalObjects: 50,
+    totalBytes: 50 * 1024 * 1024 * 1024,
+    totalGB: 50,
+    bucketType: 'standard',
+    pricing: {
+      currency: 'USD',
+      pricePerGBMonthly: 0.023,
+    },
+    estimatedMonthlyCost: 1.15,
+    measuredAt: new Date().toISOString(),
+    note: 'Estimate includes storage only.',
+  })),
   pauseTransfer: vi.fn(async () => ({ message: 'Paused' })),
   resumeTransfer: vi.fn(async () => ({ message: 'Resumed' })),
   fetchTakeoutStatus: vi.fn(async () => ({

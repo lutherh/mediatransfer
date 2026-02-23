@@ -127,6 +127,17 @@ function createServices(): ApiServices {
         contentType: 'image/jpeg',
       })),
     },
+    cloudUsage: {
+      getSummary: vi.fn(async () => ({
+        provider: 'scaleway' as const,
+        bucket: 'photos-bucket',
+        region: 'nl-ams',
+        prefix: 'photos',
+        totalObjects: 25,
+        totalBytes: 25 * 1024 * 1024 * 1024,
+        measuredAt: new Date('2026-02-23T00:00:00.000Z').toISOString(),
+      })),
+    },
   };
 }
 
@@ -326,6 +337,23 @@ describe('api server', () => {
 
     expect(objectsRes.statusCode).toBe(200);
     expect(objectsRes.json().items).toHaveLength(1);
+
+    await app.close();
+  });
+
+  it('returns cloud usage totals and monthly estimate', async () => {
+    const app = await createApiServer({ services: createServices() });
+
+    const res = await app.inject({ method: 'GET', url: '/usage/cloud?bucketType=standard' });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json();
+    expect(body.provider).toBe('scaleway');
+    expect(body.totalObjects).toBe(25);
+    expect(body.totalGB).toBe(25);
+    expect(body.pricing.currency).toBe('USD');
+    expect(body.pricing.pricePerGBMonthly).toBe(0.023);
+    expect(body.estimatedMonthlyCost).toBe(0.575);
 
     await app.close();
   });
