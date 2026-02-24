@@ -639,13 +639,16 @@ function buildDestinationKey(filename: string, itemId: string, createTime?: stri
 }
 
 function createDatePath(createTime?: string): string {
-	const date = createTime ? new Date(createTime) : new Date();
-	if (Number.isNaN(date.getTime())) {
-		const now = new Date();
-		return `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}/${String(now.getUTCDate()).padStart(2, '0')}`;
+	if (createTime) {
+		const date = new Date(createTime);
+		if (!Number.isNaN(date.getTime())) {
+			return `${date.getUTCFullYear()}/${String(date.getUTCMonth() + 1).padStart(2, '0')}/${String(date.getUTCDate()).padStart(2, '0')}`;
+		}
 	}
 
-	return `${date.getUTCFullYear()}/${String(date.getUTCMonth() + 1).padStart(2, '0')}/${String(date.getUTCDate()).padStart(2, '0')}`;
+	// Explicit fallback: use a clearly-marked "unknown date" path instead of
+	// silently filing under today's date, which would produce wrong catalog dates.
+	return 'unknown-date';
 }
 
 export type { TransferJobPayload };
@@ -752,7 +755,9 @@ function createCloudUsageServiceFromEnv() {
 				};
 			}
 
-			const items = await provider.list();
+			// Cap the list to avoid unbounded S3 pagination for very large buckets.
+			// The count/bytes will be approximate for buckets with >10 000 objects.
+			const items = await provider.list({ maxResults: 10_000 });
 			const totalBytes = items.reduce((sum, item) => sum + item.size, 0);
 			const measuredAtMs = Date.now();
 

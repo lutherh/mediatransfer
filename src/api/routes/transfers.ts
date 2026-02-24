@@ -360,6 +360,11 @@ export async function registerTransferRoutes(
 
   app.delete('/transfers/:id', async (req, reply) => {
     const id = (req.params as { id: string }).id;
+    const job = await jobs.get(id);
+    if (!job) {
+      return reply.code(404).send({ error: 'Transfer job not found' });
+    }
+
     await jobs.update(id, { status: TransferStatus.CANCELLED, errorMessage: null });
     await jobs.delete(id);
     return reply.code(204).send();
