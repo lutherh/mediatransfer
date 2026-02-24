@@ -269,6 +269,24 @@ describe('api server', () => {
     };
 
     services.jobs.get = vi.fn(async () => pausedJob);
+    services.jobs.listLogs = vi.fn(async () => [
+      {
+        id: 'log-a',
+        jobId: 'job-1',
+        level: 'INFO',
+        message: 'Uploaded a.jpg',
+        meta: { mediaItemId: 'a.jpg', status: 'COMPLETED' },
+        createdAt: new Date('2025-01-01T00:01:00.000Z'),
+      },
+      {
+        id: 'log-b',
+        jobId: 'job-1',
+        level: 'INFO',
+        message: 'Uploaded b.jpg',
+        meta: { mediaItemId: 'b.jpg', status: 'COMPLETED' },
+        createdAt: new Date('2025-01-01T00:02:00.000Z'),
+      },
+    ]);
 
     const app = await createApiServer({ services });
     const res = await app.inject({ method: 'POST', url: '/transfers/job-1/resume' });
@@ -305,6 +323,24 @@ describe('api server', () => {
     };
 
     services.jobs.get = vi.fn(async () => failedJob);
+    services.jobs.listLogs = vi.fn(async () => [
+      {
+        id: 'log-a',
+        jobId: 'job-1',
+        level: 'INFO',
+        message: 'Uploaded a.jpg',
+        meta: { mediaItemId: 'a.jpg', status: 'COMPLETED' },
+        createdAt: new Date('2025-01-01T00:01:00.000Z'),
+      },
+      {
+        id: 'log-b',
+        jobId: 'job-1',
+        level: 'INFO',
+        message: 'Uploaded b.jpg',
+        meta: { mediaItemId: 'b.jpg', status: 'COMPLETED' },
+        createdAt: new Date('2025-01-01T00:02:00.000Z'),
+      },
+    ]);
 
     const app = await createApiServer({ services });
     const res = await app.inject({ method: 'POST', url: '/transfers/job-1/resume' });
@@ -314,6 +350,67 @@ describe('api server', () => {
       expect.objectContaining({
         transferJobId: 'job-1',
         keys: ['c.jpg', 'd.jpg'],
+        startIndex: 2,
+        totalKeys: 4,
+      }),
+    );
+
+    await app.close();
+  });
+
+  it('retries a failed transfer item', async () => {
+    const services = createServices();
+    const failedJob = {
+      id: 'job-1',
+      sourceProvider: 'google-photos',
+      destProvider: 'scaleway',
+      sourceConfig: { sessionId: 'picker-1' },
+      destConfig: null,
+      keys: ['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg'],
+      status: TransferStatus.FAILED,
+      progress: 0.5,
+      errorMessage: 'Transfer failed: fetch failed',
+      createdAt: new Date('2025-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2025-01-01T00:00:00.000Z'),
+      startedAt: new Date('2025-01-01T00:00:00.000Z'),
+      completedAt: null,
+    };
+
+    services.jobs.get = vi
+      .fn()
+      .mockResolvedValueOnce(failedJob)
+      .mockResolvedValueOnce(failedJob);
+    services.jobs.listLogs = vi.fn(async () => [
+      {
+        id: 'log-a',
+        jobId: 'job-1',
+        level: 'INFO',
+        message: 'Uploaded a.jpg',
+        meta: { mediaItemId: 'a.jpg', status: 'COMPLETED' },
+        createdAt: new Date('2025-01-01T00:01:00.000Z'),
+      },
+      {
+        id: 'log-b',
+        jobId: 'job-1',
+        level: 'INFO',
+        message: 'Uploaded b.jpg',
+        meta: { mediaItemId: 'b.jpg', status: 'COMPLETED' },
+        createdAt: new Date('2025-01-01T00:02:00.000Z'),
+      },
+    ]);
+
+    const app = await createApiServer({ services });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/transfers/job-1/retry-item',
+      payload: { mediaItemId: 'c.jpg' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(services.queue.enqueueBulk).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transferJobId: 'job-1',
+        keys: ['c.jpg'],
         startIndex: 2,
         totalKeys: 4,
       }),

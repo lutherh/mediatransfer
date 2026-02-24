@@ -229,6 +229,11 @@ function buildCatalogHtml(): string {
     let allItems = [];
     let renderVersion = 0;
     let prefetchingAll = false;
+    let renderQueued = false;
+    let lastVisibleCount = 0;
+
+    const PREFETCH_MAX_ITEMS = 3000;
+    const PREFETCH_MAX_PAGES = 25;
 
     const sections = new Map();
 
@@ -260,7 +265,9 @@ function buildCatalogHtml(): string {
         const newItems = page.items || [];
         allItems.push(...newItems);
         loaded += newItems.length;
-        renderAllItems();
+        if (!prefetchingAll) {
+          scheduleRender();
+        }
         updateStats();
         nextToken = page.nextToken || null;
         hasMore = Boolean(nextToken);
@@ -288,18 +295,25 @@ function buildCatalogHtml(): string {
 
       prefetchingAll = true;
       try {
-        while (hasMore) {
+        let pagesLoaded = 0;
+        while (hasMore && pagesLoaded < PREFETCH_MAX_PAGES && allItems.length < PREFETCH_MAX_ITEMS) {
           await loadMore();
+          pagesLoaded += 1;
+          await new Promise((resolve) => setTimeout(resolve, 0));
         }
       } finally {
         prefetchingAll = false;
-        statusEl.textContent = allItems.length ? 'Completed' : 'No items found';
+        scheduleRender();
+        if (hasMore) {
+          statusEl.textContent = 'Loaded ' + loaded + ' items. Refine prefix for faster date sorting.';
+        } else {
+          statusEl.textContent = allItems.length ? 'Completed' : 'No items found';
+        }
       }
     }
 
     function updateStats() {
-      const visible = getVisibleItems().length;
-      statsEl.textContent = visible + ' shown / ' + loaded + ' loaded';
+      statsEl.textContent = lastVisibleCount + ' shown / ' + loaded + ' loaded';
     }
 
     function getVisibleItems() {
@@ -341,10 +355,12 @@ function buildCatalogHtml(): string {
     }
 
     function renderAllItems() {
+      renderQueued = false;
       sections.clear();
       content.innerHTML = '';
 
       const items = getVisibleItems().slice().sort(compareItems);
+      lastVisibleCount = items.length;
       const version = ++renderVersion;
       let index = 0;
       const batchSize = 150;
@@ -365,6 +381,17 @@ function buildCatalogHtml(): string {
       }
 
       requestAnimationFrame(renderChunk);
+    }
+
+    function scheduleRender() {
+      if (renderQueued) {
+        return;
+      }
+      renderQueued = true;
+      requestAnimationFrame(() => {
+        renderAllItems();
+        updateStats();
+      });
     }
 
     function getSection(dateStr) {
@@ -446,6 +473,8 @@ function buildCatalogHtml(): string {
       loaded = 0;
       allItems = [];
       prefetchingAll = false;
+      renderQueued = false;
+      lastVisibleCount = 0;
       sections.clear();
       content.innerHTML = '';
       updateStats();
@@ -458,12 +487,10 @@ function buildCatalogHtml(): string {
 
     reloadBtn.addEventListener('click', resetAndReload);
     mediaTypeSelect.addEventListener('change', () => {
-      renderAllItems();
-      updateStats();
+      scheduleRender();
     });
     sortOrderSelect.addEventListener('change', () => {
-      renderAllItems();
-      updateStats();
+      scheduleRender();
       if (isDateSortSelected() && hasMore) {
         prefetchAllForDateSort();
       }

@@ -59,6 +59,8 @@ npm run app:dev
 
 This starts backend and frontend together, so you can open `http://localhost:5173` right away.
 
+`app:dev` now includes a watchdog that checks backend/frontend health and automatically restarts stuck services (including after sleep/hibernation) when needed.
+
 ### Step 6: Transfer photos with the wizard (no terminal needed)
 
 The home page (`/`) is the **Photo Transfer** wizard. It walks you through 4 steps:

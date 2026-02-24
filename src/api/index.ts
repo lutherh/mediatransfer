@@ -282,6 +282,10 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 	await createTransferLog({
 		jobId: payload.transferJobId,
 		message: `Transfer worker started (${total} item${total === 1 ? '' : 's'})`,
+		meta: {
+			totalItems: total,
+			startIndex,
+		},
 	});
 
 	try {
@@ -313,7 +317,58 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 			}
 
 			const mediaItemId = payload.keys[index];
-			const result = await transferPickedMediaItemToScaleway(payload, mediaItemId);
+			let result: { destinationKey: string; filename?: string; skipped: boolean } | null = null;
+			let successfulAttempt = 0;
+
+			for (let attempt = 1; attempt <= ITEM_RETRY_MAX_ATTEMPTS; attempt += 1) {
+				try {
+					result = await transferPickedMediaItemToScaleway(payload, mediaItemId);
+					successfulAttempt = attempt;
+					break;
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					const canRetry =
+						attempt < ITEM_RETRY_MAX_ATTEMPTS &&
+						isRetryableTransferItemError(error);
+
+					if (!canRetry) {
+						await createTransferLog({
+							jobId: payload.transferJobId,
+							level: 'ERROR',
+							message: `Item failed ${mediaItemId}: ${message}`,
+							meta: {
+								mediaItemId,
+								attempt,
+								maxAttempts: ITEM_RETRY_MAX_ATTEMPTS,
+								status: 'FAILED',
+								error: message,
+							},
+						});
+						throw error;
+					}
+
+					const delayMs = computeItemRetryDelay(attempt);
+					await createTransferLog({
+						jobId: payload.transferJobId,
+						level: 'WARN',
+						message: `Retrying item ${mediaItemId} (attempt ${attempt + 1}/${ITEM_RETRY_MAX_ATTEMPTS})`,
+						meta: {
+							mediaItemId,
+							attempt,
+							maxAttempts: ITEM_RETRY_MAX_ATTEMPTS,
+							delayMs,
+							error: message,
+							status: 'RETRYING',
+						},
+					});
+
+					await delay(delayMs);
+				}
+			}
+
+			if (!result) {
+				throw new Error(`Transfer item ${mediaItemId} did not produce a result`);
+			}
 
 			if (await shouldStop()) {
 				await createTransferLog({
@@ -342,6 +397,11 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 					destinationKey: result.destinationKey,
 					skipped: result.skipped,
 					progress,
+					itemProgressPercent: 100,
+					completed: startIndex + index + 1,
+					total,
+					attempts: successfulAttempt,
+					status: result.skipped ? 'SKIPPED' : 'COMPLETED',
 				},
 			});
 		}
@@ -356,9 +416,41 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 			jobId: payload.transferJobId,
 			level: 'ERROR',
 			message: `Transfer failed: ${message}`,
+			meta: {
+				status: 'FAILED',
+				error: message,
+			},
 		});
 		throw error;
 	}
+}
+
+const ITEM_RETRY_MAX_ATTEMPTS = 3;
+
+function isRetryableTransferItemError(error: unknown): boolean {
+	const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+	return (
+		message.includes('timeout') ||
+		message.includes('network') ||
+		message.includes('econnreset') ||
+		message.includes('rate limit') ||
+		message.includes('temporar') ||
+		message.includes('throttle') ||
+		message.includes('fetch failed') ||
+		message.includes('503')
+	);
+}
+
+function computeItemRetryDelay(attempt: number): number {
+	const baseDelayMs = 500;
+	const maxDelayMs = 5000;
+	const exponential = Math.min(baseDelayMs * (2 ** (attempt - 1)), maxDelayMs);
+	const jitter = Math.floor(Math.random() * 120);
+	return Math.min(exponential + jitter, maxDelayMs);
+}
+
+async function delay(ms: number): Promise<void> {
+	await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function transferPickedMediaItemToScaleway(
