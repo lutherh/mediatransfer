@@ -178,6 +178,7 @@ describe('frontend pages', () => {
   it('shows navigation links', async () => {
     renderRoute('/');
     expect(await screen.findByRole('link', { name: 'Photo Transfer' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Upload' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Takeout' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Transfers' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Catalog' })).toBeInTheDocument();

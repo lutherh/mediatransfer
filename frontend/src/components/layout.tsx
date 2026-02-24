@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 
 const NAV_ITEMS = [
   { to: '/', label: 'Photo Transfer', end: true },
+  { to: '/upload', label: 'Upload' },
   { to: '/takeout', label: 'Takeout' },
   { to: '/transfers', label: 'Transfers' },
   { to: '/catalog', label: 'Catalog' },

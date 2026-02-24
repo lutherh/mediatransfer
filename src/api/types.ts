@@ -1,6 +1,8 @@
 import type { BulkTransferResult } from '../jobs/bulk-transfer.js';
-import type { TransferJob, TransferStatus, CloudCredential, TransferLog } from '../generated/prisma/client.js';
+import type { TransferJob, TransferStatus, CloudCredential, TransferLog, MediaItem } from '../generated/prisma/client.js';
 import type { CatalogItem, CatalogObject } from '../catalog/scaleway-catalog.js';
+import type { Readable } from 'node:stream';
+import type { CreateMediaItemInput, ListMediaItemsFilter } from '../db/media-items.js';
 
 export type CredentialSummary = {
   id: string;
@@ -75,6 +77,14 @@ export type CloudUsageService = {
   }>;
 };
 
+export type UploadService = {
+  findByHash(sha256: string): Promise<MediaItem | null>;
+  createMediaItem(input: CreateMediaItemInput): Promise<MediaItem>;
+  listMediaItems(filter?: ListMediaItemsFilter, limit?: number, offset?: number): Promise<MediaItem[]>;
+  countMediaItems(): Promise<number>;
+  uploadToStorage(key: string, stream: Readable, contentType?: string): Promise<void>;
+};
+
 export type ApiServices = {
   credentials: CredentialsService;
   jobs: JobsService;
@@ -82,4 +92,5 @@ export type ApiServices = {
   queue: QueueService;
   catalog?: CatalogService;
   cloudUsage?: CloudUsageService;
+  uploads?: UploadService;
 };
