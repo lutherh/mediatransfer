@@ -274,6 +274,90 @@ export async function registerTransferRoutes(
     };
   });
 
+  app.post('/transfers/:id/retry-all-items', async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const job = await jobs.get(id);
+    if (!job) {
+      return reply.code(404).send({ error: 'Transfer job not found' });
+    }
+
+    if (
+      job.status !== TransferStatus.CANCELLED &&
+      job.status !== TransferStatus.FAILED &&
+      job.status !== TransferStatus.IN_PROGRESS
+    ) {
+      return reply.code(409).send({
+        error: `Transfer items can only be queued when transfer is ${TransferStatus.CANCELLED}, ${TransferStatus.FAILED}, or ${TransferStatus.IN_PROGRESS}`,
+      });
+    }
+
+    const logs = await jobs.listLogs(id);
+    const completedKeys = getCompletedMediaItemIds(logs);
+    const latestStatusByItem = getLatestItemStatuses(logs);
+
+    const retryableKeys = job.keys.filter((key) => {
+      if (completedKeys.has(key)) {
+        return false;
+      }
+
+      const latestStatus = latestStatusByItem.get(key);
+      return latestStatus !== 'IN_PROGRESS' && latestStatus !== 'RETRYING';
+    });
+
+    if (retryableKeys.length === 0) {
+      return {
+        message: 'No incomplete items available to queue',
+        job,
+        enqueueResult: {
+          enqueuedCount: 0,
+          queueJobIds: [],
+        },
+      };
+    }
+
+    const total = job.keys.length;
+    const completedCount = Math.min(total, completedKeys.size);
+
+    if (job.status !== TransferStatus.IN_PROGRESS) {
+      await jobs.update(id, {
+        status: TransferStatus.PENDING,
+        errorMessage: null,
+      });
+    }
+
+    let enqueueResult;
+    try {
+      enqueueResult = await queue.enqueueBulk({
+        transferJobId: job.id,
+        sourceProvider: job.sourceProvider,
+        destProvider: job.destProvider,
+        keys: retryableKeys,
+        sourceConfig: (job.sourceConfig as Record<string, unknown> | null) ?? undefined,
+        destConfig: (job.destConfig as Record<string, unknown> | null) ?? undefined,
+        startIndex: completedCount,
+        totalKeys: total,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await jobs.update(job.id, {
+        status: TransferStatus.FAILED,
+        errorMessage: `Failed to queue incomplete items: ${message}`,
+      });
+
+      return reply.code(503).send({
+        error: 'Transfer queue is unavailable. Start services and try again.',
+        jobId: job.id,
+      });
+    }
+
+    const updated = await jobs.get(id);
+    return {
+      message: `Queued ${retryableKeys.length} incomplete item${retryableKeys.length === 1 ? '' : 's'}`,
+      job: updated,
+      enqueueResult,
+    };
+  });
+
   app.delete('/transfers/:id', async (req, reply) => {
     const id = (req.params as { id: string }).id;
     await jobs.update(id, { status: TransferStatus.CANCELLED, errorMessage: null });
@@ -328,7 +412,6 @@ function getLatestItemStatuses(logs: Array<{ meta?: unknown }>): Map<string, str
 
   return statuses;
 }
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
