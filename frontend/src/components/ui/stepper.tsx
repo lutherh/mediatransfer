@@ -14,7 +14,7 @@ type StepperProps = {
 
 export function Stepper({ steps, currentStep }: StepperProps) {
   return (
-    <nav aria-label="Transfer progress" className="mb-8">
+    <nav aria-label="Transfer progress" className="mb-4 sm:mb-8">
       <ol className="flex items-center">
         {steps.map((step, index) => {
           const status: StepStatus =
@@ -28,7 +28,7 @@ export function Stepper({ steps, currentStep }: StepperProps) {
               <div className="flex items-center gap-2">
                 <span
                   className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold',
+                    'flex h-7 w-7 sm:h-8 sm:w-8 items-center justify-center rounded-full text-xs sm:text-sm font-semibold',
                     status === 'completed' && 'bg-green-600 text-white',
                     status === 'current' && 'bg-slate-900 text-white',
                     status === 'upcoming' && 'bg-slate-200 text-slate-500',

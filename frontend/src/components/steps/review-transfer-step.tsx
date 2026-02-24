@@ -51,7 +51,7 @@ export function ReviewTransferStep({ items, sessionId, onTransferCreated, onBack
         {/* Summary */}
         <div className="rounded-lg border border-slate-200 p-4">
           <h3 className="mb-3 text-sm font-semibold text-slate-700 uppercase tracking-wide">Transfer Summary</h3>
-          <dl className="grid grid-cols-2 gap-3 text-sm">
+          <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
             <div>
               <dt className="text-slate-500">Source</dt>
               <dd className="font-medium">Google Photos</dd>
@@ -90,8 +90,8 @@ export function ReviewTransferStep({ items, sessionId, onTransferCreated, onBack
           <summary className="cursor-pointer text-sm font-medium text-slate-700 hover:text-slate-900">
             View selected items ({items.length})
           </summary>
-          <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-slate-100 bg-slate-50 p-2">
-            <table className="w-full text-xs">
+          <div className="mt-2 max-h-48 overflow-y-auto overflow-x-auto rounded-lg border border-slate-100 bg-slate-50 p-2">
+            <table className="w-full text-xs min-w-[400px]">
               <thead>
                 <tr className="text-left text-slate-500">
                   <th className="pb-1 pr-2">#</th>
@@ -125,7 +125,7 @@ export function ReviewTransferStep({ items, sessionId, onTransferCreated, onBack
         </Alert>
       )}
 
-      <div className="flex gap-3">
+      <div className="flex flex-wrap gap-2 sm:gap-3">
         <Button
           onClick={handleStartTransfer}
           disabled={transferMutation.isPending}

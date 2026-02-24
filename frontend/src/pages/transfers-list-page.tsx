@@ -67,7 +67,7 @@ export function TransfersListPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">Transfers</h1>
+      <h1 className="text-xl sm:text-2xl font-semibold">Transfers</h1>
 
       <Card>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -111,50 +111,78 @@ export function TransfersListPage() {
       </Card>
 
       {data?.length ? (
-        <Card className="p-0 overflow-hidden">
-          <div className="max-h-[70vh] overflow-auto">
-            <table className="w-full border-collapse text-sm">
-              <thead className="bg-slate-50 text-slate-600 sticky top-0">
-                <tr>
-                  <th className="px-3 py-2 text-left font-semibold border-b border-slate-200">ID</th>
-                  <th className="px-3 py-2 text-left font-semibold border-b border-slate-200">Source</th>
-                  <th className="px-3 py-2 text-left font-semibold border-b border-slate-200">Destination</th>
-                  <th className="px-3 py-2 text-left font-semibold border-b border-slate-200">Status</th>
-                  <th className="px-3 py-2 text-right font-semibold border-b border-slate-200">Progress</th>
-                  <th className="px-3 py-2 text-left font-semibold border-b border-slate-200">Created</th>
-                  <th className="px-3 py-2 text-left font-semibold border-b border-slate-200">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.map((job) => (
-                  <tr key={job.id} className="odd:bg-white even:bg-slate-50/40 hover:bg-blue-50/40">
-                    <td className="px-3 py-2 border-b border-slate-100 font-mono text-xs text-slate-700">
-                      {job.id.slice(0, 8)}
-                    </td>
-                    <td className="px-3 py-2 border-b border-slate-100 text-slate-800">{job.sourceProvider}</td>
-                    <td className="px-3 py-2 border-b border-slate-100 text-slate-800">{job.destProvider}</td>
-                    <td className="px-3 py-2 border-b border-slate-100">
-                      <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[job.status] ?? 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
-                        {job.status === 'CANCELLED' ? 'PAUSED' : job.status}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 border-b border-slate-100 text-right tabular-nums text-slate-700">
-                      {Math.round(job.progress * 100)}%
-                    </td>
-                    <td className="px-3 py-2 border-b border-slate-100 text-slate-600">
-                      {new Date(job.createdAt).toLocaleString()}
-                    </td>
-                    <td className="px-3 py-2 border-b border-slate-100">
-                      <Link className="text-xs font-medium text-blue-600 hover:underline" to={`/transfers/${job.id}`}>
-                        View details
-                      </Link>
-                    </td>
+        <>
+          {/* Desktop table */}
+          <Card className="hidden md:block p-0 overflow-hidden">
+            <div className="max-h-[70vh] overflow-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead className="bg-slate-50 text-slate-600 sticky top-0">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-semibold border-b border-slate-200">ID</th>
+                    <th className="px-3 py-2 text-left font-semibold border-b border-slate-200">Source</th>
+                    <th className="px-3 py-2 text-left font-semibold border-b border-slate-200">Destination</th>
+                    <th className="px-3 py-2 text-left font-semibold border-b border-slate-200">Status</th>
+                    <th className="px-3 py-2 text-right font-semibold border-b border-slate-200">Progress</th>
+                    <th className="px-3 py-2 text-left font-semibold border-b border-slate-200">Created</th>
+                    <th className="px-3 py-2 text-left font-semibold border-b border-slate-200">Action</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {data.map((job) => (
+                    <tr key={job.id} className="odd:bg-white even:bg-slate-50/40 hover:bg-blue-50/40">
+                      <td className="px-3 py-2 border-b border-slate-100 font-mono text-xs text-slate-700">
+                        {job.id.slice(0, 8)}
+                      </td>
+                      <td className="px-3 py-2 border-b border-slate-100 text-slate-800">{job.sourceProvider}</td>
+                      <td className="px-3 py-2 border-b border-slate-100 text-slate-800">{job.destProvider}</td>
+                      <td className="px-3 py-2 border-b border-slate-100">
+                        <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[job.status] ?? 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
+                          {job.status === 'CANCELLED' ? 'PAUSED' : job.status}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 border-b border-slate-100 text-right tabular-nums text-slate-700">
+                        {Math.round(job.progress * 100)}%
+                      </td>
+                      <td className="px-3 py-2 border-b border-slate-100 text-slate-600">
+                        {new Date(job.createdAt).toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2 border-b border-slate-100">
+                        <Link className="text-xs font-medium text-blue-600 hover:underline" to={`/transfers/${job.id}`}>
+                          View details
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
+          {/* Mobile card list */}
+          <div className="md:hidden space-y-3">
+            {data.map((job) => (
+              <Link key={job.id} to={`/transfers/${job.id}`} className="block">
+                <Card className="space-y-2 active:bg-slate-50 transition-colors">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[job.status] ?? 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
+                      {job.status === 'CANCELLED' ? 'PAUSED' : job.status}
+                    </span>
+                    <span className="text-sm font-semibold tabular-nums text-slate-700">
+                      {Math.round(job.progress * 100)}%
+                    </span>
+                  </div>
+                  <p className="text-sm text-slate-800">
+                    {job.sourceProvider} → {job.destProvider}
+                  </p>
+                  <div className="flex items-center justify-between text-xs text-slate-500">
+                    <span className="font-mono">{job.id.slice(0, 8)}</span>
+                    <span>{new Date(job.createdAt).toLocaleDateString()}</span>
+                  </div>
+                </Card>
+              </Link>
+            ))}
           </div>
-        </Card>
+        </>
       ) : (
         <Card>
           <p className="text-slate-600">No transfer jobs yet.</p>

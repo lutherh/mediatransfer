@@ -11,10 +11,40 @@ body {
   font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
   background: #020617;
   color: #f8fafc;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
 }
 
 #root {
   min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Ensure safe area insets for notched devices (iPhone etc.) */
+@supports (padding: env(safe-area-inset-bottom)) {
+  #root {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* Minimum touch target size for interactive elements on mobile */
+@media (pointer: coarse) {
+  button,
+  a,
+  select,
+  [role="button"] {
+    min-height: 44px;
+  }
+
+  input,
+  textarea {
+    font-size: 16px; /* prevents iOS zoom on focus */
+  }
+}
+
+/* Smooth scrolling for all scroll containers */
+* {
+  -webkit-overflow-scrolling: touch;
 }
 
 @layer utilities {

@@ -109,17 +109,17 @@ export function TransferProgressStep({ jobId, totalItems, onStartNew }: Transfer
 
         <ProgressBar value={job.progress} label="Transfer progress" />
 
-        <div className="grid grid-cols-3 gap-4 text-center">
-          <div className="rounded-lg bg-slate-50 p-3">
-            <p className="text-2xl font-bold text-slate-900">{totalItems}</p>
+        <div className="grid grid-cols-3 gap-2 sm:gap-4 text-center">
+          <div className="rounded-lg bg-slate-50 p-2 sm:p-3">
+            <p className="text-lg sm:text-2xl font-bold text-slate-900">{totalItems}</p>
             <p className="text-xs text-slate-500">Total Items</p>
           </div>
-          <div className="rounded-lg bg-slate-50 p-3">
-            <p className="text-2xl font-bold text-slate-900">{Math.round(job.progress * 100)}%</p>
+          <div className="rounded-lg bg-slate-50 p-2 sm:p-3">
+            <p className="text-lg sm:text-2xl font-bold text-slate-900">{Math.round(job.progress * 100)}%</p>
             <p className="text-xs text-slate-500">Progress</p>
           </div>
-          <div className="rounded-lg bg-slate-50 p-3">
-            <p className={`text-2xl font-bold ${statusInfo.color}`}>{statusInfo.label}</p>
+          <div className="rounded-lg bg-slate-50 p-2 sm:p-3">
+            <p className={`text-lg sm:text-2xl font-bold ${statusInfo.color}`}>{statusInfo.label}</p>
             <p className="text-xs text-slate-500">Status</p>
           </div>
         </div>
@@ -166,7 +166,7 @@ export function TransferProgressStep({ jobId, totalItems, onStartNew }: Transfer
       </Card>
 
       {/* Actions */}
-      <div className="flex gap-3">
+      <div className="flex flex-wrap gap-2 sm:gap-3">
         {canPause && (
           <Button
             className="bg-amber-600 text-white hover:bg-amber-700"
@@ -193,10 +193,10 @@ export function TransferProgressStep({ jobId, totalItems, onStartNew }: Transfer
           className="bg-white text-slate-700 border border-slate-300 hover:bg-slate-50"
           onClick={() => navigate(`/transfers/${jobId}`)}
         >
-          View Full Details
+          Full Details
         </Button>
         <Button
-          className="bg-white text-slate-700 border border-slate-300 hover:bg-slate-50"
+          className="bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 hidden sm:inline-flex"
           onClick={() => navigate('/')}
         >
           All Transfers

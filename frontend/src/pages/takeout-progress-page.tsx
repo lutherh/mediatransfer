@@ -55,7 +55,7 @@ export function TakeoutProgressPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">Takeout Transfer Progress</h1>
+      <h1 className="text-xl sm:text-2xl font-semibold">Takeout Transfer Progress</h1>
 
       <Card className="space-y-3">
         <p className="text-sm font-medium text-slate-900">Run transfer actions (no terminal)</p>

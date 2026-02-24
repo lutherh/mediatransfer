@@ -85,8 +85,8 @@ export function TransferDetailPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">Transfer Detail</h1>
-      <div className="flex gap-3">
+      <h1 className="text-xl sm:text-2xl font-semibold">Transfer Detail</h1>
+      <div className="flex flex-wrap gap-2 sm:gap-3">
         {canPause && (
           <Button
             className="bg-amber-600 text-white hover:bg-amber-700"
@@ -111,7 +111,7 @@ export function TransferDetailPage() {
           Back
         </Button>
         <Button
-          className="bg-white text-slate-700 border border-slate-300 hover:bg-slate-50"
+          className="bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 hidden sm:inline-flex"
           onClick={() => navigate('/')}
         >
           Photo Transfer
@@ -170,7 +170,7 @@ export function TransferDetailPage() {
 
       <Card>
         <div className="space-y-3">
-          <p className="font-medium">{data.job.sourceProvider} → {data.job.destProvider}</p>
+          <p className="font-medium text-sm sm:text-base break-all">{data.job.sourceProvider} → {data.job.destProvider}</p>
           <p>
             <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[data.job.status] ?? 'bg-slate-100 text-slate-700 border border-slate-200'}`}>
               {statusLabel}
@@ -198,7 +198,7 @@ export function TransferDetailPage() {
         {itemProgress.items.length ? (
           itemProgress.items.map((item) => (
             <Card key={item.key} className="py-3">
-              <div className="flex items-center justify-between gap-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                 <div className="min-w-0 space-y-1">
                   <p className="truncate text-sm font-medium text-slate-900">{item.key}</p>
                   <p className="text-xs text-slate-600">
@@ -211,11 +211,12 @@ export function TransferDetailPage() {
                     </div>
                   ) : null}
                   {item.lastError ? (
-                    <p className="text-xs text-red-600">{item.lastError}</p>
+                    <p className="text-xs text-red-600 break-all">{item.lastError}</p>
                   ) : null}
                 </div>
                 {canRetryItems && (item.status === 'FAILED' || item.status === 'PENDING') ? (
                   <Button
+                    className="self-start sm:self-auto shrink-0"
                     onClick={() => retryItemMutation.mutate({ transferId: id, mediaItemId: item.key })}
                     disabled={isActionPending}
                   >

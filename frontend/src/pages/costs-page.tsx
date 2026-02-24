@@ -71,7 +71,7 @@ export function CostsPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">Costs</h1>
+      <h1 className="text-xl sm:text-2xl font-semibold">Costs</h1>
 
       <Card>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">

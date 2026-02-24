@@ -140,7 +140,8 @@ describe('frontend pages', () => {
   it('renders transfers list page', async () => {
     renderRoute('/transfers');
     expect(await screen.findByText('Transfers')).toBeInTheDocument();
-    expect(await screen.findByText(/google-photos/i)).toBeInTheDocument();
+    const googlePhotosElements = await screen.findAllByText(/google-photos/i);
+    expect(googlePhotosElements.length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders new transfer page', async () => {
@@ -177,7 +178,7 @@ describe('frontend pages', () => {
   it('shows navigation links', async () => {
     renderRoute('/');
     expect(await screen.findByRole('link', { name: 'Photo Transfer' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Takeout Progress' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Takeout' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Transfers' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Catalog' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Costs' })).toBeInTheDocument();
