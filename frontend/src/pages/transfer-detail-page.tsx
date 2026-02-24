@@ -17,6 +17,12 @@ export function TransferDetailPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const refreshTransferQueries = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['transfer', id] }),
+      queryClient.invalidateQueries({ queryKey: ['transfers'] }),
+    ]);
+  };
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['transfer', id],
@@ -31,43 +37,23 @@ export function TransferDetailPage() {
 
   const pauseMutation = useMutation({
     mutationFn: pauseTransfer,
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['transfer', id] }),
-        queryClient.invalidateQueries({ queryKey: ['transfers'] }),
-      ]);
-    },
+    onSuccess: refreshTransferQueries,
   });
 
   const resumeMutation = useMutation({
     mutationFn: resumeTransfer,
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['transfer', id] }),
-        queryClient.invalidateQueries({ queryKey: ['transfers'] }),
-      ]);
-    },
+    onSuccess: refreshTransferQueries,
   });
 
   const retryItemMutation = useMutation({
     mutationFn: ({ transferId, mediaItemId }: { transferId: string; mediaItemId: string }) =>
       retryTransferItem(transferId, mediaItemId),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['transfer', id] }),
-        queryClient.invalidateQueries({ queryKey: ['transfers'] }),
-      ]);
-    },
+    onSuccess: refreshTransferQueries,
   });
 
   const retryAllItemsMutation = useMutation({
     mutationFn: queueAllTransferItems,
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['transfer', id] }),
-        queryClient.invalidateQueries({ queryKey: ['transfers'] }),
-      ]);
-    },
+    onSuccess: refreshTransferQueries,
   });
 
   if (isLoading) {
@@ -231,7 +217,7 @@ export function TransferDetailPage() {
                 {canRetryItems && (item.status === 'FAILED' || item.status === 'PENDING') ? (
                   <Button
                     onClick={() => retryItemMutation.mutate({ transferId: id, mediaItemId: item.key })}
-                    disabled={isActionPending || item.status === 'IN_PROGRESS' || item.status === 'RETRYING'}
+                    disabled={isActionPending}
                   >
                     Retry item
                   </Button>
@@ -391,10 +377,6 @@ function deriveItemProgress(keys: string[], logs: TransferLog[], fallbackProgres
     completedItems,
     overallProgress,
   };
-}
-
-function isTerminalItemStatus(status: ItemStatus): boolean {
-  return status === 'COMPLETED' || status === 'SKIPPED';
 }
 
 function getItemSortRank(status: ItemStatus): number {
