@@ -103,7 +103,7 @@ export function PickPhotosStep({ onPhotosSelected, onBack }: PickPhotosStepProps
             Failed to create picker session. {createSessionMutation.error?.message}
           </Alert>
         )}
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-2 sm:gap-3">
           <Button onClick={() => createSessionMutation.mutate()}>
             Open Photo Picker
           </Button>
@@ -180,7 +180,7 @@ export function PickPhotosStep({ onPhotosSelected, onBack }: PickPhotosStepProps
           </div>
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-2 sm:gap-3">
           <Button onClick={() => onPhotosSelected(items, sessionId!)}>
             Continue with {items.length} Items
           </Button>
@@ -203,7 +203,7 @@ export function PickPhotosStep({ onPhotosSelected, onBack }: PickPhotosStepProps
         <p className="text-sm text-slate-600">
           It looks like no photos were selected. Try again.
         </p>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-2 sm:gap-3">
           <Button onClick={handleStartNewSession}>Try Again</Button>
           <Button
             className="bg-white text-slate-700 border border-slate-300 hover:bg-slate-50"
@@ -249,7 +249,7 @@ export function PickPhotosStep({ onPhotosSelected, onBack }: PickPhotosStepProps
             </div>
           )}
 
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-2 sm:gap-3">
             <Button onClick={handleOpenPicker}>
               {pickerWindow ? 'Reopen Picker' : 'Open Photo Picker'}
             </Button>

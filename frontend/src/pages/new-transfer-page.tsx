@@ -34,7 +34,7 @@ export function NewTransferPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">New Transfer</h1>
+      <h1 className="text-xl sm:text-2xl font-semibold">New Transfer</h1>
       <Card>
         <form className="space-y-4" onSubmit={onSubmit}>
           <div>
