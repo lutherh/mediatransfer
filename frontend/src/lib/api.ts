@@ -372,3 +372,112 @@ export async function deletePickerSession(sessionId: string): Promise<void> {
   await fetch(`${API_BASE_URL}/picker/session/${sessionId}`, { method: 'DELETE' });
 }
 
+// ── Uploads ────────────────────────────────────────────────────
+
+export type UploadResult = {
+  filename: string;
+  status: 'uploaded' | 'duplicate' | 'error';
+  mediaItemId?: string;
+  s3Key?: string;
+  size?: number;
+  capturedAt?: string;
+  message?: string;
+};
+
+export type UploadResponse = {
+  summary: {
+    total: number;
+    uploaded: number;
+    duplicates: number;
+    errors: number;
+  };
+  results: UploadResult[];
+};
+
+export type MediaItem = {
+  id: string;
+  filename: string;
+  s3Key: string;
+  sha256: string;
+  size: number;
+  contentType: string;
+  width?: number;
+  height?: number;
+  capturedAt?: string;
+  source: string;
+  uploadedAt: string;
+};
+
+export type UploadListResponse = {
+  items: MediaItem[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type UploadStats = {
+  totalItems: number;
+};
+
+/**
+ * Upload one or more files to the library.
+ * Uses XMLHttpRequest for progress tracking.
+ */
+export function uploadFiles(
+  files: File[],
+  onProgress?: (loaded: number, total: number) => void,
+): { promise: Promise<UploadResponse>; abort: () => void } {
+  const formData = new FormData();
+  for (const file of files) {
+    formData.append('files', file);
+  }
+
+  const xhr = new XMLHttpRequest();
+  const promise = new Promise<UploadResponse>((resolve, reject) => {
+    xhr.open('POST', `${API_BASE_URL}/uploads`);
+
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(e.loaded, e.total);
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      try {
+        const data = JSON.parse(xhr.responseText) as UploadResponse;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(data);
+        } else {
+          reject(new Error((data as unknown as { error?: string })?.error ?? `Upload failed (${xhr.status})`));
+        }
+      } catch {
+        reject(new Error(`Upload failed (${xhr.status})`));
+      }
+    });
+
+    xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
+    xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
+
+    xhr.send(formData);
+  });
+
+  return { promise, abort: () => xhr.abort() };
+}
+
+export async function fetchUploadList(limit = 50, offset = 0): Promise<UploadListResponse> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const response = await fetch(`${API_BASE_URL}/uploads?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch uploads');
+  }
+  return response.json();
+}
+
+export async function fetchUploadStats(): Promise<UploadStats> {
+  const response = await fetch(`${API_BASE_URL}/uploads/stats`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch upload stats');
+  }
+  return response.json();
+}
+

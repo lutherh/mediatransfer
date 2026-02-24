@@ -15,6 +15,10 @@ import {
 	listJobs,
 	listTransferLogs,
 	updateJob,
+	createMediaItem,
+	findMediaItemByHash,
+	listMediaItems,
+	countMediaItems,
 } from '../db/index.js';
 import { createRedisConnection } from '../jobs/connection.js';
 import { enqueueBulkTransfer } from '../jobs/bulk-transfer.js';
@@ -44,6 +48,7 @@ import { registerCatalogRoutes } from './routes/catalog.js';
 import { registerTakeoutRoutes } from './routes/takeout.js';
 import { registerGoogleAuthRoutes } from './routes/google-auth.js';
 import { registerCloudUsageRoutes } from './routes/cloud-usage.js';
+import { registerUploadRoutes } from './routes/uploads.js';
 import { getStoredTokens, setStoredTokens } from './routes/google-token-store.js';
 import type { ApiServices } from './types.js';
 
@@ -168,6 +173,7 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	await registerProviderRoutes(app, runtime.services.providers);
 	await registerCatalogRoutes(app, runtime.services.catalog);
 	await registerCloudUsageRoutes(app, runtime.services.cloudUsage);
+	await registerUploadRoutes(app, runtime.services.uploads);
 	await registerTakeoutRoutes(app);
 	await registerGoogleAuthRoutes(app);
 
@@ -248,6 +254,7 @@ function createDefaultServices(): { services: ApiServices; dispose: () => Promis
 		},
 		catalog: createCatalogServiceFromEnv(),
 		cloudUsage: createCloudUsageServiceFromEnv(),
+		uploads: createUploadServiceFromEnv(),
 	};
 
 	return {
@@ -777,6 +784,39 @@ function createCloudUsageServiceFromEnv() {
 				measuredAt: new Date(measuredAtMs).toISOString(),
 			};
 		},
+	};
+}
+
+function createUploadServiceFromEnv() {
+	const region = process.env.SCW_REGION;
+	const bucket = process.env.SCW_BUCKET;
+	const accessKey = process.env.SCW_ACCESS_KEY;
+	const secretKey = process.env.SCW_SECRET_KEY;
+	const prefix = process.env.SCW_PREFIX;
+
+	if (!region || !bucket || !accessKey || !secretKey) {
+		return undefined;
+	}
+
+	const provider = createScalewayProvider(
+		validateScalewayConfig({
+			provider: 'scaleway',
+			region,
+			bucket,
+			accessKey,
+			secretKey,
+			prefix,
+		}),
+	);
+
+	return {
+		findByHash: (sha256: string) => findMediaItemByHash(sha256),
+		createMediaItem: (input: Parameters<typeof createMediaItem>[0]) => createMediaItem(input),
+		listMediaItems: (filter?: Parameters<typeof listMediaItems>[0], limit?: number, offset?: number) =>
+			listMediaItems(filter, limit, offset),
+		countMediaItems: () => countMediaItems(),
+		uploadToStorage: (key: string, stream: Readable, contentType?: string) =>
+			provider.upload(key, stream, contentType),
 	};
 }
 

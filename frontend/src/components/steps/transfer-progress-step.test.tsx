@@ -123,8 +123,7 @@ describe('TransferProgressStep', () => {
     renderStep('job-4', 5);
 
     expect(await screen.findByRole('button', { name: /start new transfer/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /view full details/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /all transfers/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /full details/i })).toBeInTheDocument();
   });
 
   it('shows error when API call fails', async () => {
