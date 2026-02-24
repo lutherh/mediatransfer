@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { fetchTransferDetail, pauseTransfer, resumeTransfer } from '@/lib/api';
+import { fetchTransferDetail, pauseTransfer, resumeTransfer, retryTransferItem, type TransferLog } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { ProgressBar } from '@/components/ui/progress-bar';
@@ -49,6 +49,17 @@ export function TransferDetailPage() {
     },
   });
 
+  const retryItemMutation = useMutation({
+    mutationFn: ({ transferId, mediaItemId }: { transferId: string; mediaItemId: string }) =>
+      retryTransferItem(transferId, mediaItemId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['transfer', id] }),
+        queryClient.invalidateQueries({ queryKey: ['transfers'] }),
+      ]);
+    },
+  });
+
   if (isLoading) {
     return <p>Loading transfer detail...</p>;
   }
@@ -61,8 +72,10 @@ export function TransferDetailPage() {
   const canResume = data.job.status === 'CANCELLED' || data.job.status === 'FAILED';
   const isFailed = data.job.status === 'FAILED';
   const isTransferActive = data.job.status === 'PENDING' || data.job.status === 'IN_PROGRESS';
-  const isActionPending = pauseMutation.isPending || resumeMutation.isPending;
+  const isActionPending = pauseMutation.isPending || resumeMutation.isPending || retryItemMutation.isPending;
   const statusLabel = data.job.status === 'CANCELLED' ? 'PAUSED' : data.job.status;
+  const itemProgress = deriveItemProgress(data.job.keys ?? [], data.logs, data.job.progress);
+  const canRetryItems = data.job.status === 'CANCELLED' || data.job.status === 'FAILED';
 
   return (
     <div className="space-y-4">
@@ -113,6 +126,13 @@ export function TransferDetailPage() {
               : 'Failed to update transfer state.'}
         </p>
       ) : null}
+      {retryItemMutation.isError ? (
+        <p className="text-sm text-red-600">
+          {retryItemMutation.error instanceof Error
+            ? retryItemMutation.error.message
+            : 'Failed to retry transfer item.'}
+        </p>
+      ) : null}
 
       {isTransferActive ? (
         <Card className="flex items-start gap-3 border-blue-200 bg-blue-50">
@@ -143,9 +163,45 @@ export function TransferDetailPage() {
               {statusLabel}
             </span>
           </p>
-          <ProgressBar value={data.job.progress} label="Progress" />
+          <ProgressBar value={itemProgress.overallProgress} label="Progress" />
+          <p className="text-sm text-slate-600">
+            {itemProgress.completedItems} / {itemProgress.totalItems} items completed ({Math.round(itemProgress.overallProgress * 100)}%)
+          </p>
         </div>
       </Card>
+
+      <div className="space-y-2">
+        <h2 className="text-lg font-semibold">Items</h2>
+        {itemProgress.items.length ? (
+          itemProgress.items.map((item) => (
+            <Card key={item.key} className="py-3">
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0 space-y-1">
+                  <p className="truncate text-sm font-medium text-slate-900">{item.key}</p>
+                  <p className="text-xs text-slate-600">
+                    {item.status} · {Math.round(item.progress * 100)}% · attempts: {item.attempts}
+                  </p>
+                  {item.lastError ? (
+                    <p className="text-xs text-red-600">{item.lastError}</p>
+                  ) : null}
+                </div>
+                {canRetryItems && item.status === 'FAILED' ? (
+                  <Button
+                    onClick={() => retryItemMutation.mutate({ transferId: id, mediaItemId: item.key })}
+                    disabled={isActionPending}
+                  >
+                    Retry item
+                  </Button>
+                ) : null}
+              </div>
+            </Card>
+          ))
+        ) : (
+          <Card>
+            <p className="text-sm text-slate-600">No item-level details available yet.</p>
+          </Card>
+        )}
+      </div>
 
       <div className="space-y-2">
         <h2 className="text-lg font-semibold">Logs</h2>
@@ -163,4 +219,136 @@ export function TransferDetailPage() {
       </div>
     </div>
   );
+}
+
+type ItemStatus = 'PENDING' | 'RETRYING' | 'FAILED' | 'COMPLETED' | 'SKIPPED';
+
+type ItemProgress = {
+  key: string;
+  status: ItemStatus;
+  progress: number;
+  attempts: number;
+  lastError?: string;
+};
+
+function deriveItemProgress(keys: string[], logs: TransferLog[], fallbackProgress: number): {
+  items: ItemProgress[];
+  totalItems: number;
+  completedItems: number;
+  overallProgress: number;
+} {
+  const orderedKeys: string[] = [];
+  const keySet = new Set<string>();
+  const addKey = (key: string) => {
+    if (!keySet.has(key)) {
+      keySet.add(key);
+      orderedKeys.push(key);
+    }
+  };
+
+  for (const key of keys) {
+    addKey(key);
+  }
+
+  for (const log of logs) {
+    const meta = asRecord(log.meta);
+    const mediaItemId = typeof meta?.mediaItemId === 'string' ? meta.mediaItemId : undefined;
+    if (mediaItemId) {
+      addKey(mediaItemId);
+    }
+  }
+
+  const itemMap = new Map<string, ItemProgress>(
+    orderedKeys.map((key) => [
+      key,
+      {
+        key,
+        status: 'PENDING' as const,
+        progress: 0,
+        attempts: 0,
+      },
+    ]),
+  );
+
+  for (const log of logs) {
+    const meta = asRecord(log.meta);
+    const mediaItemId = typeof meta?.mediaItemId === 'string' ? meta.mediaItemId : undefined;
+    if (!mediaItemId) {
+      continue;
+    }
+
+    const item = itemMap.get(mediaItemId);
+    if (!item) {
+      continue;
+    }
+
+    const attempt = readNumber(meta, 'attempt') ?? readNumber(meta, 'attempts');
+    if (attempt !== undefined) {
+      item.attempts = Math.max(item.attempts, attempt);
+    } else if (item.attempts === 0) {
+      item.attempts = 1;
+    }
+
+    const status = readString(meta, 'status');
+    const maxAttempts = readNumber(meta, 'maxAttempts') ?? 3;
+
+    if (status === 'RETRYING') {
+      item.status = 'RETRYING';
+      const currentAttempt = readNumber(meta, 'attempt') ?? item.attempts;
+      item.progress = Math.max(item.progress, Math.min(0.95, currentAttempt / maxAttempts));
+      continue;
+    }
+
+    if (status === 'FAILED' || log.message.startsWith('Item failed ')) {
+      item.status = 'FAILED';
+      item.progress = 0;
+      const error = readString(meta, 'error');
+      if (error) {
+        item.lastError = error;
+      }
+      continue;
+    }
+
+    if (
+      status === 'COMPLETED' ||
+      status === 'SKIPPED' ||
+      log.message.startsWith('Uploaded ') ||
+      log.message.startsWith('Skipped existing ')
+    ) {
+      item.status = status === 'SKIPPED' || log.message.startsWith('Skipped existing ') ? 'SKIPPED' : 'COMPLETED';
+      item.progress = 1;
+      item.lastError = undefined;
+    }
+  }
+
+  const items = orderedKeys.map((key) => itemMap.get(key)).filter((item): item is ItemProgress => Boolean(item));
+  const completedItems = items.filter((item) => item.status === 'COMPLETED' || item.status === 'SKIPPED').length;
+  const totalItems = items.length;
+  const overallProgress = totalItems > 0 ? completedItems / totalItems : fallbackProgress;
+
+  return {
+    items,
+    totalItems,
+    completedItems,
+    overallProgress,
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value === 'object' && value !== null) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  if (!record) return undefined;
+  const value = record[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function readNumber(record: Record<string, unknown> | undefined, key: string): number | undefined {
+  if (!record) return undefined;
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

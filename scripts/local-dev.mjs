@@ -12,12 +12,21 @@ const frontendDir = path.join(rootDir, 'frontend');
 
 const setupOnly = process.argv.includes('--setup-only');
 
+const BACKEND_HEALTH_URL = 'http://localhost:3000/health';
+const FRONTEND_HEALTH_URL = 'http://localhost:5173/';
+const HEALTH_CHECK_INTERVAL_MS = 15_000;
+const HEALTH_REQUEST_TIMEOUT_MS = 4_000;
+const STARTUP_GRACE_MS = 60_000;
+const CONSECUTIVE_FAILURE_THRESHOLD = 3;
+const RESTART_WINDOW_MS = 10 * 60_000;
+const MAX_RESTARTS_PER_WINDOW = 8;
+
 function runCommand(command, args, cwd) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
       stdio: 'inherit',
-      shell: false,
+      shell: isWindows,
     });
 
     child.on('error', (error) => reject(error));
@@ -35,8 +44,52 @@ function startLongRunning(command, args, cwd) {
   return spawn(command, args, {
     cwd,
     stdio: 'inherit',
-    shell: false,
+    shell: isWindows,
   });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+    }),
+  ]);
+}
+
+async function checkUrlHealthy(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), HEALTH_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function pruneRestartHistory(history) {
+  const cutoff = Date.now() - RESTART_WINDOW_MS;
+  while (history.length > 0 && history[0] < cutoff) {
+    history.shift();
+  }
+}
+
+function recordRestart(state) {
+  state.restartHistory.push(Date.now());
+  pruneRestartHistory(state.restartHistory);
+}
+
+function canRestart(state) {
+  pruneRestartHistory(state.restartHistory);
+  return state.restartHistory.length < MAX_RESTARTS_PER_WINDOW;
 }
 
 async function ensureDependencies() {
@@ -67,6 +120,156 @@ async function runSetup() {
   await runCommand(npmCmd, ['run', 'prisma:generate'], rootDir);
 }
 
+async function ensureLocalServicesRunning() {
+  console.log('Ensuring Postgres/Redis are running...');
+  await runCommand('docker', ['compose', 'up', '-d', 'postgres', 'redis'], rootDir);
+}
+
+async function stopChildProcess(state, force = false) {
+  const child = state.child;
+  if (!child) return;
+
+  state.child = undefined;
+
+  if (child.exitCode !== null) {
+    return;
+  }
+
+  const signal = force ? 'SIGKILL' : 'SIGINT';
+  child.kill(signal);
+
+  try {
+    await withTimeout(
+      new Promise((resolve) => {
+        child.once('exit', () => resolve());
+      }),
+      10_000,
+      `${state.name} shutdown`,
+    );
+  } catch {
+    if (!force && child.exitCode === null) {
+      child.kill('SIGKILL');
+    }
+  }
+}
+
+function startService(state) {
+  if (state.child && state.child.exitCode === null) {
+    return;
+  }
+
+  console.log(`Starting ${state.name}...`);
+  state.startedAt = Date.now();
+  state.consecutiveFailures = 0;
+  state.ready = false;
+
+  const child = startLongRunning(npmCmd, ['run', 'dev'], state.cwd);
+  state.child = child;
+
+  child.on('exit', () => {
+    if (state.shuttingDown) {
+      return;
+    }
+    void recoverService(state, `${state.name} exited unexpectedly`);
+  });
+
+  child.on('error', () => {
+    if (state.shuttingDown) {
+      return;
+    }
+    void recoverService(state, `${state.name} encountered process error`);
+  });
+}
+
+async function recoverService(state, reason) {
+  if (state.shuttingDown || state.recovering) {
+    return;
+  }
+
+  if (!canRestart(state)) {
+    console.error(
+      `${state.name} exceeded restart budget (${MAX_RESTARTS_PER_WINDOW} in ${Math.round(RESTART_WINDOW_MS / 60000)}m). Stopping runner.`,
+    );
+    await shutdownAll(state.manager, 'restart-budget-exceeded');
+    return;
+  }
+
+  state.recovering = true;
+  recordRestart(state);
+
+  try {
+    console.warn(`${state.name} recovery triggered: ${reason}`);
+    await ensureLocalServicesRunning();
+    await stopChildProcess(state);
+    await sleep(800);
+    startService(state);
+  } catch (error) {
+    console.error(`Failed recovering ${state.name}:`, error instanceof Error ? error.message : String(error));
+  } finally {
+    state.recovering = false;
+  }
+}
+
+async function shutdownAll(manager, signal) {
+  if (manager.shuttingDown) return;
+  manager.shuttingDown = true;
+  manager.backend.shuttingDown = true;
+  manager.frontend.shuttingDown = true;
+
+  if (manager.monitorTimer) {
+    clearInterval(manager.monitorTimer);
+    manager.monitorTimer = undefined;
+  }
+
+  console.log(`\nReceived ${signal}. Stopping backend and frontend...`);
+  await Promise.all([
+    stopChildProcess(manager.backend),
+    stopChildProcess(manager.frontend),
+  ]);
+
+  process.exit(0);
+}
+
+async function monitorHealth(manager) {
+  if (manager.shuttingDown || manager.monitorInFlight) {
+    return;
+  }
+
+  manager.monitorInFlight = true;
+
+  try {
+    const backendHealthy = await checkUrlHealthy(BACKEND_HEALTH_URL);
+    await processServiceHealth(manager.backend, backendHealthy);
+
+    const frontendHealthy = await checkUrlHealthy(FRONTEND_HEALTH_URL);
+    await processServiceHealth(manager.frontend, frontendHealthy);
+  } finally {
+    manager.monitorInFlight = false;
+  }
+}
+
+async function processServiceHealth(state, healthy) {
+  if (state.shuttingDown) {
+    return;
+  }
+
+  if (healthy) {
+    state.ready = true;
+    state.consecutiveFailures = 0;
+    return;
+  }
+
+  state.consecutiveFailures += 1;
+  const elapsed = Date.now() - state.startedAt;
+  const shouldRecover =
+    state.consecutiveFailures >= CONSECUTIVE_FAILURE_THRESHOLD &&
+    (state.ready || elapsed > STARTUP_GRACE_MS);
+
+  if (shouldRecover) {
+    await recoverService(state, `${state.consecutiveFailures} consecutive failed health checks`);
+  }
+}
+
 async function main() {
   try {
     await runSetup();
@@ -76,37 +279,57 @@ async function main() {
       return;
     }
 
-    console.log('Starting backend and frontend...');
-    const backend = startLongRunning(npmCmd, ['run', 'dev'], rootDir);
-    const frontend = startLongRunning(npmCmd, ['run', 'dev'], frontendDir);
+    console.log('Starting backend and frontend with watchdog...');
 
-    let shuttingDown = false;
-    const shutdown = (signal) => {
-      if (shuttingDown) return;
-      shuttingDown = true;
-
-      console.log(`\nReceived ${signal}. Stopping backend and frontend...`);
-      backend.kill('SIGINT');
-      frontend.kill('SIGINT');
-
-      setTimeout(() => process.exit(0), 200);
+    const manager = {
+      shuttingDown: false,
+      monitorInFlight: false,
+      monitorTimer: undefined,
+      backend: {
+        name: 'Backend',
+        cwd: rootDir,
+        child: undefined,
+        ready: false,
+        startedAt: 0,
+        consecutiveFailures: 0,
+        restartHistory: [],
+        recovering: false,
+        shuttingDown: false,
+        manager: undefined,
+      },
+      frontend: {
+        name: 'Frontend',
+        cwd: frontendDir,
+        child: undefined,
+        ready: false,
+        startedAt: 0,
+        consecutiveFailures: 0,
+        restartHistory: [],
+        recovering: false,
+        shuttingDown: false,
+        manager: undefined,
+      },
     };
 
-    process.on('SIGINT', () => shutdown('SIGINT'));
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    manager.backend.manager = manager;
+    manager.frontend.manager = manager;
 
-    backend.on('exit', (code) => {
-      if (!shuttingDown) {
-        console.error(`Backend exited with code ${code ?? 'unknown'}.`);
-        shutdown('backend-exit');
-      }
+    startService(manager.backend);
+    startService(manager.frontend);
+
+    manager.monitorTimer = setInterval(() => {
+      void monitorHealth(manager);
+    }, HEALTH_CHECK_INTERVAL_MS);
+
+    setTimeout(() => {
+      void monitorHealth(manager);
+    }, 4000);
+
+    process.on('SIGINT', () => {
+      void shutdownAll(manager, 'SIGINT');
     });
-
-    frontend.on('exit', (code) => {
-      if (!shuttingDown) {
-        console.error(`Frontend exited with code ${code ?? 'unknown'}.`);
-        shutdown('frontend-exit');
-      }
+    process.on('SIGTERM', () => {
+      void shutdownAll(manager, 'SIGTERM');
     });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

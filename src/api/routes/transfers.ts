@@ -12,6 +12,10 @@ const createTransferSchema = z.object({
   prefix: z.string().optional(),
 });
 
+const retryItemSchema = z.object({
+  mediaItemId: z.string().min(1),
+});
+
 export async function registerTransferRoutes(
   app: FastifyInstance,
   jobs: JobsService,
@@ -126,8 +130,10 @@ export async function registerTransferRoutes(
     }
 
     const total = job.keys.length;
-    const completedCount = Math.max(0, Math.min(total, Math.floor(job.progress * total)));
-    const remainingKeys = job.keys.slice(completedCount);
+    const logs = await jobs.listLogs(id);
+    const completedKeys = getCompletedMediaItemIds(logs);
+    const completedCount = Math.min(total, completedKeys.size);
+    const remainingKeys = job.keys.filter((key) => !completedKeys.has(key));
 
     if (remainingKeys.length === 0) {
       const completed = await jobs.update(id, {
@@ -185,10 +191,110 @@ export async function registerTransferRoutes(
     };
   });
 
+  app.post('/transfers/:id/retry-item', async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const input = retryItemSchema.parse(req.body);
+    const job = await jobs.get(id);
+    if (!job) {
+      return reply.code(404).send({ error: 'Transfer job not found' });
+    }
+
+    if (job.status !== TransferStatus.CANCELLED && job.status !== TransferStatus.FAILED) {
+      return reply.code(409).send({
+        error: `Transfer item can only be retried when transfer is ${TransferStatus.CANCELLED} or ${TransferStatus.FAILED}`,
+      });
+    }
+
+    if (!job.keys.includes(input.mediaItemId)) {
+      return reply.code(404).send({
+        error: `Item ${input.mediaItemId} is not part of transfer ${id}`,
+      });
+    }
+
+    const logs = await jobs.listLogs(id);
+    const completedKeys = getCompletedMediaItemIds(logs);
+    if (completedKeys.has(input.mediaItemId)) {
+      return reply.code(409).send({
+        error: `Item ${input.mediaItemId} is already completed`,
+      });
+    }
+
+    const total = job.keys.length;
+    const completedCount = Math.min(total, completedKeys.size);
+
+    await jobs.update(id, {
+      status: TransferStatus.PENDING,
+      errorMessage: null,
+    });
+
+    let enqueueResult;
+    try {
+      enqueueResult = await queue.enqueueBulk({
+        transferJobId: job.id,
+        sourceProvider: job.sourceProvider,
+        destProvider: job.destProvider,
+        keys: [input.mediaItemId],
+        sourceConfig: (job.sourceConfig as Record<string, unknown> | null) ?? undefined,
+        destConfig: (job.destConfig as Record<string, unknown> | null) ?? undefined,
+        startIndex: completedCount,
+        totalKeys: total,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await jobs.update(job.id, {
+        status: TransferStatus.FAILED,
+        errorMessage: `Failed to retry item: ${message}`,
+      });
+
+      return reply.code(503).send({
+        error: 'Transfer queue is unavailable. Start services and try again.',
+        jobId: job.id,
+      });
+    }
+
+    const updated = await jobs.get(id);
+    return {
+      message: `Retry queued for item ${input.mediaItemId}`,
+      job: updated,
+      enqueueResult,
+    };
+  });
+
   app.delete('/transfers/:id', async (req, reply) => {
     const id = (req.params as { id: string }).id;
     await jobs.update(id, { status: TransferStatus.CANCELLED, errorMessage: null });
     await jobs.delete(id);
     return reply.code(204).send();
   });
+}
+
+function getCompletedMediaItemIds(logs: Array<{ message: string; meta?: unknown }>): Set<string> {
+  const completed = new Set<string>();
+
+  for (const log of logs) {
+    if (!isRecord(log.meta)) {
+      continue;
+    }
+
+    const mediaItemId = typeof log.meta.mediaItemId === 'string' ? log.meta.mediaItemId : undefined;
+    if (!mediaItemId) {
+      continue;
+    }
+
+    const status = typeof log.meta.status === 'string' ? log.meta.status : undefined;
+    const isCompletedByStatus = status === 'COMPLETED' || status === 'SKIPPED';
+    const isCompletedByMessage =
+      log.message.startsWith('Uploaded ') ||
+      log.message.startsWith('Skipped existing ');
+
+    if (isCompletedByStatus || isCompletedByMessage) {
+      completed.add(mediaItemId);
+    }
+  }
+
+  return completed;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
