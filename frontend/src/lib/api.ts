@@ -195,6 +195,19 @@ export async function retryTransferItem(id: string, mediaItemId: string): Promis
   return response.json();
 }
 
+export async function queueAllTransferItems(id: string): Promise<{ message: string }> {
+  const response = await fetch(`${API_BASE_URL}/transfers/${id}/retry-all-items`, {
+    method: 'POST',
+  });
+
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to queue all transfer items');
+  }
+
+  return response.json();
+}
+
 export async function createTransfer(payload: {
   sourceProvider: string;
   destProvider: string;

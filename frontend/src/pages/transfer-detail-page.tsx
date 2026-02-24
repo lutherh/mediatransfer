@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { fetchTransferDetail, pauseTransfer, resumeTransfer, retryTransferItem, type TransferLog } from '@/lib/api';
+import { fetchTransferDetail, pauseTransfer, resumeTransfer, retryTransferItem, queueAllTransferItems, type TransferLog } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { ProgressBar } from '@/components/ui/progress-bar';
@@ -60,6 +60,16 @@ export function TransferDetailPage() {
     },
   });
 
+  const retryAllItemsMutation = useMutation({
+    mutationFn: queueAllTransferItems,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['transfer', id] }),
+        queryClient.invalidateQueries({ queryKey: ['transfers'] }),
+      ]);
+    },
+  });
+
   if (isLoading) {
     return <p>Loading transfer detail...</p>;
   }
@@ -72,13 +82,20 @@ export function TransferDetailPage() {
   const canResume = data.job.status === 'CANCELLED' || data.job.status === 'FAILED';
   const isFailed = data.job.status === 'FAILED';
   const isTransferActive = data.job.status === 'PENDING' || data.job.status === 'IN_PROGRESS';
-  const isActionPending = pauseMutation.isPending || resumeMutation.isPending || retryItemMutation.isPending;
+  const isActionPending =
+    pauseMutation.isPending ||
+    resumeMutation.isPending ||
+    retryItemMutation.isPending ||
+    retryAllItemsMutation.isPending;
   const statusLabel = data.job.status === 'CANCELLED' ? 'PAUSED' : data.job.status;
   const itemProgress = deriveItemProgress(data.job.keys ?? [], data.logs, data.job.progress);
   const canRetryItems =
     data.job.status === 'CANCELLED' ||
     data.job.status === 'FAILED' ||
     data.job.status === 'IN_PROGRESS';
+  const retryableItemsCount = itemProgress.items.filter(
+    (item) => item.status === 'FAILED' || item.status === 'PENDING',
+  ).length;
 
   return (
     <div className="space-y-4">
@@ -136,6 +153,13 @@ export function TransferDetailPage() {
             : 'Failed to retry transfer item.'}
         </p>
       ) : null}
+      {retryAllItemsMutation.isError ? (
+        <p className="text-sm text-red-600">
+          {retryAllItemsMutation.error instanceof Error
+            ? retryAllItemsMutation.error.message
+            : 'Failed to queue all items.'}
+        </p>
+      ) : null}
 
       {isTransferActive ? (
         <Card className="flex items-start gap-3 border-blue-200 bg-blue-50">
@@ -174,7 +198,17 @@ export function TransferDetailPage() {
       </Card>
 
       <div className="space-y-2">
-        <h2 className="text-lg font-semibold">Items</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">Items</h2>
+          {canRetryItems ? (
+            <Button
+              onClick={() => retryAllItemsMutation.mutate(id)}
+              disabled={isActionPending || retryableItemsCount === 0}
+            >
+              Queue all items ({retryableItemsCount})
+            </Button>
+          ) : null}
+        </div>
         {itemProgress.items.length ? (
           itemProgress.items.map((item) => (
             <Card key={item.key} className="py-3">
@@ -314,7 +348,6 @@ function deriveItemProgress(keys: string[], logs: TransferLog[], fallbackProgres
       item.progress = Math.max(item.progress, Math.min(0.9, currentAttempt / maxAttempts));
       continue;
     }
-
     if (status === 'FAILED' || log.message.startsWith('Item failed ')) {
       item.status = 'FAILED';
       item.progress = 0;
@@ -338,16 +371,23 @@ function deriveItemProgress(keys: string[], logs: TransferLog[], fallbackProgres
   }
 
   const items = orderedKeys.map((key) => itemMap.get(key)).filter((item): item is ItemProgress => Boolean(item));
+  const incompleteItems = items.filter((item) => !isTerminalItemStatus(item.status));
+  const completedOrSkippedItems = items.filter((item) => isTerminalItemStatus(item.status));
+  const sortedItems = [...incompleteItems, ...completedOrSkippedItems];
   const completedItems = items.filter((item) => item.status === 'COMPLETED' || item.status === 'SKIPPED').length;
   const totalItems = items.length;
   const overallProgress = totalItems > 0 ? completedItems / totalItems : fallbackProgress;
 
   return {
-    items,
+    items: sortedItems,
     totalItems,
     completedItems,
     overallProgress,
   };
+}
+
+function isTerminalItemStatus(status: ItemStatus): boolean {
+  return status === 'COMPLETED' || status === 'SKIPPED';
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

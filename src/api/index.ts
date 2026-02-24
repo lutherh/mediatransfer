@@ -331,7 +331,6 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 						status: 'IN_PROGRESS',
 					},
 				});
-
 				try {
 					result = await transferPickedMediaItemToScaleway(payload, mediaItemId);
 					successfulAttempt = attempt;

@@ -61,6 +61,7 @@ vi.mock('@/lib/api', () => ({
   pauseTransfer: vi.fn(async () => ({ message: 'Paused' })),
   resumeTransfer: vi.fn(async () => ({ message: 'Resumed' })),
   retryTransferItem: vi.fn(async () => ({ message: 'Retry queued' })),
+  queueAllTransferItems: vi.fn(async () => ({ message: 'Queued all' })),
   fetchTakeoutStatus: vi.fn(async () => ({
     paths: {
       manifestPath: 'data/takeout/work/manifest.jsonl',
