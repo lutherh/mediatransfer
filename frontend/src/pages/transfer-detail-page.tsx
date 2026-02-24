@@ -371,9 +371,16 @@ function deriveItemProgress(keys: string[], logs: TransferLog[], fallbackProgres
   }
 
   const items = orderedKeys.map((key) => itemMap.get(key)).filter((item): item is ItemProgress => Boolean(item));
-  const incompleteItems = items.filter((item) => !isTerminalItemStatus(item.status));
-  const completedOrSkippedItems = items.filter((item) => isTerminalItemStatus(item.status));
-  const sortedItems = [...incompleteItems, ...completedOrSkippedItems];
+  const sortedItems = items
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const rankDiff = getItemSortRank(left.item.status) - getItemSortRank(right.item.status);
+      if (rankDiff !== 0) {
+        return rankDiff;
+      }
+      return left.index - right.index;
+    })
+    .map((entry) => entry.item);
   const completedItems = items.filter((item) => item.status === 'COMPLETED' || item.status === 'SKIPPED').length;
   const totalItems = items.length;
   const overallProgress = totalItems > 0 ? completedItems / totalItems : fallbackProgress;
@@ -388,6 +395,19 @@ function deriveItemProgress(keys: string[], logs: TransferLog[], fallbackProgres
 
 function isTerminalItemStatus(status: ItemStatus): boolean {
   return status === 'COMPLETED' || status === 'SKIPPED';
+}
+
+function getItemSortRank(status: ItemStatus): number {
+  if (status === 'IN_PROGRESS' || status === 'RETRYING') {
+    return 0;
+  }
+  if (status === 'PENDING') {
+    return 1;
+  }
+  if (status === 'FAILED') {
+    return 2;
+  }
+  return 3;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
