@@ -6,6 +6,7 @@ export type TransferJob = {
   sourceProvider: string;
   destProvider: string;
   progress: number;
+  keys?: string[];
   createdAt: string;
 };
 
@@ -14,6 +15,7 @@ export type TransferLog = {
   level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
   message: string;
   createdAt: string;
+  meta?: Record<string, unknown>;
 };
 
 export type CloudUsageBucketType = 'standard' | 'infrequent' | 'archive';
@@ -173,6 +175,21 @@ export async function resumeTransfer(id: string): Promise<{ message: string }> {
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to resume transfer');
+  }
+
+  return response.json();
+}
+
+export async function retryTransferItem(id: string, mediaItemId: string): Promise<{ message: string }> {
+  const response = await fetch(`${API_BASE_URL}/transfers/${id}/retry-item`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mediaItemId }),
+  });
+
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to retry transfer item');
   }
 
   return response.json();
