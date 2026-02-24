@@ -210,37 +210,59 @@ function inferMediaType(key: string): 'image' | 'video' | 'other' {
 }
 
 function inferCapturedAt(key: string, fallback: Date): Date {
-  const fromPath = /^(\d{4})\/(\d{2})\/(\d{2})\//.exec(key);
+  const fromPath = /(?:^|\/)((?:19|20)\d{2})\/(\d{2})\/(\d{2})(?:\/|$)/.exec(key);
   const filename = key.split('/').pop() ?? key;
 
-  const fromFileUnderscore = /(19|20\d{2})(\d{2})(\d{2})[\sT_-]?(\d{2})(\d{2})(\d{2})/.exec(filename);
+  const fromFileUnderscore = /((?:19|20)\d{2})(\d{2})(\d{2})[\sT_-]?(\d{2})(\d{2})(\d{2})/.exec(filename);
   if (fromFileUnderscore) {
-    return asUtcDate(
-      fromFileUnderscore[1] + fromFileUnderscore[2],
+    const parsed = asUtcDate(
+      fromFileUnderscore[1],
+      fromFileUnderscore[2],
       fromFileUnderscore[3],
       fromFileUnderscore[4],
       fromFileUnderscore[5],
       fromFileUnderscore[6],
-      fromFileUnderscore[7],
-      fallback,
     );
+    if (parsed) {
+      return parsed;
+    }
   }
 
-  const fromFileDashed = /(19|20\d{2})-(\d{2})-(\d{2})[ T_.-]?(\d{2})[.:_-]?(\d{2})[.:_-]?(\d{2})/.exec(filename);
+  const fromFileDashed = /((?:19|20)\d{2})-(\d{2})-(\d{2})[ T_.-]?(\d{2})[.:_-]?(\d{2})[.:_-]?(\d{2})/.exec(filename);
   if (fromFileDashed) {
-    return asUtcDate(
-      fromFileDashed[1] + fromFileDashed[2],
+    const parsed = asUtcDate(
+      fromFileDashed[1],
+      fromFileDashed[2],
       fromFileDashed[3],
       fromFileDashed[4],
       fromFileDashed[5],
       fromFileDashed[6],
-      fromFileDashed[7],
-      fallback,
     );
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  const fromFileDateOnly = /((?:19|20)\d{2})(\d{2})(\d{2})/.exec(filename);
+  if (fromFileDateOnly) {
+    const parsed = asUtcDate(
+      fromFileDateOnly[1],
+      fromFileDateOnly[2],
+      fromFileDateOnly[3],
+      '00',
+      '00',
+      '00',
+    );
+    if (parsed) {
+      return parsed;
+    }
   }
 
   if (fromPath) {
-    return asUtcDate(fromPath[1], fromPath[2], fromPath[3], '00', '00', '00', fallback);
+    const parsed = asUtcDate(fromPath[1], fromPath[2], fromPath[3], '00', '00', '00');
+    if (parsed) {
+      return parsed;
+    }
   }
 
   return fallback;
@@ -253,12 +275,11 @@ function asUtcDate(
   hour: string,
   minute: string,
   second: string,
-  fallback: Date,
-): Date {
+): Date | undefined {
   const iso = `${year}-${month}-${day}T${hour}:${minute}:${second}.000Z`;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) {
-    return fallback;
+    return undefined;
   }
   return date;
 }
