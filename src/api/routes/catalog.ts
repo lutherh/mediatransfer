@@ -311,6 +311,11 @@ function buildCatalogHtml(): string {
     }
 
     function parseDateValue(item) {
+      if (item.capturedAt) {
+        const captured = Date.parse(item.capturedAt);
+        if (!Number.isNaN(captured)) return captured;
+      }
+
       if (item.lastModified) {
         const precise = Date.parse(item.lastModified);
         if (!Number.isNaN(precise)) return precise;

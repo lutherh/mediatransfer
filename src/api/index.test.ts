@@ -116,6 +116,7 @@ function createServices(): ApiServices {
             encodedKey: 'MjAyNi8wMi8yMC9waG90by5qcGc',
             size: 123,
             lastModified: '2026-02-20T10:00:00.000Z',
+            capturedAt: '2026-02-20T09:32:10.000Z',
             mediaType: 'image',
             sectionDate: '2026-02-20',
           },
