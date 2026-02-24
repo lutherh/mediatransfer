@@ -14,6 +14,7 @@ export type CatalogItem = {
   encodedKey: string;
   size: number;
   lastModified: string;
+  capturedAt: string;
   mediaType: 'image' | 'video' | 'other';
   sectionDate: string;
 };
@@ -98,12 +99,15 @@ export class ScalewayCatalogService implements CatalogService {
         .map((item) => {
           const rawKey = item.Key as string;
           const key = this.stripPrefix(rawKey);
-          const sectionDate = inferSectionDate(key, item.LastModified as Date);
+          const fallbackDate = item.LastModified as Date;
+          const capturedAtDate = inferCapturedAt(key, fallbackDate);
+          const sectionDate = toSectionDate(capturedAtDate);
           return {
             key,
             encodedKey: encodeKey(key),
             size: Number(item.Size ?? 0),
-            lastModified: (item.LastModified as Date).toISOString(),
+            lastModified: fallbackDate.toISOString(),
+            capturedAt: capturedAtDate.toISOString(),
             mediaType: inferMediaType(key),
             sectionDate,
           } satisfies CatalogItem;
@@ -205,13 +209,62 @@ function inferMediaType(key: string): 'image' | 'video' | 'other' {
   return 'other';
 }
 
-function inferSectionDate(key: string, fallback: Date): string {
-  const match = /^(\d{4})\/(\d{2})\/(\d{2})\//.exec(key);
-  if (match) {
-    return `${match[1]}-${match[2]}-${match[3]}`;
+function inferCapturedAt(key: string, fallback: Date): Date {
+  const fromPath = /^(\d{4})\/(\d{2})\/(\d{2})\//.exec(key);
+  const filename = key.split('/').pop() ?? key;
+
+  const fromFileUnderscore = /(19|20\d{2})(\d{2})(\d{2})[\sT_-]?(\d{2})(\d{2})(\d{2})/.exec(filename);
+  if (fromFileUnderscore) {
+    return asUtcDate(
+      fromFileUnderscore[1] + fromFileUnderscore[2],
+      fromFileUnderscore[3],
+      fromFileUnderscore[4],
+      fromFileUnderscore[5],
+      fromFileUnderscore[6],
+      fromFileUnderscore[7],
+      fallback,
+    );
   }
 
-  return fallback.toISOString().slice(0, 10);
+  const fromFileDashed = /(19|20\d{2})-(\d{2})-(\d{2})[ T_.-]?(\d{2})[.:_-]?(\d{2})[.:_-]?(\d{2})/.exec(filename);
+  if (fromFileDashed) {
+    return asUtcDate(
+      fromFileDashed[1] + fromFileDashed[2],
+      fromFileDashed[3],
+      fromFileDashed[4],
+      fromFileDashed[5],
+      fromFileDashed[6],
+      fromFileDashed[7],
+      fallback,
+    );
+  }
+
+  if (fromPath) {
+    return asUtcDate(fromPath[1], fromPath[2], fromPath[3], '00', '00', '00', fallback);
+  }
+
+  return fallback;
+}
+
+function asUtcDate(
+  year: string,
+  month: string,
+  day: string,
+  hour: string,
+  minute: string,
+  second: string,
+  fallback: Date,
+): Date {
+  const iso = `${year}-${month}-${day}T${hour}:${minute}:${second}.000Z`;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return fallback;
+  }
+  return date;
+}
+
+function toSectionDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
 function clamp(value: number, min: number, max: number): number {
