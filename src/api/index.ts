@@ -282,6 +282,10 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 	await createTransferLog({
 		jobId: payload.transferJobId,
 		message: `Transfer worker started (${total} item${total === 1 ? '' : 's'})`,
+		meta: {
+			totalItems: total,
+			startIndex,
+		},
 	});
 
 	try {
@@ -313,7 +317,69 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 			}
 
 			const mediaItemId = payload.keys[index];
-			const result = await transferPickedMediaItemToScaleway(payload, mediaItemId);
+			let result: { destinationKey: string; filename?: string; skipped: boolean } | null = null;
+			let successfulAttempt = 0;
+
+			for (let attempt = 1; attempt <= ITEM_RETRY_MAX_ATTEMPTS; attempt += 1) {
+				await createTransferLog({
+					jobId: payload.transferJobId,
+					message: `Processing item ${mediaItemId} (${attempt}/${ITEM_RETRY_MAX_ATTEMPTS})`,
+					meta: {
+						mediaItemId,
+						attempt,
+						maxAttempts: ITEM_RETRY_MAX_ATTEMPTS,
+						status: 'IN_PROGRESS',
+					},
+				});
+
+				try {
+					result = await transferPickedMediaItemToScaleway(payload, mediaItemId);
+					successfulAttempt = attempt;
+					break;
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					const canRetry =
+						attempt < ITEM_RETRY_MAX_ATTEMPTS &&
+						isRetryableTransferItemError(error);
+
+					if (!canRetry) {
+						await createTransferLog({
+							jobId: payload.transferJobId,
+							level: 'ERROR',
+							message: `Item failed ${mediaItemId}: ${message}`,
+							meta: {
+								mediaItemId,
+								attempt,
+								maxAttempts: ITEM_RETRY_MAX_ATTEMPTS,
+								status: 'FAILED',
+								error: message,
+							},
+						});
+						throw error;
+					}
+
+					const delayMs = computeItemRetryDelay(attempt);
+					await createTransferLog({
+						jobId: payload.transferJobId,
+						level: 'WARN',
+						message: `Retrying item ${mediaItemId} (attempt ${attempt + 1}/${ITEM_RETRY_MAX_ATTEMPTS})`,
+						meta: {
+							mediaItemId,
+							attempt,
+							maxAttempts: ITEM_RETRY_MAX_ATTEMPTS,
+							delayMs,
+							error: message,
+							status: 'RETRYING',
+						},
+					});
+
+					await delay(delayMs);
+				}
+			}
+
+			if (!result) {
+				throw new Error(`Transfer item ${mediaItemId} did not produce a result`);
+			}
 
 			if (await shouldStop()) {
 				await createTransferLog({
@@ -342,6 +408,11 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 					destinationKey: result.destinationKey,
 					skipped: result.skipped,
 					progress,
+					itemProgressPercent: 100,
+					completed: startIndex + index + 1,
+					total,
+					attempts: successfulAttempt,
+					status: result.skipped ? 'SKIPPED' : 'COMPLETED',
 				},
 			});
 		}
@@ -356,9 +427,41 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 			jobId: payload.transferJobId,
 			level: 'ERROR',
 			message: `Transfer failed: ${message}`,
+			meta: {
+				status: 'FAILED',
+				error: message,
+			},
 		});
 		throw error;
 	}
+}
+
+const ITEM_RETRY_MAX_ATTEMPTS = 3;
+
+function isRetryableTransferItemError(error: unknown): boolean {
+	const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+	return (
+		message.includes('timeout') ||
+		message.includes('network') ||
+		message.includes('econnreset') ||
+		message.includes('rate limit') ||
+		message.includes('temporar') ||
+		message.includes('throttle') ||
+		message.includes('fetch failed') ||
+		message.includes('503')
+	);
+}
+
+function computeItemRetryDelay(attempt: number): number {
+	const baseDelayMs = 500;
+	const maxDelayMs = 5000;
+	const exponential = Math.min(baseDelayMs * (2 ** (attempt - 1)), maxDelayMs);
+	const jitter = Math.floor(Math.random() * 120);
+	return Math.min(exponential + jitter, maxDelayMs);
+}
+
+async function delay(ms: number): Promise<void> {
+	await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function transferPickedMediaItemToScaleway(
@@ -387,7 +490,11 @@ async function transferPickedMediaItemToScaleway(
 	}
 
 	const pickerClient = new GooglePhotosPickerClient(oauthClient, activeTokens);
-	const media = await findPickedMediaItemInSession(pickerClient, sessionId, mediaItemId);
+	const media = await withTimeout(
+		findPickedMediaItemInSession(pickerClient, sessionId, mediaItemId),
+		30_000,
+		`find picked media item ${mediaItemId}`,
+	);
 
 	if (!media.baseUrl) {
 		throw new Error(`Picked media item ${mediaItemId} is missing baseUrl.`);
@@ -399,7 +506,11 @@ async function transferPickedMediaItemToScaleway(
 		mediaItemId,
 		media.createTime,
 	);
-	const existing = await scaleway.list({ prefix: destinationKey, maxResults: 1 });
+	const existing = await withTimeout(
+		scaleway.list({ prefix: destinationKey, maxResults: 1 }),
+		20_000,
+		`check existing object ${destinationKey}`,
+	);
 	if (existing.some((item) => item.key === destinationKey)) {
 		return { destinationKey, filename: media.filename, skipped: true };
 	}
@@ -408,16 +519,16 @@ async function transferPickedMediaItemToScaleway(
 		? `${media.baseUrl}=dv`
 		: `${media.baseUrl}=d`;
 
-	let response = await fetch(downloadUrl, {
+	let response = await fetchWithTimeout(downloadUrl, {
 		headers: { Authorization: `Bearer ${activeTokens.accessToken}` },
-	});
+	}, 60_000, `download media ${mediaItemId}`);
 
 	if (response.status === 401 || response.status === 403) {
 		activeTokens = await getValidAccessToken(oauthClient);
 		setStoredTokens(activeTokens);
-		response = await fetch(downloadUrl, {
+		response = await fetchWithTimeout(downloadUrl, {
 			headers: { Authorization: `Bearer ${activeTokens.accessToken}` },
-		});
+		}, 60_000, `download media ${mediaItemId} (token refresh)`);
 	}
 
 	if (!response.ok || !response.body) {
@@ -425,10 +536,14 @@ async function transferPickedMediaItemToScaleway(
 		throw new Error(`Failed to download picked media ${mediaItemId}: ${response.status} ${body}`);
 	}
 
-	await scaleway.upload(
-		destinationKey,
-		Readable.fromWeb(response.body as any),
-		media.mimeType,
+	await withTimeout(
+		scaleway.upload(
+			destinationKey,
+			Readable.fromWeb(response.body as any),
+			media.mimeType,
+		),
+		10 * 60_000,
+		`upload ${destinationKey}`,
 	);
 
 	return { destinationKey, filename: media.filename, skipped: false };
@@ -442,7 +557,11 @@ async function findPickedMediaItemInSession(
 	let pageToken: string | undefined;
 
 	do {
-		const page = await pickerClient.listPickedMediaItems(sessionId, pageToken, 100);
+		const page = await withTimeout(
+			pickerClient.listPickedMediaItems(sessionId, pageToken, 100),
+			30_000,
+			`list picker items for ${sessionId}`,
+		);
 		const found = page.mediaItems.find((item) => item.id === mediaItemId);
 		if (found) {
 			return found;
@@ -451,6 +570,44 @@ async function findPickedMediaItemInSession(
 	} while (pageToken);
 
 	throw new Error(`Picked media item ${mediaItemId} not found in picker session ${sessionId}.`);
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+	let timeoutId: NodeJS.Timeout | undefined;
+
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<T>((_, reject) => {
+				timeoutId = setTimeout(() => {
+					reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+				}, timeoutMs);
+			}),
+		]);
+	} finally {
+		if (timeoutId) {
+			clearTimeout(timeoutId);
+		}
+	}
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number, label: string): Promise<Response> {
+	const controller = new AbortController();
+	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+	try {
+		return await fetch(url, {
+			...init,
+			signal: controller.signal,
+		});
+	} catch (error) {
+		if (error instanceof Error && error.name === 'AbortError') {
+			throw new Error(`${label} timed out after ${timeoutMs}ms`);
+		}
+		throw error;
+	} finally {
+		clearTimeout(timeoutId);
+	}
 }
 
 function getGoogleOAuthConfigFromEnv(): { clientId: string; clientSecret: string; redirectUri: string } {
