@@ -88,6 +88,15 @@ export function UploadPage() {
         </p>
       </div>
 
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <p className="text-sm font-medium text-slate-900">Quick guide</p>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-600">
+          <li>Use this page for direct file uploads from your local computer.</li>
+          <li>Duplicate files are skipped automatically during upload.</li>
+          <li>For Google Photos migration, use <span className="font-semibold">Photo Transfer</span> or <span className="font-semibold">Takeout</span>.</li>
+        </ul>
+      </div>
+
       {/* Stats card */}
       {statsQuery.data && (
         <div className="rounded-lg border border-slate-200 bg-white p-4">

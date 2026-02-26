@@ -117,9 +117,37 @@ export async function unpackAndNormalizeTakeout(
   }
 
   await extractTakeoutArchives(archives, workDir, extractor);
-  const mediaRoot = await normalizeTakeoutMediaRoot(workDir);
 
-  return { archives, mediaRoot };
+  const roots = await findGooglePhotosRoots(workDir);
+  if (roots.length > 0) {
+    const mediaRoot = await normalizeTakeoutMediaRoot(workDir);
+    return { archives, mediaRoot };
+  }
+
+  const hasMediaInWorkDir = await containsMediaFiles(workDir);
+  if (hasMediaInWorkDir) {
+    return {
+      archives,
+      mediaRoot: workDir,
+    };
+  }
+
+  const hasArchiveBrowser = await exists(path.join(workDir, 'Takeout', 'archive_browser.html'));
+  if (hasArchiveBrowser) {
+    throw new Error(
+      `No media files were found after extracting archives into ${workDir}. ` +
+      'Only Takeout metadata (archive_browser.html) was detected. ' +
+      `This usually means the download is incomplete or additional Takeout parts are missing. ` +
+      `Put all Takeout archive parts into ${inputDir} and run takeout:scan again. ` +
+      `Do not copy files into ${workDir}; that folder is internal staging output.`,
+    );
+  }
+
+  throw new Error(
+    `No Google Photos folders or media files were found in work directory: ${workDir}. ` +
+    `Verify that Google Takeout archives were downloaded correctly and placed in ${inputDir}. ` +
+    `Do not place Takeout archives directly in ${workDir}.`,
+  );
 }
 
 /**
