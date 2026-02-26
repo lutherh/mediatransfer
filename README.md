@@ -74,7 +74,7 @@ The home page (`/`) is the **Photo Transfer** wizard. It walks you through 4 ste
 
 If you have a large library, download Google Takeout archives first, then use the Takeout flow:
 
-1. Put all your Google Takeout photo/video files in `data/takeout/input`.
+1. Put all your Google Takeout archive files (`.zip`, `.tar`, `.tgz`) in **`data/takeout/input`** (from project root: `./data/takeout/input`).
 2. Go to `/takeout` in the browser, or use terminal commands:
 
 ```bash

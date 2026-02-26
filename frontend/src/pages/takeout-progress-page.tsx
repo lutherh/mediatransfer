@@ -57,6 +57,12 @@ export function TakeoutProgressPage() {
     <div className="space-y-4">
       <h1 className="text-xl sm:text-2xl font-semibold">Takeout Transfer Progress</h1>
 
+      <Card className="space-y-2">
+        <p className="text-sm font-medium text-slate-900">Where to put Google Takeout files</p>
+        <p className="text-xs text-slate-600">Drop all downloaded Takeout archives (.zip/.tar/.tgz) into this folder:</p>
+        <p className="text-xs text-slate-500 break-all font-mono">{data.paths.inputDir}</p>
+      </Card>
+
       <Card className="space-y-3">
         <p className="text-sm font-medium text-slate-900">Run transfer actions (no terminal)</p>
         <div className="flex flex-wrap gap-2">
@@ -142,6 +148,7 @@ export function TakeoutProgressPage() {
 
       <Card className="space-y-2">
         <p className="text-sm font-medium text-slate-900">Current files</p>
+        <p className="text-xs text-slate-500 break-all">Work dir: {data.paths.workDir}</p>
         <p className="text-xs text-slate-500 break-all">Manifest: {data.paths.manifestPath}</p>
         <p className="text-xs text-slate-500 break-all">State: {data.paths.statePath}</p>
       </Card>

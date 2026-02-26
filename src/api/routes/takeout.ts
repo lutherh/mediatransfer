@@ -40,6 +40,7 @@ let currentTimeout: NodeJS.Timeout | null = null;
 
 export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void> {
   app.get('/takeout/status', async () => {
+    const inputDir = path.resolve(process.env.TAKEOUT_INPUT_DIR ?? './data/takeout/input');
     const workDir = path.resolve(process.env.TAKEOUT_WORK_DIR ?? './data/takeout/work');
     const statePath = path.resolve(process.env.TRANSFER_STATE_PATH ?? './data/takeout/state.json');
     const manifestPath = path.join(workDir, 'manifest.jsonl');
@@ -57,6 +58,8 @@ export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void>
 
     return {
       paths: {
+        inputDir,
+        workDir,
         manifestPath,
         statePath,
       },
