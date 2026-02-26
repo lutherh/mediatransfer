@@ -116,6 +116,28 @@ describe('takeout/unpack', () => {
     });
   });
 
+  it('falls back to extracted workDir when media exists but Google Photos folder name is different', async () => {
+    await withTempDir(async (dir) => {
+      const inputDir = path.join(dir, 'input');
+      const workDir = path.join(dir, 'work');
+      await fs.mkdir(inputDir, { recursive: true });
+      await fs.writeFile(path.join(inputDir, 'takeout-1.zip'), 'archive');
+
+      const result = await unpackAndNormalizeTakeout(
+        inputDir,
+        workDir,
+        async (_archivePath, destinationDir) => {
+          const mediaDir = path.join(destinationDir, 'Takeout', 'Fotos', 'AlbumX');
+          await fs.mkdir(mediaDir, { recursive: true });
+          await fs.writeFile(path.join(mediaDir, 'file.jpg'), 'content');
+        },
+      );
+
+      expect(result.archives).toHaveLength(1);
+      expect(result.mediaRoot).toBe(workDir);
+    });
+  });
+
   it('throws actionable error when no archives are found', async () => {
     await withTempDir(async (dir) => {
       const inputDir = path.join(dir, 'input');
@@ -124,6 +146,25 @@ describe('takeout/unpack', () => {
       await expect(unpackAndNormalizeTakeout(inputDir, workDir)).rejects.toThrow(
         'Place one or more Google Takeout .zip/.tar/.tgz archives there and run takeout:scan again.',
       );
+    });
+  });
+
+  it('throws actionable error when extraction only contains archive_browser metadata', async () => {
+    await withTempDir(async (dir) => {
+      const inputDir = path.join(dir, 'input');
+      const workDir = path.join(dir, 'work');
+      await fs.mkdir(inputDir, { recursive: true });
+      await fs.writeFile(path.join(inputDir, 'takeout-1.tgz'), 'archive');
+
+      await expect(unpackAndNormalizeTakeout(
+        inputDir,
+        workDir,
+        async (_archivePath, destinationDir) => {
+          const reportPath = path.join(destinationDir, 'Takeout', 'archive_browser.html');
+          await fs.mkdir(path.dirname(reportPath), { recursive: true });
+          await fs.writeFile(reportPath, '<html></html>');
+        },
+      )).rejects.toThrow('Only Takeout metadata (archive_browser.html) was detected.');
     });
   });
 

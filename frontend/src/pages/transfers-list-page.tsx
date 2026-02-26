@@ -186,6 +186,11 @@ export function TransfersListPage() {
       ) : (
         <Card>
           <p className="text-slate-600">No transfer jobs yet.</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-600">
+            <li>Start with <span className="font-semibold">Photo Transfer</span> for guided migration.</li>
+            <li>Use <span className="font-semibold">Takeout</span> for full-library Google Photos exports.</li>
+            <li>Use <span className="font-semibold">New Transfer</span> only for advanced manual jobs.</li>
+          </ul>
         </Card>
       )}
     </div>

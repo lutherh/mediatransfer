@@ -52,6 +52,7 @@ export function TakeoutProgressPage() {
   const mutationErrorMessage = actionMutation.error instanceof Error
     ? actionMutation.error.message
     : 'Failed to start action.';
+  const actionFailureReason = getActionFailureReason(actionStatus?.output ?? []);
 
   return (
     <div className="space-y-4">
@@ -61,10 +62,12 @@ export function TakeoutProgressPage() {
         <p className="text-sm font-medium text-slate-900">Where to put Google Takeout files</p>
         <p className="text-xs text-slate-600">Drop all downloaded Takeout archives (.zip/.tar/.tgz) into this folder:</p>
         <p className="text-xs text-slate-500 break-all font-mono">{data.paths.inputDir}</p>
+        <p className="text-xs text-slate-600">Do not place files in the work directory — it is managed automatically by the app during scan/upload.</p>
       </Card>
 
       <Card className="space-y-3">
         <p className="text-sm font-medium text-slate-900">Run transfer actions (no terminal)</p>
+        <p className="text-xs text-slate-600">Recommended order: <span className="font-semibold">Start Services → Scan → Upload → Verify</span>. Use Resume if interrupted.</p>
         <div className="flex flex-wrap gap-2">
           <ActionButton
             action="start-services"
@@ -117,9 +120,16 @@ export function TakeoutProgressPage() {
           <p className="text-xs text-slate-600">No manifest found yet. Run <strong>Scan</strong> first.</p>
         ) : null}
         {isLoadingActionStatus ? null : (
-          <p className="text-xs text-slate-600">
-            {renderActionStatus(actionStatus?.action, isActionRunning, actionStatus?.success, actionStatus?.exitCode)}
-          </p>
+          <div className="space-y-1">
+            <p className="text-xs text-slate-600">
+              {renderActionStatus(actionStatus?.action, isActionRunning, actionStatus?.success, actionStatus?.exitCode)}
+            </p>
+            {!isActionRunning && actionStatus?.success === false ? (
+              <p className="text-xs text-red-600 break-all">
+                {actionFailureReason ?? 'Action failed. See "Latest command output" below for details.'}
+              </p>
+            ) : null}
+          </div>
         )}
       </Card>
 
@@ -247,4 +257,42 @@ function formatDateTime(value: string): string {
   }
 
   return date.toLocaleString();
+}
+
+function getActionFailureReason(output: string[]): string | undefined {
+  if (!output.length) {
+    return undefined;
+  }
+
+  const patterns = [
+    /\berror\b/i,
+    /\bfailed\b/i,
+    /\bnot found\b/i,
+    /\bECONNREFUSED\b/i,
+    /\bEACCES\b/i,
+    /\bENOENT\b/i,
+    /\bCannot\b/i,
+  ];
+
+  const reversed = [...output].reverse();
+  for (const line of reversed) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (/^\$\s/.test(trimmed)) continue;
+    if (/^Action finished with code/i.test(trimmed)) continue;
+
+    if (patterns.some((pattern) => pattern.test(trimmed))) {
+      return trimmed;
+    }
+  }
+
+  for (const line of reversed) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (/^\$\s/.test(trimmed)) continue;
+    if (/^Action finished with code/i.test(trimmed)) continue;
+    return trimmed;
+  }
+
+  return undefined;
 }

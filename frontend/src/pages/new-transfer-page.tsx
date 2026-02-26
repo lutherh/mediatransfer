@@ -36,6 +36,14 @@ export function NewTransferPage() {
     <div className="space-y-4">
       <h1 className="text-xl sm:text-2xl font-semibold">New Transfer</h1>
       <Card>
+        <p className="text-sm font-medium text-slate-900">Before you create a transfer</p>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-600">
+          <li>This page is an advanced/manual flow for provider + key based jobs.</li>
+          <li>Most users should use <span className="font-semibold">Photo Transfer</span> or <span className="font-semibold">Takeout</span>.</li>
+          <li>Leave keys empty to transfer all items available from the selected source.</li>
+        </ul>
+      </Card>
+      <Card>
         <form className="space-y-4" onSubmit={onSubmit}>
           <div>
             <label className="mb-1 block text-sm font-medium">Source Provider</label>
