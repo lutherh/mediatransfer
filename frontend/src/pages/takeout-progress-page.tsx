@@ -195,6 +195,7 @@ function ActionButton({
 }): ReactElement {
   return (
     <Button
+      className="border border-slate-500 bg-slate-700 text-white hover:bg-slate-600 active:bg-slate-500 disabled:border-slate-700 disabled:bg-slate-800"
       type="button"
       disabled={disabled || isRunning || isPending}
       onClick={() => onRun(action)}
