@@ -82,7 +82,12 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
 
   const state = await loadUploadState(options.statePath);
   const entries = applyFilters(options.entries, options.includeFilter, options.excludeFilter);
-  const preloadedExistingKeys = await preloadDestinationIndex(options.provider, entries);
+  let preloadedExistingKeys = new Set<string>();
+  try {
+    preloadedExistingKeys = await preloadDestinationIndex(options.provider, entries);
+  } catch {
+    preloadedExistingKeys = new Set<string>();
+  }
   const confirmedExistingKeys = new Set<string>(preloadedExistingKeys);
   const existenceCache = new Map<string, boolean>();
   const checkpointManager = new StateCheckpointManager(
@@ -116,12 +121,17 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
       return;
     }
 
-    const destinationExists = await objectExistsCached(
-      options.provider,
-      entry.destinationKey,
-      confirmedExistingKeys,
-      existenceCache,
-    );
+    let destinationExists = false;
+    try {
+      destinationExists = await objectExistsCached(
+        options.provider,
+        entry.destinationKey,
+        confirmedExistingKeys,
+        existenceCache,
+      );
+    } catch {
+      destinationExists = false;
+    }
 
     if (destinationExists) {
       state.items[entry.destinationKey] = {

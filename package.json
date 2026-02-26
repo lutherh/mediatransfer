@@ -19,7 +19,8 @@
     "takeout:scan": "tsx scripts/takeout-scan.ts",
     "takeout:upload": "tsx scripts/takeout-upload.ts",
     "takeout:resume": "tsx scripts/takeout-resume.ts",
-    "takeout:verify": "tsx scripts/takeout-verify.ts"
+    "takeout:verify": "tsx scripts/takeout-verify.ts",
+    "takeout:process": "tsx scripts/takeout-process.ts"
   },
   "repository": {
     "type": "git",
