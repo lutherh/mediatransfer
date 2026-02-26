@@ -12,8 +12,14 @@ class MockProvider implements CloudProvider {
   readonly objects = new Set<string>();
   readonly failAttempts = new Map<string, number>();
   readonly uploadAttempts = new Map<string, number>();
+  listFailuresRemaining = 0;
 
   async list(options?: { prefix?: string; maxResults?: number }): Promise<ObjectInfo[]> {
+    if (this.listFailuresRemaining > 0) {
+      this.listFailuresRemaining -= 1;
+      throw new Error('transient list failure');
+    }
+
     const keys = [...this.objects].filter((key) =>
       options?.prefix ? key.startsWith(options.prefix) : true,
     );
@@ -306,6 +312,26 @@ describe('takeout/uploader', () => {
         .filter(([, v]) => v.status === 'uploaded')
         .map(([k]) => k);
       expect(uploadedKeys.length).toBe(20);
+    });
+  });
+
+  it('continues upload when preloading/list checks fail transiently', async () => {
+    await withTempDir(async (dir) => {
+      const provider = new MockProvider();
+      provider.listFailuresRemaining = 2;
+
+      const entry = await createEntry(dir, 'Album/IMG_L1.jpg', '2025/12/13/Album/IMG_L1.jpg');
+      const summary = await uploadManifest({
+        provider,
+        entries: [entry],
+        statePath: path.join(dir, 'state.json'),
+        retryCount: 0,
+        sleep: async () => {},
+      });
+
+      expect(summary.uploaded).toBe(1);
+      expect(summary.failed).toBe(0);
+      expect(provider.objects.has(entry.destinationKey)).toBe(true);
     });
   });
 
