@@ -80,6 +80,8 @@ export type CloudUsageSummary = {
 
 export type TakeoutStatus = {
   paths: {
+    inputDir: string;
+    workDir: string;
     manifestPath: string;
     statePath: string;
   };

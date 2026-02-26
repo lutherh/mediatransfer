@@ -64,6 +64,8 @@ vi.mock('@/lib/api', () => ({
   queueAllTransferItems: vi.fn(async () => ({ message: 'Queued all' })),
   fetchTakeoutStatus: vi.fn(async () => ({
     paths: {
+      inputDir: 'data/takeout/input',
+      workDir: 'data/takeout/work',
       manifestPath: 'data/takeout/work/manifest.jsonl',
       statePath: 'data/takeout/state.json',
     },
