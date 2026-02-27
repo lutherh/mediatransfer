@@ -124,7 +124,7 @@ export class ScalewayCatalogService implements CatalogService {
       }
     }
 
-    items.sort((a, b) => b.lastModified.localeCompare(a.lastModified));
+    items.sort((a, b) => b.capturedAt.localeCompare(a.capturedAt));
     if (items.length > max) {
       items.length = max;
     }
