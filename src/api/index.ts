@@ -165,7 +165,7 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 
 	const runtime: { services: ApiServices; dispose?: () => Promise<void> } = options?.services
 		? { services: options.services }
-		: createDefaultServices();
+		: await createDefaultServices();
 
 	await registerHealthRoutes(app);
 	await registerCredentialsRoutes(app, runtime.services.credentials);
@@ -184,19 +184,38 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	return app;
 }
 
-function createDefaultServices(): { services: ApiServices; dispose: () => Promise<void> } {
-	const redis = createRedisConnection();
-	const queue = createTransferQueue(redis);
-	const deadLetterQueue = createTransferDeadLetterQueue(redis);
-	const worker = createTransferWorker(
-		redis,
-		async (payload) => processQueuedTransfer(payload),
-		{ connection: redis as any, deadLetterQueue },
-	);
+async function createDefaultServices(): Promise<{ services: ApiServices; dispose: () => Promise<void> }> {
+	let redis: ReturnType<typeof createRedisConnection> | null = null;
+	let queue: ReturnType<typeof createTransferQueue> | null = null;
+	let deadLetterQueue: ReturnType<typeof createTransferDeadLetterQueue> | null = null;
+	let worker: ReturnType<typeof createTransferWorker> | null = null;
 
-	worker.on('error', (err) => {
-		console.error('[transfer-worker] Worker error', err);
-	});
+	try {
+		redis = createRedisConnection();
+		await redis.connect(); // explicitly connect (lazyConnect is enabled)
+		await redis.ping(); // verify Redis is actually reachable
+		queue = createTransferQueue(redis);
+		deadLetterQueue = createTransferDeadLetterQueue(redis);
+		worker = createTransferWorker(
+			redis,
+			async (payload) => processQueuedTransfer(payload),
+			{ connection: redis as any, deadLetterQueue },
+		);
+
+		worker.on('error', (err) => {
+			console.error('[transfer-worker] Worker error', err);
+		});
+
+		console.log('[redis] Redis connected – queue features enabled');
+	} catch (err) {
+		console.warn('[redis] Redis is not reachable – running without queue support:', (err as Error).message ?? err);
+		// Clean up partial connections
+		try { await redis?.disconnect(); } catch { /* ignore */ }
+		redis = null;
+		queue = null;
+		deadLetterQueue = null;
+		worker = null;
+	}
 
 	const services: ApiServices = {
 		credentials: {
@@ -250,7 +269,9 @@ function createDefaultServices(): { services: ApiServices; dispose: () => Promis
 			},
 		},
 		queue: {
-			enqueueBulk: (input) => enqueueBulkTransfer(queue as any, input),
+			enqueueBulk: queue
+				? (input) => enqueueBulkTransfer(queue as any, input)
+				: async () => { throw new Error('Queue is unavailable – Redis is not connected'); },
 		},
 		catalog: createCatalogServiceFromEnv(),
 		cloudUsage: createCloudUsageServiceFromEnv(),
@@ -260,10 +281,10 @@ function createDefaultServices(): { services: ApiServices; dispose: () => Promis
 	return {
 		services,
 		dispose: async () => {
-			await worker.close();
-			await deadLetterQueue.close();
-			await queue.close();
-			await redis.quit();
+			await worker?.close();
+			await deadLetterQueue?.close();
+			await queue?.close();
+			await redis?.quit();
 		},
 	};
 }
