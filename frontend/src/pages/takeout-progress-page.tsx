@@ -42,7 +42,14 @@ export function TakeoutProgressPage() {
   }
 
   if (error || !data) {
-    return <p>Failed to load Takeout progress.</p>;
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return (
+      <div className="space-y-2">
+        <p>Failed to load Takeout progress.</p>
+        <p className="text-sm text-red-600">{message}</p>
+        <p className="text-xs text-slate-600">Check that backend API is running on localhost:3000.</p>
+      </div>
+    );
   }
 
   const progressPercent = Math.round(data.progress * 100);
