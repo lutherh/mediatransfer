@@ -1,4 +1,5 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000';
+const TAKEOUT_FETCH_TIMEOUT_MS = 10_000;
 
 export type TransferJob = {
   id: string;
@@ -232,7 +233,11 @@ export async function createTransfer(payload: {
 }
 
 export async function fetchTakeoutStatus(): Promise<TakeoutStatus> {
-  const response = await fetch(`${API_BASE_URL}/takeout/status`);
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/takeout/status`,
+    undefined,
+    TAKEOUT_FETCH_TIMEOUT_MS,
+  );
   if (!response.ok) {
     throw new Error('Failed to fetch takeout status');
   }
@@ -241,7 +246,11 @@ export async function fetchTakeoutStatus(): Promise<TakeoutStatus> {
 }
 
 export async function fetchTakeoutActionStatus(): Promise<TakeoutActionStatus> {
-  const response = await fetch(`${API_BASE_URL}/takeout/action-status`);
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/takeout/action-status`,
+    undefined,
+    TAKEOUT_FETCH_TIMEOUT_MS,
+  );
   if (!response.ok) {
     throw new Error('Failed to fetch takeout action status');
   }
@@ -250,9 +259,13 @@ export async function fetchTakeoutActionStatus(): Promise<TakeoutActionStatus> {
 }
 
 export async function runTakeoutAction(action: TakeoutAction): Promise<{ message: string; status: TakeoutActionStatus }> {
-  const response = await fetch(`${API_BASE_URL}/takeout/actions/${action}`, {
-    method: 'POST',
-  });
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/takeout/actions/${action}`,
+    {
+      method: 'POST',
+    },
+    TAKEOUT_FETCH_TIMEOUT_MS,
+  );
 
   if (!response.ok) {
     const raw = await response.text();
@@ -276,6 +289,29 @@ function parseApiErrorMessage(raw: string): string | undefined {
   }
 
   return raw;
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  timeoutMs = TAKEOUT_FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Request timed out. Ensure backend is running and reachable.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ── Google Auth ────────────────────────────────────────────────
