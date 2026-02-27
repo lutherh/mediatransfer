@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { TransferStatus } from '../../generated/prisma/client.js';
 import type { JobsService, QueueService } from '../types.js';
@@ -16,6 +16,35 @@ const retryItemSchema = z.object({
   mediaItemId: z.string().min(1),
 });
 
+/**
+ * Attempt to enqueue a bulk transfer. On failure, mark the job as FAILED and send 503.
+ * Returns the enqueue result on success, or `null` if the error response was sent.
+ */
+async function tryEnqueue(
+  queue: QueueService,
+  jobs: JobsService,
+  reply: FastifyReply,
+  jobId: string,
+  params: Parameters<QueueService['enqueueBulk']>[0],
+  errorContext: string,
+): Promise<Awaited<ReturnType<QueueService['enqueueBulk']>> | null> {
+  try {
+    return await queue.enqueueBulk(params);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await jobs.update(jobId, {
+      status: TransferStatus.FAILED,
+      progress: 0,
+      errorMessage: `Failed to ${errorContext}: ${message}`,
+    });
+    reply.code(503).send({
+      error: 'Transfer queue is unavailable. Start services and try again.',
+      jobId,
+    });
+    return null;
+  }
+}
+
 export async function registerTransferRoutes(
   app: FastifyInstance,
   jobs: JobsService,
@@ -32,30 +61,16 @@ export async function registerTransferRoutes(
       keys: input.keys,
     });
 
-    let enqueueResult;
-    try {
-      enqueueResult = await queue.enqueueBulk({
-        transferJobId: job.id,
-        sourceProvider: input.sourceProvider,
-        destProvider: input.destProvider,
-        keys: input.keys,
-        prefix: input.prefix,
-        sourceConfig: input.sourceConfig,
-        destConfig: input.destConfig,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await jobs.update(job.id, {
-        status: TransferStatus.FAILED,
-        progress: 0,
-        errorMessage: `Failed to enqueue transfer job: ${message}`,
-      });
-
-      return reply.code(503).send({
-        error: 'Transfer queue is unavailable. Start services and try again.',
-        jobId: job.id,
-      });
-    }
+    const enqueueResult = await tryEnqueue(queue, jobs, reply, job.id, {
+      transferJobId: job.id,
+      sourceProvider: input.sourceProvider,
+      destProvider: input.destProvider,
+      keys: input.keys,
+      prefix: input.prefix,
+      sourceConfig: input.sourceConfig,
+      destConfig: input.destConfig,
+    }, 'enqueue transfer job');
+    if (!enqueueResult) return;
 
     return reply.code(201).send({ job, enqueueResult });
   });
@@ -157,30 +172,17 @@ export async function registerTransferRoutes(
       errorMessage: null,
     });
 
-    let enqueueResult;
-    try {
-      enqueueResult = await queue.enqueueBulk({
-        transferJobId: job.id,
-        sourceProvider: job.sourceProvider,
-        destProvider: job.destProvider,
-        keys: remainingKeys,
-        sourceConfig: (job.sourceConfig as Record<string, unknown> | null) ?? undefined,
-        destConfig: (job.destConfig as Record<string, unknown> | null) ?? undefined,
-        startIndex: completedCount,
-        totalKeys: total,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await jobs.update(job.id, {
-        status: TransferStatus.FAILED,
-        errorMessage: `Failed to resume transfer job: ${message}`,
-      });
-
-      return reply.code(503).send({
-        error: 'Transfer queue is unavailable. Start services and try again.',
-        jobId: job.id,
-      });
-    }
+    const enqueueResult = await tryEnqueue(queue, jobs, reply, job.id, {
+      transferJobId: job.id,
+      sourceProvider: job.sourceProvider,
+      destProvider: job.destProvider,
+      keys: remainingKeys,
+      sourceConfig: (job.sourceConfig as Record<string, unknown> | null) ?? undefined,
+      destConfig: (job.destConfig as Record<string, unknown> | null) ?? undefined,
+      startIndex: completedCount,
+      totalKeys: total,
+    }, 'resume transfer job');
+    if (!enqueueResult) return;
 
     const resumed = await jobs.get(id);
 
@@ -241,30 +243,17 @@ export async function registerTransferRoutes(
       });
     }
 
-    let enqueueResult;
-    try {
-      enqueueResult = await queue.enqueueBulk({
-        transferJobId: job.id,
-        sourceProvider: job.sourceProvider,
-        destProvider: job.destProvider,
-        keys: [input.mediaItemId],
-        sourceConfig: (job.sourceConfig as Record<string, unknown> | null) ?? undefined,
-        destConfig: (job.destConfig as Record<string, unknown> | null) ?? undefined,
-        startIndex: completedCount,
-        totalKeys: total,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await jobs.update(job.id, {
-        status: TransferStatus.FAILED,
-        errorMessage: `Failed to retry item: ${message}`,
-      });
-
-      return reply.code(503).send({
-        error: 'Transfer queue is unavailable. Start services and try again.',
-        jobId: job.id,
-      });
-    }
+    const enqueueResult = await tryEnqueue(queue, jobs, reply, job.id, {
+      transferJobId: job.id,
+      sourceProvider: job.sourceProvider,
+      destProvider: job.destProvider,
+      keys: [input.mediaItemId],
+      sourceConfig: (job.sourceConfig as Record<string, unknown> | null) ?? undefined,
+      destConfig: (job.destConfig as Record<string, unknown> | null) ?? undefined,
+      startIndex: completedCount,
+      totalKeys: total,
+    }, 'retry item');
+    if (!enqueueResult) return;
 
     const updated = await jobs.get(id);
     return {
@@ -325,30 +314,17 @@ export async function registerTransferRoutes(
       });
     }
 
-    let enqueueResult;
-    try {
-      enqueueResult = await queue.enqueueBulk({
-        transferJobId: job.id,
-        sourceProvider: job.sourceProvider,
-        destProvider: job.destProvider,
-        keys: retryableKeys,
-        sourceConfig: (job.sourceConfig as Record<string, unknown> | null) ?? undefined,
-        destConfig: (job.destConfig as Record<string, unknown> | null) ?? undefined,
-        startIndex: completedCount,
-        totalKeys: total,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await jobs.update(job.id, {
-        status: TransferStatus.FAILED,
-        errorMessage: `Failed to queue incomplete items: ${message}`,
-      });
-
-      return reply.code(503).send({
-        error: 'Transfer queue is unavailable. Start services and try again.',
-        jobId: job.id,
-      });
-    }
+    const enqueueResult = await tryEnqueue(queue, jobs, reply, job.id, {
+      transferJobId: job.id,
+      sourceProvider: job.sourceProvider,
+      destProvider: job.destProvider,
+      keys: retryableKeys,
+      sourceConfig: (job.sourceConfig as Record<string, unknown> | null) ?? undefined,
+      destConfig: (job.destConfig as Record<string, unknown> | null) ?? undefined,
+      startIndex: completedCount,
+      totalKeys: total,
+    }, 'queue incomplete items');
+    if (!enqueueResult) return;
 
     const updated = await jobs.get(id);
     return {

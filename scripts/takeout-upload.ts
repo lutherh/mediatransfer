@@ -4,6 +4,7 @@ import { loadTakeoutConfig } from '../src/takeout/config.js';
 import { runTakeoutUpload } from '../src/takeout/runner.js';
 import type { UploadProgressSnapshot } from '../src/takeout/uploader.js';
 import { validateScalewayConfig, ScalewayProvider } from '../src/providers/scaleway.js';
+import { formatDuration, formatBytes } from '../src/utils/format.js';
 
 dotenv.config();
 
@@ -147,23 +148,3 @@ function createUploadProgressTracker() {
   };
 }
 
-function formatDuration(ms: number): string {
-  const seconds = Math.floor(ms / 1000) % 60;
-  const minutes = Math.floor(ms / 60_000) % 60;
-  const hours = Math.floor(ms / 3_600_000);
-  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
-  if (minutes > 0) return `${minutes}m ${seconds}s`;
-  return `${seconds}s`;
-}
-
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value.toFixed(unitIndex >= 2 ? 1 : 0)} ${units[unitIndex]}`;
-}
