@@ -128,4 +128,66 @@ describe('takeout/incremental', () => {
       expect(result.failedArchives).toBe(0);
     });
   });
+
+  it('moves completed archive to uploaded-archives directory when enabled', async () => {
+    await withTempDir(async (root) => {
+      const config = configFrom(root);
+      await fs.mkdir(config.inputDir, { recursive: true });
+
+      const archivePath = path.join(config.inputDir, 'takeout-001.tgz');
+      await fs.writeFile(archivePath, 'dummy');
+
+      const provider = new MockProvider();
+
+      const extractor = async (_archivePath: string, destinationDir: string) => {
+        const media = path.join(destinationDir, 'Google Photos', 'Album', 'IMG_1.jpg');
+        await fs.mkdir(path.dirname(media), { recursive: true });
+        await fs.writeFile(media, 'img');
+      };
+
+      const result = await runTakeoutIncremental(
+        config,
+        provider,
+        { moveArchiveAfterUpload: true },
+        extractor,
+      );
+
+      expect(result.processedArchives).toBe(1);
+      await expect(fs.access(archivePath)).rejects.toBeDefined();
+      await fs.access(path.join(config.inputDir, 'uploaded-archives', 'takeout-001.tgz'));
+    });
+  });
+
+  it('adds numeric suffix when moving archive and destination name already exists', async () => {
+    await withTempDir(async (root) => {
+      const config = configFrom(root);
+      await fs.mkdir(config.inputDir, { recursive: true });
+
+      const archivePath = path.join(config.inputDir, 'takeout-001.tgz');
+      await fs.writeFile(archivePath, 'dummy');
+
+      const completedDir = path.join(config.inputDir, 'uploaded-archives');
+      await fs.mkdir(completedDir, { recursive: true });
+      await fs.writeFile(path.join(completedDir, 'takeout-001.tgz'), 'existing');
+
+      const provider = new MockProvider();
+
+      const extractor = async (_archivePath: string, destinationDir: string) => {
+        const media = path.join(destinationDir, 'Google Photos', 'Album', 'IMG_1.jpg');
+        await fs.mkdir(path.dirname(media), { recursive: true });
+        await fs.writeFile(media, 'img');
+      };
+
+      const result = await runTakeoutIncremental(
+        config,
+        provider,
+        { moveArchiveAfterUpload: true, completedArchiveDir: completedDir },
+        extractor,
+      );
+
+      expect(result.processedArchives).toBe(1);
+      await fs.access(path.join(completedDir, 'takeout-001.tgz'));
+      await fs.access(path.join(completedDir, 'takeout-001-1.tgz'));
+    });
+  });
 });

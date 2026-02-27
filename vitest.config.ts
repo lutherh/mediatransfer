@@ -5,10 +5,18 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.test.ts'],
+    slowTestThreshold: 250,
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.test.ts'],
+      exclude: [
+        'src/**/*.test.ts',
+        'src/**/*.d.ts',
+        'src/generated/**',
+        'src/**/index.ts',
+        'src/api/server.ts',
+      ],
+      reporter: ['text', 'text-summary', 'json-summary', 'html'],
     },
   },
   resolve: {

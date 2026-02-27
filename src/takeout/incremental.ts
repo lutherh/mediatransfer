@@ -88,6 +88,8 @@ export type IncrementalOptions = {
   maxFailures?: number;
   uploadConcurrency?: number;
   deleteArchiveAfterUpload?: boolean;
+  moveArchiveAfterUpload?: boolean;
+  completedArchiveDir?: string;
   deleteExtractedAfterUpload?: boolean;
   reportDir?: string;
   progressIntervalMs?: number;
@@ -242,6 +244,9 @@ export async function runTakeoutIncremental(
       // Optionally delete the source archive to free download space
       if (options.deleteArchiveAfterUpload) {
         await fs.unlink(archivePath);
+      } else if (options.moveArchiveAfterUpload && !options.dryRun) {
+        const completedArchiveDir = options.completedArchiveDir ?? path.join(config.inputDir, 'uploaded-archives');
+        await moveArchiveToCompletedDir(archivePath, completedArchiveDir);
       }
 
       options.onArchiveComplete?.(archiveName, {
@@ -382,6 +387,53 @@ async function cleanupDir(dirPath: string): Promise<void> {
   } catch {
     // best-effort cleanup
   }
+}
+
+async function moveArchiveToCompletedDir(archivePath: string, completedDir: string): Promise<void> {
+  await fs.mkdir(completedDir, { recursive: true });
+  const destinationPath = await getUniqueDestinationPath(completedDir, path.basename(archivePath));
+
+  try {
+    await fs.rename(archivePath, destinationPath);
+    return;
+  } catch (error) {
+    if (!isCrossDeviceRenameError(error)) {
+      throw error;
+    }
+  }
+
+  await fs.copyFile(archivePath, destinationPath);
+  await fs.unlink(archivePath);
+}
+
+async function getUniqueDestinationPath(directory: string, fileName: string): Promise<string> {
+  const parsed = path.parse(fileName);
+  const baseName = parsed.name;
+  const extension = parsed.ext;
+
+  let suffix = 0;
+  while (true) {
+    const candidateName = suffix === 0
+      ? `${baseName}${extension}`
+      : `${baseName}-${suffix}${extension}`;
+    const candidatePath = path.join(directory, candidateName);
+
+    try {
+      await fs.access(candidatePath);
+      suffix += 1;
+    } catch {
+      return candidatePath;
+    }
+  }
+}
+
+function isCrossDeviceRenameError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && (error as { code?: string }).code === 'EXDEV',
+  );
 }
 
 // ─── Summary / progress helpers ────────────────────────────────────────────
