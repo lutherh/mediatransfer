@@ -27,6 +27,18 @@ import {
 
 export const DEFAULT_MANIFEST_FILE = 'manifest.jsonl';
 
+export type ScanProgressPhase = 'discover' | 'extract' | 'normalize' | 'manifest' | 'done';
+
+export type ScanProgressEvent = {
+  phase: ScanProgressPhase;
+  current: number;
+  total: number;
+  detail?: string;
+  percent: number;
+};
+
+export type ScanProgressCallback = (event: ScanProgressEvent) => void;
+
 export type ScanResult = {
   manifestPath: string;
   mediaRoot: string;
@@ -61,16 +73,31 @@ export type UploadRunResult = {
 export async function runTakeoutScan(
   config: TakeoutConfig,
   extractor?: ArchiveExtractor,
+  onProgress?: ScanProgressCallback,
 ): Promise<ScanResult> {
+  onProgress?.({ phase: 'discover', current: 0, total: 0, percent: 0, detail: 'Discovering archives...' });
+
   const { archives, mediaRoot } = await unpackAndNormalizeTakeout(
     config.inputDir,
     config.workDir,
     extractor,
+    (current, total, archiveName) => {
+      const percent = Math.round((current / Math.max(total, 1)) * 70); // extract is ~70% of work
+      onProgress?.({ phase: 'extract', current, total, percent, detail: archiveName });
+    },
   );
 
-  const entries = await buildManifest(mediaRoot);
+  onProgress?.({ phase: 'manifest', current: 0, total: 0, percent: 72, detail: 'Building manifest...' });
+
+  const entries = await buildManifest(mediaRoot, (processed, total) => {
+    const percent = 72 + Math.round((processed / Math.max(total, 1)) * 26); // manifest is ~26%
+    onProgress?.({ phase: 'manifest', current: processed, total, percent, detail: `${processed}/${total} files` });
+  });
+
   const manifestPath = path.join(config.workDir, DEFAULT_MANIFEST_FILE);
   await persistManifestJsonl(entries, manifestPath);
+
+  onProgress?.({ phase: 'done', current: 1, total: 1, percent: 100, detail: 'Scan complete' });
 
   return {
     manifestPath,

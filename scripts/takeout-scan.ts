@@ -1,14 +1,18 @@
 import * as dotenv from 'dotenv';
 import { loadTakeoutConfig } from '../src/takeout/config.js';
-import { runTakeoutScan } from '../src/takeout/runner.js';
+import { runTakeoutScan, type ScanProgressEvent } from '../src/takeout/runner.js';
 
 dotenv.config();
+
+function emitProgress(event: ScanProgressEvent): void {
+	console.log(`[SCAN_PROGRESS]${JSON.stringify(event)}`);
+}
 
 try {
 	const config = loadTakeoutConfig();
 
 	console.log('🔎 Scanning and unpacking Google Takeout archives...');
-	const result = await runTakeoutScan(config);
+	const result = await runTakeoutScan(config, undefined, emitProgress);
 
 	console.log('✅ Takeout scan completed');
 	console.log(`   Archives: ${result.archives.length}`);

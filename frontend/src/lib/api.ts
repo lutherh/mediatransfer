@@ -107,6 +107,14 @@ export type TakeoutStatus = {
 
 export type TakeoutAction = 'scan' | 'upload' | 'verify' | 'resume' | 'start-services';
 
+export type ScanProgress = {
+  phase: string;
+  current: number;
+  total: number;
+  percent: number;
+  detail?: string;
+};
+
 export type TakeoutActionStatus = {
   running: boolean;
   action?: TakeoutAction;
@@ -115,6 +123,7 @@ export type TakeoutActionStatus = {
   exitCode?: number;
   success?: boolean;
   output: string[];
+  scanProgress?: ScanProgress;
 };
 
 export async function fetchTransfers(): Promise<TransferJob[]> {

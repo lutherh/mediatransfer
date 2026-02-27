@@ -19,6 +19,14 @@ type UploadState = {
 
 type TakeoutAction = 'scan' | 'upload' | 'verify' | 'resume' | 'start-services';
 
+type ScanProgress = {
+  phase: string;
+  current: number;
+  total: number;
+  percent: number;
+  detail?: string;
+};
+
 type ActionStatus = {
   running: boolean;
   action?: TakeoutAction;
@@ -27,6 +35,7 @@ type ActionStatus = {
   exitCode?: number;
   success?: boolean;
   output: string[];
+  scanProgress?: ScanProgress;
 };
 
 const MAX_OUTPUT_LINES = 300;
@@ -239,7 +248,34 @@ function appendOutput(chunk: string): void {
   }
 }
 
+function parseScanProgress(): ScanProgress | undefined {
+  // Find the last [SCAN_PROGRESS] line in output
+  for (let i = RUN_STATUS.output.length - 1; i >= 0; i--) {
+    const line = RUN_STATUS.output[i];
+    if (line.startsWith('[SCAN_PROGRESS]')) {
+      try {
+        const json = line.slice('[SCAN_PROGRESS]'.length);
+        const parsed = JSON.parse(json);
+        return {
+          phase: String(parsed.phase ?? 'unknown'),
+          current: Number(parsed.current ?? 0),
+          total: Number(parsed.total ?? 0),
+          percent: Math.min(100, Math.max(0, Number(parsed.percent ?? 0))),
+          detail: parsed.detail ? String(parsed.detail) : undefined,
+        };
+      } catch {
+        // malformed line, skip
+      }
+    }
+  }
+  return undefined;
+}
+
 function snapshotStatus(): ActionStatus {
+  const scanProgress = (RUN_STATUS.running && RUN_STATUS.action === 'scan')
+    ? parseScanProgress()
+    : undefined;
+
   return {
     running: RUN_STATUS.running,
     action: RUN_STATUS.action,
@@ -248,6 +284,7 @@ function snapshotStatus(): ActionStatus {
     exitCode: RUN_STATUS.exitCode,
     success: RUN_STATUS.success,
     output: [...RUN_STATUS.output],
+    scanProgress,
   };
 }
 
