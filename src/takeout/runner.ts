@@ -7,6 +7,7 @@ import {
   persistManifestJsonl,
 } from './manifest.js';
 import {
+  discoverTakeoutArchives,
   unpackAndNormalizeTakeout,
   type ArchiveExtractor,
 } from './unpack.js';
@@ -77,6 +78,28 @@ export async function runTakeoutScan(
 ): Promise<ScanResult> {
   onProgress?.({ phase: 'discover', current: 0, total: 0, percent: 0, detail: 'Discovering archives...' });
 
+  // Check if there are any new archives to process
+  const pendingArchives = await discoverTakeoutArchives(config.inputDir);
+  const manifestPath = path.join(config.workDir, DEFAULT_MANIFEST_FILE);
+
+  // If no new archives, check for an existing manifest from a prior run
+  if (pendingArchives.length === 0) {
+    try {
+      const existingEntries = await loadManifestJsonl(manifestPath);
+      if (existingEntries.length > 0) {
+        onProgress?.({ phase: 'done', current: 1, total: 1, percent: 100, detail: 'No new archives — existing manifest is up to date' });
+        return {
+          manifestPath,
+          mediaRoot: config.workDir,
+          archives: [],
+          entryCount: existingEntries.length,
+        };
+      }
+    } catch {
+      // No existing manifest — fall through to the normal error
+    }
+  }
+
   const { archives, mediaRoot } = await unpackAndNormalizeTakeout(
     config.inputDir,
     config.workDir,
@@ -94,7 +117,6 @@ export async function runTakeoutScan(
     onProgress?.({ phase: 'manifest', current: processed, total, percent, detail: `${processed}/${total} files` });
   });
 
-  const manifestPath = path.join(config.workDir, DEFAULT_MANIFEST_FILE);
   await persistManifestJsonl(entries, manifestPath);
 
   onProgress?.({ phase: 'done', current: 1, total: 1, percent: 100, detail: 'Scan complete' });

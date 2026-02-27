@@ -99,4 +99,48 @@ describe('takeout/manifest', () => {
       expect(parsed.relativePath).toBe('Album/IMG.jpg');
     });
   });
+
+  it('resolves sidecar for __dup files using original filename', async () => {
+    await withTempDir(async (dir) => {
+      const albumDir = path.join(dir, 'Google Photos', 'Album');
+      await fs.mkdir(albumDir, { recursive: true });
+
+      // Original file with sidecar
+      await fs.writeFile(path.join(albumDir, 'IMG_0057.MOV'), 'video');
+      await fs.writeFile(
+        path.join(albumDir, 'IMG_0057.MOV.json'),
+        JSON.stringify({
+          photoTakenTime: { timestamp: '1595587200' }, // 2020-07-24T12:00:00Z
+        }),
+      );
+
+      // Dup file — no dedicated sidecar, should use original's sidecar
+      await fs.writeFile(path.join(albumDir, 'IMG_0057__dup1.MOV'), 'video-dup');
+
+      const manifest = await buildManifest(path.join(dir, 'Google Photos'));
+      const original = manifest.find((e) => e.relativePath.includes('IMG_0057.MOV') && !e.relativePath.includes('dup'));
+      const dup = manifest.find((e) => e.relativePath.includes('IMG_0057__dup1.MOV'));
+
+      expect(original).toBeDefined();
+      expect(dup).toBeDefined();
+      // Both should have the same date from the sidecar
+      expect(original!.datePath).toBe('2020/07/24');
+      expect(dup!.datePath).toBe('2020/07/24');
+      expect(dup!.sidecarPath).toBeDefined();
+    });
+  });
+
+  it('infers date from filename when no sidecar exists', async () => {
+    await withTempDir(async (dir) => {
+      const albumDir = path.join(dir, 'Google Photos', 'Album');
+      await fs.mkdir(albumDir, { recursive: true });
+
+      // File with date in name but no sidecar
+      const mediaPath = path.join(albumDir, '20201217_155747.mp4');
+      await fs.writeFile(mediaPath, 'vid');
+
+      const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
+      expect(entry.datePath).toBe('2020/12/17');
+    });
+  });
 });

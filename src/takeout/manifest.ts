@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import { inferDateFromFilename } from '../utils/exif.js';
 
 const MEDIA_EXTENSIONS = new Set([
   '.jpg', '.jpeg', '.png', '.gif', '.webp',
@@ -125,6 +126,20 @@ async function findSidecarPath(sourcePath: string): Promise<string | undefined> 
     `${sourcePath}.supplemental-metadata.json`,
   ];
 
+  // For __dupN files, also try sidecar paths matching the original filename.
+  // e.g. IMG_0057__dup1.MOV → look for IMG_0057.MOV.json / IMG_0057.MOV.supplemental-metadata.json
+  const dupMatch = parsed.name.match(/^(.+?)__dup\d+$/);
+  if (dupMatch) {
+    const originalBase = dupMatch[1];
+    const originalFull = path.join(parsed.dir, `${originalBase}${parsed.ext}`);
+    const originalParsed = path.parse(originalFull);
+    candidates.push(
+      `${originalFull}.json`,
+      path.join(originalParsed.dir, `${originalParsed.name}.json`),
+      `${originalFull}.supplemental-metadata.json`,
+    );
+  }
+
   // Check all candidates in parallel — return the first that exists
   const results = await Promise.all(candidates.map((c) => exists(c).then((ok) => ok ? c : null)));
   return results.find((r) => r !== null) ?? undefined;
@@ -135,11 +150,18 @@ async function deriveCapturedDate(
   sidecarPath: string | undefined,
   fallbackDate: Date,
 ): Promise<Date> {
+  // 1. Prefer the Google Takeout sidecar JSON (photoTakenTime / creationTime)
   if (sidecarPath) {
     const fromSidecar = await readSidecarDate(sidecarPath);
     if (fromSidecar) return fromSidecar;
   }
 
+  // 2. Try to infer capture date from the filename (e.g. 20201217_155747.mp4, IMG_20231215_143022.MOV)
+  const filename = path.basename(sourcePath);
+  const fromFilename = inferDateFromFilename(filename);
+  if (fromFilename) return fromFilename;
+
+  // 3. Last resort: file modification time
   return fallbackDate;
 }
 
