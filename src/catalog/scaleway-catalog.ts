@@ -32,6 +32,15 @@ export type CatalogObject = {
   contentLength?: number;
 };
 
+export type CatalogStats = {
+  totalFiles: number;
+  totalBytes: number;
+  imageCount: number;
+  videoCount: number;
+  oldestDate: string | null;
+  newestDate: string | null;
+};
+
 export type CatalogService = {
   listPage(input?: {
     max?: number;
@@ -39,6 +48,7 @@ export type CatalogService = {
     prefix?: string;
   }): Promise<CatalogPage>;
   getObject(encodedKey: string): Promise<CatalogObject>;
+  getStats(): Promise<CatalogStats>;
 };
 
 export type ScalewayCatalogConfig = {
@@ -160,6 +170,54 @@ export class ScalewayCatalogService implements CatalogService {
       etag: response.ETag,
       lastModified: response.LastModified?.toISOString(),
       contentLength: response.ContentLength,
+    };
+  }
+
+  async getStats(): Promise<CatalogStats> {
+    let totalFiles = 0;
+    let totalBytes = 0;
+    let imageCount = 0;
+    let videoCount = 0;
+    let oldest: Date | null = null;
+    let newest: Date | null = null;
+    let continuationToken: string | undefined;
+
+    do {
+      const result = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: this.prefix ? `${this.prefix}/` : undefined,
+          ContinuationToken: continuationToken,
+          MaxKeys: 1000,
+        }),
+      );
+
+      for (const obj of result.Contents ?? []) {
+        if (!obj.Key || obj.Size === undefined) continue;
+        const key = this.stripPrefix(obj.Key);
+        const type = inferMediaType(key);
+        if (type !== 'image' && type !== 'video') continue;
+
+        totalFiles++;
+        totalBytes += Number(obj.Size);
+        if (type === 'image') imageCount++;
+        else videoCount++;
+
+        const capturedAt = inferCapturedAt(key, obj.LastModified ?? new Date());
+        if (!oldest || capturedAt < oldest) oldest = capturedAt;
+        if (!newest || capturedAt > newest) newest = capturedAt;
+      }
+
+      continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+    } while (continuationToken);
+
+    return {
+      totalFiles,
+      totalBytes,
+      imageCount,
+      videoCount,
+      oldestDate: oldest?.toISOString() ?? null,
+      newestDate: newest?.toISOString() ?? null,
     };
   }
 

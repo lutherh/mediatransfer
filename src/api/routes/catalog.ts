@@ -49,6 +49,18 @@ export async function registerCatalogRoutes(
     return page;
   });
 
+  app.get('/catalog/api/stats', async (req, reply) => {
+    if (!catalog) {
+      return reply.status(503).send({
+        error: 'CATALOG_UNAVAILABLE',
+        message: 'Scaleway catalog is not configured',
+      });
+    }
+
+    const stats = await catalog.getStats();
+    return stats;
+  });
+
   app.get('/catalog/media/:encodedKey', async (req, reply) => {
     if (!catalog) {
       return reply.status(503).send({
@@ -153,6 +165,10 @@ function buildCatalogHtml(): string {
     .topbar input, .topbar select { height:34px; border-radius:8px; border:1px solid #31384a; padding:0 10px; background:#0f131c; color:#e8ecf3; }
     .topbar button { height:34px; border-radius:8px; border:1px solid #31384a; background:#1f2633; color:#e8ecf3; padding:0 12px; cursor:pointer; }
     .content { padding:8px; }
+    .stats-bar { display:flex; gap:16px; align-items:center; padding:8px 14px; background:#141923; border-bottom:1px solid #252b39; font-size:13px; color:#9aa6bf; flex-wrap:wrap; }
+    .stats-bar .stat-value { color:#e8ecf3; font-weight:600; }
+    .stats-bar .stat-label { margin-left:3px; }
+    .stats-bar .divider { width:1px; height:18px; background:#31384a; }
     .section-title { position:sticky; top:56px; z-index:5; margin:0; padding:8px 6px; font-size:13px; color:#c8d0df; background:#0f1115f2; }
     .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:6px; }
     .tile { position:relative; width:100%; aspect-ratio:1/1; border-radius:8px; overflow:hidden; background:#161c28; cursor:pointer; content-visibility:auto; contain-intrinsic-size:170px 170px; }
@@ -188,6 +204,17 @@ function buildCatalogHtml(): string {
     </select>
     <button id="reloadBtn">Reload</button>
     <span id="stats" style="font-size:12px;color:#9aa6bf"></span>
+  </div>
+  <div class="stats-bar" id="statsBar" style="display:none">
+    <span>☁️ <span class="stat-value" id="statTotal">—</span><span class="stat-label">files</span></span>
+    <div class="divider"></div>
+    <span>📷 <span class="stat-value" id="statPhotos">—</span><span class="stat-label">photos</span></span>
+    <div class="divider"></div>
+    <span>🎬 <span class="stat-value" id="statVideos">—</span><span class="stat-label">videos</span></span>
+    <div class="divider"></div>
+    <span>💾 <span class="stat-value" id="statSize">—</span></span>
+    <div class="divider"></div>
+    <span>📅 <span class="stat-value" id="statRange">—</span></span>
   </div>
   <div class="content" id="content"></div>
   <div class="status" id="status">Loading…</div>
@@ -519,8 +546,28 @@ function buildCatalogHtml(): string {
     }, { rootMargin: '800px 0px' });
     observer.observe(sentinel);
 
+    async function loadStats() {
+      const statsBar = document.getElementById('statsBar');
+      try {
+        const headers = apiToken ? { 'x-api-key': apiToken } : {};
+        const res = await fetch('/catalog/api/stats' + (apiToken ? '?apiToken=' + apiToken : ''), { headers });
+        if (!res.ok) return;
+        const s = await res.json();
+        document.getElementById('statTotal').textContent = s.totalFiles.toLocaleString();
+        document.getElementById('statPhotos').textContent = s.imageCount.toLocaleString();
+        document.getElementById('statVideos').textContent = s.videoCount.toLocaleString();
+        document.getElementById('statSize').textContent = formatBytes(s.totalBytes);
+        if (s.oldestDate && s.newestDate) {
+          const fmt = (d) => new Date(d).toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' });
+          document.getElementById('statRange').textContent = fmt(s.oldestDate) + ' — ' + fmt(s.newestDate);
+        }
+        statsBar.style.display = 'flex';
+      } catch { /* stats are non-critical */ }
+    }
+
     const saved = Number(sessionStorage.getItem('catalog.scrollY') || '0');
     resetAndReload();
+    loadStats();
     if (saved > 0) {
       setTimeout(() => window.scrollTo(0, saved), 200);
     }

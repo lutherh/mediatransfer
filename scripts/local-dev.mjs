@@ -292,6 +292,11 @@ function startService(state) {
   }
 
   console.log(`Starting ${state.name}...`);
+
+  // Free the port before starting to ensure no stale process blocks us
+  if (state.name === 'Backend') freePort(BACKEND_PORT);
+  if (state.name === 'Frontend') freePort(FRONTEND_PORT);
+
   state.startedAt = Date.now();
   state.consecutiveFailures = 0;
   state.ready = false;
