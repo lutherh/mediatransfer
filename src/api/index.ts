@@ -192,6 +192,8 @@ async function createDefaultServices(): Promise<{ services: ApiServices; dispose
 
 	try {
 		redis = createRedisConnection();
+		// Attach error handler immediately to suppress "[ioredis] Unhandled error event" noise
+		redis.on('error', () => { /* handled below via connect()/ping() rejection */ });
 		await redis.connect(); // explicitly connect (lazyConnect is enabled)
 		await redis.ping(); // verify Redis is actually reachable
 		queue = createTransferQueue(redis);

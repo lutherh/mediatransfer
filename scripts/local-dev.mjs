@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -11,6 +11,9 @@ const rootDir = path.resolve(scriptDir, '..');
 const frontendDir = path.join(rootDir, 'frontend');
 
 const setupOnly = process.argv.includes('--setup-only');
+
+const DOCKER_READY_TIMEOUT_MS = 120_000;
+const DOCKER_POLL_INTERVAL_MS = 3_000;
 
 const BACKEND_HEALTH_URL = 'http://localhost:3000/health';
 const FRONTEND_HEALTH_URL = 'http://localhost:5173/';
@@ -92,6 +95,76 @@ function canRestart(state) {
   return state.restartHistory.length < MAX_RESTARTS_PER_WINDOW;
 }
 
+function isDockerRunning() {
+  try {
+    execSync('docker info', { stdio: 'ignore', timeout: 10_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function launchDockerDesktop() {
+  if (isWindows) {
+    // Try common install locations
+    const paths = [
+      path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Docker', 'Docker', 'Docker Desktop.exe'),
+      path.join(process.env.LOCALAPPDATA ?? '', 'Docker', 'Docker Desktop.exe'),
+    ];
+    for (const p of paths) {
+      if (existsSync(p)) {
+        spawn(p, [], { detached: true, stdio: 'ignore' }).unref();
+        return true;
+      }
+    }
+    // Fallback: try via start command (works if Docker Desktop is on PATH or in Start Menu)
+    spawn('cmd', ['/c', 'start', '', 'Docker Desktop'], { detached: true, stdio: 'ignore', shell: true }).unref();
+    return true;
+  }
+
+  // macOS
+  if (process.platform === 'darwin') {
+    spawn('open', ['-a', 'Docker'], { detached: true, stdio: 'ignore' }).unref();
+    return true;
+  }
+
+  // Linux — systemd
+  try {
+    execSync('systemctl start docker', { stdio: 'ignore', timeout: 15_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureDockerRunning() {
+  if (isDockerRunning()) {
+    console.log('Docker daemon is running.');
+    return;
+  }
+
+  console.log('Docker daemon is not running. Launching Docker Desktop...');
+  const launched = launchDockerDesktop();
+  if (!launched) {
+    console.error('Could not find Docker Desktop. Please start it manually and re-run this script.');
+    process.exit(1);
+  }
+
+  const deadline = Date.now() + DOCKER_READY_TIMEOUT_MS;
+  process.stdout.write('Waiting for Docker to be ready');
+  while (Date.now() < deadline) {
+    await sleep(DOCKER_POLL_INTERVAL_MS);
+    process.stdout.write('.');
+    if (isDockerRunning()) {
+      console.log(' ready!');
+      return;
+    }
+  }
+
+  console.error(`\nDocker did not become ready within ${DOCKER_READY_TIMEOUT_MS / 1000}s. Please start it manually.`);
+  process.exit(1);
+}
+
 async function ensureDependencies() {
   if (!existsSync(path.join(rootDir, 'node_modules'))) {
     console.log('Installing backend dependencies...');
@@ -112,6 +185,7 @@ async function runSetup() {
   }
 
   await ensureDependencies();
+  await ensureDockerRunning();
 
   console.log('Starting local services (Postgres, Redis)...');
   await runCommand('docker', ['compose', 'up', '-d', 'postgres', 'redis'], rootDir);
@@ -121,6 +195,7 @@ async function runSetup() {
 }
 
 async function ensureLocalServicesRunning() {
+  await ensureDockerRunning();
   console.log('Ensuring Postgres/Redis are running...');
   await runCommand('docker', ['compose', 'up', '-d', 'postgres', 'redis'], rootDir);
 }
