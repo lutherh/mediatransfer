@@ -16,6 +16,7 @@ import {
   objectExistsCached,
   preloadDestinationIndex,
   uploadManifest,
+  type UploadProgressSnapshot,
   type UploadSummary,
 } from './uploader.js';
 import {
@@ -47,6 +48,8 @@ export type UploadRunOptions = {
   includeFilter?: string;
   excludeFilter?: string;
   reportDir?: string;
+  progressIntervalMs?: number;
+  onUploadProgress?: (snapshot: UploadProgressSnapshot) => void;
 };
 
 export type UploadRunResult = {
@@ -95,6 +98,8 @@ export async function runTakeoutUpload(
     maxFailures: options.maxFailures,
     includeFilter: options.includeFilter,
     excludeFilter: options.excludeFilter,
+    progressIntervalMs: options.progressIntervalMs,
+    onProgress: options.onUploadProgress,
   });
 
   const state = await loadUploadState(config.statePath);

@@ -8,6 +8,7 @@ import {
   findGooglePhotosRoots,
   normalizeTakeoutMediaRoot,
   unpackAndNormalizeTakeout,
+  detectArchiveParts,
 } from './unpack.js';
 
 async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
@@ -164,8 +165,47 @@ describe('takeout/unpack', () => {
           await fs.mkdir(path.dirname(reportPath), { recursive: true });
           await fs.writeFile(reportPath, '<html></html>');
         },
-      )).rejects.toThrow('Only Takeout metadata (archive_browser.html) was detected.');
+      )).rejects.toThrow('only contain Takeout metadata (archive_browser.html)');
     });
+  });
+
+  it('detects multi-part archive naming and includes part numbers in error', async () => {
+    await withTempDir(async (dir) => {
+      const inputDir = path.join(dir, 'input');
+      const workDir = path.join(dir, 'work');
+      await fs.mkdir(inputDir, { recursive: true });
+      await fs.writeFile(path.join(inputDir, 'takeout-20260224T151101Z-001.tgz'), 'archive');
+
+      const err = await unpackAndNormalizeTakeout(
+        inputDir,
+        workDir,
+        async (_archivePath, destinationDir) => {
+          const reportPath = path.join(destinationDir, 'Takeout', 'archive_browser.html');
+          await fs.mkdir(path.dirname(reportPath), { recursive: true });
+          await fs.writeFile(reportPath, '<html></html>');
+        },
+      ).catch((e: Error) => e);
+
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toContain('You have part(s): 1');
+      expect(err.message).toContain('Download ALL parts');
+      expect(err.message).toContain('takeout.google.com');
+    });
+  });
+
+  it('detectArchiveParts identifies multi-part archives', () => {
+    const result = detectArchiveParts([
+      '/input/takeout-20260224T151101Z-001.tgz',
+      '/input/takeout-20260224T151101Z-003.tgz',
+    ]);
+    expect(result.isMultiPart).toBe(true);
+    expect(result.partNumbers).toEqual([1, 3]);
+  });
+
+  it('detectArchiveParts returns false for non-numbered archives', () => {
+    const result = detectArchiveParts(['/input/photos-backup.zip']);
+    expect(result.isMultiPart).toBe(false);
+    expect(result.partNumbers).toEqual([]);
   });
 
   it('supports direct media folders when no archives are present', async () => {

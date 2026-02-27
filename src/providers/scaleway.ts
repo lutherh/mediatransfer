@@ -125,6 +125,8 @@ export class ScalewayProvider implements CloudProvider {
   private readonly client: S3Client;
   private readonly bucket: string;
   private readonly prefix: string;
+  private readonly multipartPartSizeBytes = 16 * 1024 * 1024;
+  private readonly multipartQueueSize = 4;
 
   constructor(config: ScalewayConfig, client?: S3Client) {
     this.bucket = config.bucket;
@@ -235,6 +237,9 @@ export class ScalewayProvider implements CloudProvider {
   async upload(key: string, stream: Readable, contentType?: string): Promise<void> {
     const upload = new Upload({
       client: this.client,
+      queueSize: this.multipartQueueSize,
+      partSize: this.multipartPartSizeBytes,
+      leavePartsOnError: false,
       params: {
         Bucket: this.bucket,
         Key: this.fullKey(key),

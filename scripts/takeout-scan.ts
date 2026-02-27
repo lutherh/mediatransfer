@@ -17,6 +17,12 @@ try {
 	console.log(`   Entries: ${result.entryCount}`);
 } catch (error) {
 	const message = error instanceof Error ? error.message : String(error);
-	console.error(`❌ Takeout scan failed: ${message}`);
+	console.error('');
+	console.error('❌ Takeout scan failed:');
+	console.error('');
+	for (const line of message.split('\n')) {
+		console.error(`   ${line}`);
+	}
+	console.error('');
 	process.exitCode = 1;
 }
