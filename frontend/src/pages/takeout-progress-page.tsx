@@ -53,6 +53,8 @@ export function TakeoutProgressPage() {
     ? actionMutation.error.message
     : 'Failed to start action.';
   const actionFailureReason = getActionFailureReason(actionStatus?.output ?? []);
+  const lastScanFailed = !isActionRunning && actionStatus?.action === 'scan' && actionStatus?.success === false;
+  const staleStats = lastScanFailed && hasManifest;
 
   return (
     <div className="space-y-4">
@@ -125,35 +127,46 @@ export function TakeoutProgressPage() {
               {renderActionStatus(actionStatus?.action, isActionRunning, actionStatus?.success, actionStatus?.exitCode)}
             </p>
             {!isActionRunning && actionStatus?.success === false ? (
-              <p className="text-xs text-red-600 break-all">
+              <div className="text-xs text-red-600 break-all whitespace-pre-wrap font-mono bg-red-50 rounded p-2 border border-red-200">
                 {actionFailureReason ?? 'Action failed. See "Latest command output" below for details.'}
-              </p>
+              </div>
             ) : null}
           </div>
         )}
       </Card>
 
-      <Card className="space-y-3">
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-medium text-slate-700">Overall progress</p>
-          <p className="text-sm font-semibold text-slate-900">{progressPercent}%</p>
-        </div>
-        <div className="h-3 w-full rounded-full bg-slate-200">
-          <div
-            className="h-full rounded-full bg-slate-900 transition-all"
-            style={{ width: `${progressPercent}%` }}
-          />
-        </div>
-        <p className="text-xs text-slate-500">Updated at: {formatDateTime(data.stateUpdatedAt)}</p>
-      </Card>
+      {staleStats ? (
+        <Card className="border-amber-400 bg-amber-50">
+          <p className="text-xs font-medium text-amber-800">
+            ⚠ The last scan failed, but stats below are from a previous successful scan.
+            Fix the error above and re-run Scan to refresh.
+          </p>
+        </Card>
+      ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <MetricCard label="Total" value={data.counts.total} />
-        <MetricCard label="Processed" value={data.counts.processed} />
-        <MetricCard label="Pending" value={data.counts.pending} />
-        <MetricCard label="Uploaded" value={data.counts.uploaded} />
-        <MetricCard label="Skipped" value={data.counts.skipped} />
-        <MetricCard label="Failed" value={data.counts.failed} />
+      <div className={staleStats ? 'opacity-50' : undefined}>
+        <Card className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium text-slate-700">Overall progress</p>
+            <p className="text-sm font-semibold text-slate-900">{progressPercent}%</p>
+          </div>
+          <div className="h-3 w-full rounded-full bg-slate-200">
+            <div
+              className="h-full rounded-full bg-slate-900 transition-all"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+          <p className="text-xs text-slate-500">Updated at: {formatDateTime(data.stateUpdatedAt)}</p>
+        </Card>
+
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 mt-3">
+          <MetricCard label="Total" value={data.counts.total} />
+          <MetricCard label="Processed" value={data.counts.processed} />
+          <MetricCard label="Pending" value={data.counts.pending} />
+          <MetricCard label="Uploaded" value={data.counts.uploaded} />
+          <MetricCard label="Skipped" value={data.counts.skipped} />
+          <MetricCard label="Failed" value={data.counts.failed} />
+        </div>
       </div>
 
       <Card className="space-y-2">
@@ -264,6 +277,22 @@ function getActionFailureReason(output: string[]): string | undefined {
     return undefined;
   }
 
+  // Look for the "❌ ... failed:" marker that starts a multi-line error block
+  const failMarkerIndex = output.findIndex((line) => /❌.*failed:/i.test(line));
+  if (failMarkerIndex >= 0) {
+    // Collect lines from the marker until the next blank line or "Action finished"
+    const errorLines: string[] = [];
+    for (let i = failMarkerIndex; i < output.length; i++) {
+      const line = output[i].trim();
+      if (/^Action finished with code/i.test(line)) break;
+      if (line) errorLines.push(line);
+    }
+    if (errorLines.length > 0) {
+      return errorLines.join('\n');
+    }
+  }
+
+  // Fallback: find a single line with an error pattern
   const patterns = [
     /\berror\b/i,
     /\bfailed\b/i,

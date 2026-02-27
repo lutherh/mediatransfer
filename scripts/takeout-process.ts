@@ -7,6 +7,7 @@ import {
   loadArchiveState,
   formatIncrementalProgress,
 } from '../src/takeout/incremental.js';
+import type { UploadProgressSnapshot } from '../src/takeout/uploader.js';
 import { loadArchiveBrowserSummary } from '../src/takeout/archive-browser.js';
 import { validateScalewayConfig, ScalewayProvider } from '../src/providers/scaleway.js';
 import { discoverTakeoutArchives } from '../src/takeout/unpack.js';
@@ -32,6 +33,10 @@ const keepExtracted = args.includes('--keep-extracted');
 const maxFailures = readNumberArg(args, '--max-failures');
 const concurrency = readNumberArg(args, '--concurrency');
 const statusOnly = args.includes('--status');
+const progressIntervalSec = readNumberArg(args, '--progress-interval-sec');
+const progressIntervalMs = progressIntervalSec !== undefined
+  ? Math.max(0.5, progressIntervalSec) * 1000
+  : undefined;
 
 // ─── Status-only mode ──────────────────────────────────────────────────────
 if (statusOnly) {
@@ -104,11 +109,13 @@ console.log(`  Upload concurrency: ${concurrency ?? config.uploadConcurrency}`);
 console.log('');
 
 const startTime = Date.now();
+const uploadProgressTracker = createUploadProgressTracker();
 
 const result = await runTakeoutIncremental(config, provider, {
   dryRun,
   maxFailures,
   uploadConcurrency: concurrency,
+  progressIntervalMs,
   deleteArchiveAfterUpload: deleteArchive,
   deleteExtractedAfterUpload: !keepExtracted,
   onArchiveStart(name, index, total) {
@@ -116,6 +123,7 @@ const result = await runTakeoutIncremental(config, provider, {
     console.log(`\n📦 [${index}/${total}] Processing: ${name}  (elapsed: ${elapsed})`);
   },
   onArchiveComplete(name, summary) {
+    uploadProgressTracker.finishArchive(name);
     console.log(
       `   ✅ Done: ${summary.uploaded} uploaded, ${summary.skipped} skipped, ${summary.failed} failed`,
     );
@@ -124,6 +132,9 @@ const result = await runTakeoutIncremental(config, provider, {
     const message = error instanceof Error ? error.message : String(error);
     console.log(`   ❌ Failed: ${message}`);
     console.log('   Continuing to next archive...');
+  },
+  onUploadProgress(name, snapshot) {
+    uploadProgressTracker.render(name, snapshot);
   },
 });
 
@@ -196,4 +207,94 @@ async function findArchiveBrowserPath(config: { inputDir: string; workDir: strin
   }
 
   return undefined;
+}
+
+type UploadProgressState = {
+  lastRenderAtMs: number;
+  lastSnapshotAtMs: number;
+  lastTransferredBytes: number;
+};
+
+function createUploadProgressTracker() {
+  const states = new Map<string, UploadProgressState>();
+
+  return {
+    render(archiveName: string, snapshot: UploadProgressSnapshot): void {
+      const now = Date.now();
+      const state = states.get(archiveName) ?? {
+        lastRenderAtMs: 0,
+        lastSnapshotAtMs: 0,
+        lastTransferredBytes: 0,
+      };
+
+      const elapsedSinceSnapshotMs = Math.max(1, now - state.lastSnapshotAtMs);
+      const deltaBytes = Math.max(0, snapshot.transferredBytes - state.lastTransferredBytes);
+      const speedBytesPerSec = Math.floor((deltaBytes / elapsedSinceSnapshotMs) * 1000);
+      const remainingBytes = Math.max(0, snapshot.totalBytes - snapshot.transferredBytes);
+      const etaSeconds = speedBytesPerSec > 0
+        ? Math.floor(remainingBytes / speedBytesPerSec)
+        : undefined;
+
+      const lastStatus = snapshot.lastItem?.status;
+      const isImportant = lastStatus === 'retrying' || lastStatus === 'failed';
+      const shouldRender =
+        snapshot.phase === 'completed' ||
+        isImportant ||
+        now - state.lastRenderAtMs >= 1500;
+
+      state.lastSnapshotAtMs = now;
+      state.lastTransferredBytes = snapshot.transferredBytes;
+
+      if (!shouldRender) {
+        states.set(archiveName, state);
+        return;
+      }
+
+      const itemPercent = snapshot.totalItems > 0
+        ? Math.floor((snapshot.processedItems / snapshot.totalItems) * 100)
+        : 100;
+      const bytePercent = snapshot.totalBytes > 0
+        ? Math.floor((snapshot.transferredBytes / snapshot.totalBytes) * 100)
+        : 100;
+
+      const itemInfo = `${snapshot.processedItems}/${snapshot.totalItems} (${itemPercent}%)`;
+      const byteInfo = `${formatBytes(snapshot.transferredBytes)} / ${formatBytes(snapshot.totalBytes)} (${bytePercent}%)`;
+      const speedInfo = `${formatBytes(speedBytesPerSec)}/s`;
+      const etaInfo = etaSeconds !== undefined ? formatDuration(etaSeconds * 1000) : '—';
+
+      console.log(
+        `   ⬆️ ${archiveName} | items ${itemInfo} | bytes ${byteInfo} | speed ${speedInfo} | ETA ${etaInfo} | in-flight ${snapshot.inFlightItems}`,
+      );
+
+      if (snapshot.lastItem?.status === 'retrying') {
+        const fileLabel = path.basename(snapshot.lastItem.key);
+        console.log(
+          `      ↻ retrying ${fileLabel} (attempt ${snapshot.lastItem.attempt}, waiting ${Math.ceil((snapshot.lastItem.delayMs ?? 0) / 1000)}s): ${snapshot.lastItem.error ?? 'upload error'}`,
+        );
+      }
+
+      if (snapshot.lastItem?.status === 'failed') {
+        const fileLabel = path.basename(snapshot.lastItem.key);
+        console.log(`      ❌ failed ${fileLabel}: ${snapshot.lastItem.error ?? 'upload error'}`);
+      }
+
+      state.lastRenderAtMs = now;
+      states.set(archiveName, state);
+    },
+    finishArchive(archiveName: string): void {
+      states.delete(archiveName);
+    },
+  };
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(unitIndex >= 2 ? 1 : 0)} ${units[unitIndex]}`;
 }

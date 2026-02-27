@@ -17,6 +17,7 @@ import {
 import {
   loadUploadState,
   uploadManifest,
+  type UploadProgressSnapshot,
   type UploadSummary,
 } from './uploader.js';
 import {
@@ -89,9 +90,11 @@ export type IncrementalOptions = {
   deleteArchiveAfterUpload?: boolean;
   deleteExtractedAfterUpload?: boolean;
   reportDir?: string;
+  progressIntervalMs?: number;
   onArchiveStart?: (archiveName: string, index: number, total: number) => void;
   onArchiveComplete?: (archiveName: string, summary: UploadSummary) => void;
   onArchiveError?: (archiveName: string, error: unknown) => void;
+  onUploadProgress?: (archiveName: string, snapshot: UploadProgressSnapshot) => void;
 };
 
 export type IncrementalResult = {
@@ -330,6 +333,10 @@ async function processArchiveEntries(
     retryCount: config.uploadRetryCount,
     dryRun: options.dryRun,
     maxFailures: options.maxFailures,
+    progressIntervalMs: options.progressIntervalMs,
+    onProgress: options.onUploadProgress
+      ? (snapshot) => options.onUploadProgress?.(archiveName, snapshot)
+      : undefined,
   });
 
   // 5. Append to global manifest
