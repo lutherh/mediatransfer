@@ -282,9 +282,12 @@ function buildCatalogHtml(): string {
       if (prefix) params.set('prefix', prefix);
       if (apiToken) params.set('apiToken', apiToken);
 
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 45000);
       try {
         const res = await fetch('/catalog/api/items?' + params.toString(), {
           headers: apiToken ? { 'x-api-key': apiToken } : {},
+          signal: controller.signal,
         });
         if (!res.ok) throw new Error('Request failed: ' + res.status);
 
@@ -304,8 +307,9 @@ function buildCatalogHtml(): string {
           statusEl.textContent = hasMore ? 'Scroll for more' : (allItems.length ? 'Completed' : 'No items found');
         }
       } catch (err) {
-        statusEl.textContent = 'Error loading catalog';
+        statusEl.textContent = 'Error loading catalog — click Reload to retry';
       } finally {
+        clearTimeout(timeout);
         loading = false;
       }
     }
@@ -550,7 +554,10 @@ function buildCatalogHtml(): string {
       const statsBar = document.getElementById('statsBar');
       try {
         const headers = apiToken ? { 'x-api-key': apiToken } : {};
-        const res = await fetch('/catalog/api/stats' + (apiToken ? '?apiToken=' + apiToken : ''), { headers });
+        const statsCtrl = new AbortController();
+        const statsTimeout = setTimeout(() => statsCtrl.abort(), 60000);
+        const res = await fetch('/catalog/api/stats' + (apiToken ? '?apiToken=' + apiToken : ''), { headers, signal: statsCtrl.signal });
+        clearTimeout(statsTimeout);
         if (!res.ok) return;
         const s = await res.json();
         document.getElementById('statTotal').textContent = s.totalFiles.toLocaleString();
