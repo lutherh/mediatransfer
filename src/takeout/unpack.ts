@@ -17,6 +17,8 @@ export type UnpackResult = {
   mediaRoot: string;
 };
 
+export type ExtractProgressCallback = (current: number, total: number, archiveName: string) => void;
+
 /**
  * Discover Google Takeout archive files in input directory.
  */
@@ -38,10 +40,13 @@ export async function extractTakeoutArchives(
   archivePaths: string[],
   workDir: string,
   extractor: ArchiveExtractor = extractArchive,
+  onProgress?: ExtractProgressCallback,
 ): Promise<void> {
   await fs.mkdir(workDir, { recursive: true });
 
-  for (const archivePath of archivePaths) {
+  for (let i = 0; i < archivePaths.length; i++) {
+    const archivePath = archivePaths[i];
+    onProgress?.(i + 1, archivePaths.length, path.basename(archivePath));
     await extractor(archivePath, workDir);
   }
 }
@@ -99,6 +104,7 @@ export async function unpackAndNormalizeTakeout(
   inputDir: string,
   workDir: string,
   extractor: ArchiveExtractor = extractArchive,
+  onExtractProgress?: ExtractProgressCallback,
 ): Promise<UnpackResult> {
   const archives = await discoverTakeoutArchives(inputDir);
   if (archives.length === 0) {
@@ -116,7 +122,7 @@ export async function unpackAndNormalizeTakeout(
     );
   }
 
-  await extractTakeoutArchives(archives, workDir, extractor);
+  await extractTakeoutArchives(archives, workDir, extractor, onExtractProgress);
 
   const roots = await findGooglePhotosRoots(workDir);
   if (roots.length > 0) {

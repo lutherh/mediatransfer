@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ReactElement } from 'react';
+import { useRef, type ReactElement } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import {
@@ -7,6 +7,7 @@ import {
   fetchTakeoutStatus,
   runTakeoutAction,
   type TakeoutAction,
+  type ScanProgress,
 } from '@/lib/api';
 
 export function TakeoutProgressPage() {
@@ -133,6 +134,12 @@ export function TakeoutProgressPage() {
             <p className="text-xs text-slate-600">
               {renderActionStatus(actionStatus?.action, isActionRunning, actionStatus?.success, actionStatus?.exitCode)}
             </p>
+            {isActionRunning && actionStatus?.action === 'scan' && actionStatus?.scanProgress ? (
+              <ScanProgressBar
+                progress={actionStatus.scanProgress}
+                startedAt={actionStatus.startedAt}
+              />
+            ) : null}
             {!isActionRunning && actionStatus?.success === false ? (
               <div className="text-xs text-red-600 break-all whitespace-pre-wrap font-mono bg-red-50 rounded p-2 border border-red-200">
                 {actionFailureReason ?? 'Action failed. See "Latest command output" below for details.'}
@@ -239,6 +246,94 @@ function ActionButton({
     >
       {children}
     </Button>
+  );
+}
+
+const PHASE_LABELS: Record<string, string> = {
+  discover: 'Discovering archives',
+  extract: 'Extracting archives',
+  normalize: 'Normalizing folders',
+  manifest: 'Building manifest',
+  done: 'Complete',
+};
+
+function formatEta(seconds: number): string {
+  if (seconds < 60) return `~${Math.ceil(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const secs = Math.ceil(seconds % 60);
+  if (minutes < 60) return `~${minutes}m ${secs}s`;
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `~${hours}h ${mins}m`;
+}
+
+function ScanProgressBar({
+  progress,
+  startedAt,
+}: {
+  progress: ScanProgress;
+  startedAt?: string;
+}): ReactElement {
+  const prevRef = useRef<{ percent: number; timestamp: number } | null>(null);
+  const etaRef = useRef<number | null>(null);
+
+  const percent = progress.percent;
+  const phaseLabel = PHASE_LABELS[progress.phase] ?? progress.phase;
+
+  // Compute ETA based on elapsed time and progress
+  if (startedAt && percent > 0 && percent < 100) {
+    const elapsed = (Date.now() - new Date(startedAt).getTime()) / 1000;
+    const etaFromStart = elapsed * ((100 - percent) / percent);
+
+    // Also compute rate-based ETA from last update for smoothing
+    const prev = prevRef.current;
+    let etaFromRate: number | null = null;
+    if (prev && percent > prev.percent) {
+      const dt = (Date.now() - prev.timestamp) / 1000;
+      const dp = percent - prev.percent;
+      const rate = dp / dt; // percent per second
+      if (rate > 0) {
+        etaFromRate = (100 - percent) / rate;
+      }
+    }
+
+    // Blend: prefer rate-based when available, otherwise use elapsed-based
+    const eta = etaFromRate != null
+      ? etaFromRate * 0.6 + etaFromStart * 0.4
+      : etaFromStart;
+
+    etaRef.current = eta;
+  } else if (percent >= 100) {
+    etaRef.current = 0;
+  }
+
+  // Track last known percent for rate calculation
+  if (!prevRef.current || prevRef.current.percent !== percent) {
+    prevRef.current = { percent, timestamp: Date.now() };
+  }
+
+  const detailText = progress.detail ?? '';
+  const etaText = etaRef.current != null && etaRef.current > 0 ? formatEta(etaRef.current) : '';
+
+  return (
+    <div className="space-y-1.5 mt-2">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-slate-700 font-medium">{phaseLabel}{detailText ? `: ${detailText}` : ''}</span>
+        <span className="text-slate-500 tabular-nums">{percent}%{etaText ? ` • ETA ${etaText}` : ''}</span>
+      </div>
+      <div className="h-2.5 w-full rounded-full bg-slate-200 overflow-hidden">
+        <div
+          className="h-full rounded-full bg-blue-600 transition-all duration-700 ease-out"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      {progress.total > 0 && progress.phase !== 'done' ? (
+        <p className="text-[11px] text-slate-400 tabular-nums">
+          {progress.current} / {progress.total}
+          {progress.phase === 'extract' ? ' archives' : progress.phase === 'manifest' ? ' files' : ''}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

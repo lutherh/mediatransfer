@@ -24,9 +24,16 @@ export type ManifestEntry = {
  */
 const IO_CONCURRENCY = 32;
 
-export async function buildManifest(mediaRoot: string): Promise<ManifestEntry[]> {
+export type ManifestProgressCallback = (processed: number, total: number) => void;
+
+export async function buildManifest(
+  mediaRoot: string,
+  onProgress?: ManifestProgressCallback,
+): Promise<ManifestEntry[]> {
   const files = await listMediaFiles(mediaRoot);
   const entries: ManifestEntry[] = [];
+
+  onProgress?.(0, files.length);
 
   // Process files in parallel batches for much faster manifest building
   for (let i = 0; i < files.length; i += IO_CONCURRENCY) {
@@ -54,6 +61,7 @@ export async function buildManifest(mediaRoot: string): Promise<ManifestEntry[]>
       }),
     );
     entries.push(...batchResults);
+    onProgress?.(Math.min(i + batch.length, files.length), files.length);
   }
 
   entries.sort((a, b) => a.relativePath.localeCompare(b.relativePath));

@@ -15,8 +15,10 @@ const setupOnly = process.argv.includes('--setup-only');
 const DOCKER_READY_TIMEOUT_MS = 120_000;
 const DOCKER_POLL_INTERVAL_MS = 3_000;
 
-const BACKEND_HEALTH_URL = 'http://localhost:3000/health';
-const FRONTEND_HEALTH_URL = 'http://localhost:5173/';
+const BACKEND_PORT = 3000;
+const FRONTEND_PORT = 5173;
+const BACKEND_HEALTH_URL = `http://localhost:${BACKEND_PORT}/health`;
+const FRONTEND_HEALTH_URL = `http://localhost:${FRONTEND_PORT}/`;
 const HEALTH_CHECK_INTERVAL_MS = 15_000;
 const HEALTH_REQUEST_TIMEOUT_MS = 4_000;
 const STARTUP_GRACE_MS = 60_000;
@@ -93,6 +95,58 @@ function recordRestart(state) {
 function canRestart(state) {
   pruneRestartHistory(state.restartHistory);
   return state.restartHistory.length < MAX_RESTARTS_PER_WINDOW;
+}
+
+function freePort(port) {
+  try {
+    if (isWindows) {
+      // netstat output: "  TCP  127.0.0.1:3000  0.0.0.0:0  LISTENING  12345"
+      const out = execSync(`netstat -ano | findstr "LISTENING" | findstr ":${port} "`, {
+        encoding: 'utf8',
+        timeout: 10_000,
+        stdio: ['pipe', 'pipe', 'ignore'],
+      });
+      const pids = new Set();
+      for (const line of out.split('\n')) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 5) {
+          const pid = Number(parts[parts.length - 1]);
+          // Never kill our own process or PID 0/4 (system)
+          if (pid > 4 && pid !== process.pid) pids.add(pid);
+        }
+      }
+      for (const pid of pids) {
+        try {
+          execSync(`taskkill /PID ${pid} /F`, { stdio: 'ignore', timeout: 5_000 });
+          console.log(`Killed stale process ${pid} on port ${port}`);
+        } catch { /* already gone */ }
+      }
+    } else {
+      // Unix: use lsof
+      const out = execSync(`lsof -ti :${port}`, {
+        encoding: 'utf8',
+        timeout: 10_000,
+        stdio: ['pipe', 'pipe', 'ignore'],
+      });
+      for (const pidStr of out.trim().split('\n')) {
+        const pid = Number(pidStr);
+        if (pid > 0 && pid !== process.pid) {
+          try {
+            process.kill(pid, 'SIGKILL');
+            console.log(`Killed stale process ${pid} on port ${port}`);
+          } catch { /* already gone */ }
+        }
+      }
+    }
+  } catch {
+    // No process on that port — nothing to do
+  }
+}
+
+function freeAllPorts() {
+  console.log('Freeing ports...');
+  freePort(BACKEND_PORT);
+  freePort(FRONTEND_PORT);
 }
 
 function isDockerRunning() {
@@ -186,6 +240,10 @@ async function runSetup() {
 
   await ensureDependencies();
   await ensureDockerRunning();
+
+  // Stop any existing containers (e.g. stale 'app' service) that may conflict
+  console.log('Cleaning up existing containers...');
+  await runCommand('docker', ['compose', 'down'], rootDir);
 
   console.log('Starting local services (Postgres, Redis)...');
   await runCommand('docker', ['compose', 'up', '-d', 'postgres', 'redis'], rootDir);
@@ -353,6 +411,8 @@ async function main() {
       console.log('Setup complete. Run "npm run app:dev" to launch backend + frontend.');
       return;
     }
+
+    freeAllPorts();
 
     console.log('Starting backend and frontend with watchdog...');
 
