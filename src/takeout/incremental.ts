@@ -411,19 +411,27 @@ async function getUniqueDestinationPath(directory: string, fileName: string): Pr
   const baseName = parsed.name;
   const extension = parsed.ext;
 
-  let suffix = 0;
-  while (true) {
-    const candidateName = suffix === 0
-      ? `${baseName}${extension}`
-      : `${baseName}-${suffix}${extension}`;
-    const candidatePath = path.join(directory, candidateName);
+  // Read existing files once and compute next available suffix in memory
+  let existingNames: Set<string>;
+  try {
+    const dirEntries = await fs.readdir(directory);
+    existingNames = new Set(dirEntries);
+  } catch {
+    // Directory doesn't exist yet — no collisions possible
+    return path.join(directory, fileName);
+  }
 
-    try {
-      await fs.access(candidatePath);
-      suffix += 1;
-    } catch {
-      return candidatePath;
+  if (!existingNames.has(fileName)) {
+    return path.join(directory, fileName);
+  }
+
+  let suffix = 1;
+  while (true) {
+    const candidateName = `${baseName}-${suffix}${extension}`;
+    if (!existingNames.has(candidateName)) {
+      return path.join(directory, candidateName);
     }
+    suffix += 1;
   }
 }
 

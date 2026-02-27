@@ -138,4 +138,80 @@ describe('jobs/transfer-worker', () => {
       expect.objectContaining({ level: 'WARN', message: 'Retrying transfer item' }),
     );
   });
+
+  it('retries on structured system error codes (ECONNRESET)', async () => {
+    const econnresetError = Object.assign(new Error('syscall failed'), { code: 'ECONNRESET' });
+    const source: CloudProvider = {
+      name: 'google-photos',
+      async list() { return []; },
+      download: vi
+        .fn()
+        .mockRejectedValueOnce(econnresetError)
+        .mockResolvedValue(Readable.from(['ok'])),
+      async upload() {},
+      async delete() {},
+    };
+
+    const dest: CloudProvider = {
+      name: 'scaleway',
+      async list() { return []; },
+      async download() { return Readable.from([]); },
+      async upload() {},
+      async delete() {},
+    };
+
+    const retryDelay = vi.fn().mockResolvedValue(undefined);
+
+    await runTransferWorkerTask(
+      {
+        transferJobId: 'job-code',
+        sourceProvider: source,
+        destProvider: dest,
+        items: [{ key: 'f.jpg' }],
+      },
+      { retryDelay },
+    );
+
+    expect(source.download).toHaveBeenCalledTimes(2);
+    expect(retryDelay).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries on AWS SDK 429 (rate limit) via $metadata', async () => {
+    const rateLimitError = Object.assign(new Error('Too Many Requests'), {
+      $metadata: { httpStatusCode: 429 },
+    });
+    const source: CloudProvider = {
+      name: 'scaleway-s3',
+      async list() { return []; },
+      download: vi
+        .fn()
+        .mockRejectedValueOnce(rateLimitError)
+        .mockResolvedValue(Readable.from(['data'])),
+      async upload() {},
+      async delete() {},
+    };
+
+    const dest: CloudProvider = {
+      name: 'scaleway',
+      async list() { return []; },
+      async download() { return Readable.from([]); },
+      async upload() {},
+      async delete() {},
+    };
+
+    const retryDelay = vi.fn().mockResolvedValue(undefined);
+
+    await runTransferWorkerTask(
+      {
+        transferJobId: 'job-429',
+        sourceProvider: source,
+        destProvider: dest,
+        items: [{ key: 'r.jpg' }],
+      },
+      { retryDelay },
+    );
+
+    expect(source.download).toHaveBeenCalledTimes(2);
+    expect(retryDelay).toHaveBeenCalledTimes(1);
+  });
 });

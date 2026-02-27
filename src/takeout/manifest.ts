@@ -18,29 +18,42 @@ export type ManifestEntry = {
   destinationKey: string;
 };
 
+/**
+ * Concurrency limit for parallel filesystem operations.
+ * Prevents overwhelming the OS with too many open file handles.
+ */
+const IO_CONCURRENCY = 32;
+
 export async function buildManifest(mediaRoot: string): Promise<ManifestEntry[]> {
   const files = await listMediaFiles(mediaRoot);
   const entries: ManifestEntry[] = [];
 
-  for (const sourcePath of files) {
-    const stat = await fs.stat(sourcePath);
-    const relativePath = toPosix(path.relative(mediaRoot, sourcePath));
-    const sidecarPath = await findSidecarPath(sourcePath);
-    const capturedAtDate = await deriveCapturedDate(sourcePath, sidecarPath, stat.mtime);
-    const capturedAt = capturedAtDate.toISOString();
-    const datePath = toDatePath(capturedAtDate);
-    const destinationKey = `${datePath}/${sanitizeRelativePath(relativePath)}`;
+  // Process files in parallel batches for much faster manifest building
+  for (let i = 0; i < files.length; i += IO_CONCURRENCY) {
+    const batch = files.slice(i, i + IO_CONCURRENCY);
+    const batchResults = await Promise.all(
+      batch.map(async (sourcePath) => {
+        const stat = await fs.stat(sourcePath);
+        const relativePath = toPosix(path.relative(mediaRoot, sourcePath));
+        const sidecarPath = await findSidecarPath(sourcePath);
+        const capturedAtDate = await deriveCapturedDate(sourcePath, sidecarPath, stat.mtime);
+        const capturedAt = capturedAtDate.toISOString();
+        const datePath = toDatePath(capturedAtDate);
+        const destinationKey = `${datePath}/${sanitizeRelativePath(relativePath)}`;
 
-    entries.push({
-      sourcePath,
-      relativePath,
-      sidecarPath,
-      size: stat.size,
-      mtimeMs: stat.mtimeMs,
-      capturedAt,
-      datePath,
-      destinationKey,
-    });
+        return {
+          sourcePath,
+          relativePath,
+          sidecarPath,
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+          capturedAt,
+          datePath,
+          destinationKey,
+        };
+      }),
+    );
+    entries.push(...batchResults);
   }
 
   entries.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
@@ -104,11 +117,9 @@ async function findSidecarPath(sourcePath: string): Promise<string | undefined> 
     `${sourcePath}.supplemental-metadata.json`,
   ];
 
-  for (const candidate of candidates) {
-    if (await exists(candidate)) return candidate;
-  }
-
-  return undefined;
+  // Check all candidates in parallel — return the first that exists
+  const results = await Promise.all(candidates.map((c) => exists(c).then((ok) => ok ? c : null)));
+  return results.find((r) => r !== null) ?? undefined;
 }
 
 async function deriveCapturedDate(
