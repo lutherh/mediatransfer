@@ -64,10 +64,14 @@ const IMAGE_EXTENSIONS = new Set([
 ]);
 const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'avi', 'm4v', '3gp', 'mkv', 'webm']);
 
+const S3_REQUEST_TIMEOUT_MS = 30_000;
+const STATS_CACHE_TTL_MS = 5 * 60_000;
+
 export class ScalewayCatalogService implements CatalogService {
   private readonly client: S3Client;
   private readonly bucket: string;
   private readonly prefix: string;
+  private statsCache: { data: CatalogStats; expiresAt: number } | null = null;
 
   constructor(config: ScalewayCatalogConfig, client?: S3Client) {
     this.bucket = config.bucket;
@@ -102,6 +106,7 @@ export class ScalewayCatalogService implements CatalogService {
           ContinuationToken: continuationToken,
           MaxKeys: listMax,
         }),
+        { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
       );
 
       const mediaItems = (result.Contents ?? [])
@@ -174,6 +179,10 @@ export class ScalewayCatalogService implements CatalogService {
   }
 
   async getStats(): Promise<CatalogStats> {
+    if (this.statsCache && Date.now() < this.statsCache.expiresAt) {
+      return this.statsCache.data;
+    }
+
     let totalFiles = 0;
     let totalBytes = 0;
     let imageCount = 0;
@@ -190,6 +199,7 @@ export class ScalewayCatalogService implements CatalogService {
           ContinuationToken: continuationToken,
           MaxKeys: 1000,
         }),
+        { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
       );
 
       for (const obj of result.Contents ?? []) {
@@ -211,7 +221,7 @@ export class ScalewayCatalogService implements CatalogService {
       continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
     } while (continuationToken);
 
-    return {
+    const stats: CatalogStats = {
       totalFiles,
       totalBytes,
       imageCount,
@@ -219,6 +229,9 @@ export class ScalewayCatalogService implements CatalogService {
       oldestDate: oldest?.toISOString() ?? null,
       newestDate: newest?.toISOString() ?? null,
     };
+
+    this.statsCache = { data: stats, expiresAt: Date.now() + STATS_CACHE_TTL_MS };
+    return stats;
   }
 
   private fullPrefix(extra?: string): string {
