@@ -29,6 +29,11 @@ const provider = new ScalewayProvider(scalewayConfig);
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const deleteArchive = args.includes('--delete-archive');
+const moveArchive = args.includes('--move-archive') || args.includes('--archive-complete-dir');
+const archiveCompleteDirArg = readStringArg(args, '--archive-complete-dir');
+const archiveCompleteDir = archiveCompleteDirArg
+  ? path.resolve(archiveCompleteDirArg)
+  : path.join(config.inputDir, 'uploaded-archives');
 const keepExtracted = args.includes('--keep-extracted');
 const maxFailures = readNumberArg(args, '--max-failures');
 const concurrency = readNumberArg(args, '--concurrency');
@@ -37,6 +42,11 @@ const progressIntervalSec = readNumberArg(args, '--progress-interval-sec');
 const progressIntervalMs = progressIntervalSec !== undefined
   ? Math.max(0.5, progressIntervalSec) * 1000
   : undefined;
+
+if (deleteArchive && moveArchive) {
+  console.error('Choose only one archive cleanup mode: --delete-archive OR --move-archive/--archive-complete-dir');
+  process.exit(1);
+}
 
 // ─── Status-only mode ──────────────────────────────────────────────────────
 if (statusOnly) {
@@ -105,6 +115,10 @@ console.log(`  Input dir: ${config.inputDir}`);
 console.log(`  Work dir: ${config.workDir}`);
 console.log(`  Dry run: ${dryRun}`);
 console.log(`  Delete archive after upload: ${deleteArchive}`);
+console.log(`  Move archive after upload: ${moveArchive}`);
+if (moveArchive) {
+  console.log(`  Completed archive dir: ${archiveCompleteDir}`);
+}
 console.log(`  Upload concurrency: ${concurrency ?? config.uploadConcurrency}`);
 console.log('');
 
@@ -117,6 +131,8 @@ const result = await runTakeoutIncremental(config, provider, {
   uploadConcurrency: concurrency,
   progressIntervalMs,
   deleteArchiveAfterUpload: deleteArchive,
+  moveArchiveAfterUpload: moveArchive,
+  completedArchiveDir: moveArchive ? archiveCompleteDir : undefined,
   deleteExtractedAfterUpload: !keepExtracted,
   onArchiveStart(name, index, total) {
     const elapsed = formatDuration(Date.now() - startTime);

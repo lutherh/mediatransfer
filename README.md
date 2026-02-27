@@ -95,7 +95,9 @@ Large-upload best practices:
 - Keep `--concurrency` moderate (usually `2` to `4`) to avoid bandwidth thrash and retries.
 - Use `npm run takeout:process -- --status` in another terminal to see archive-level completion at any time.
 - If interrupted, resume safely with `npm run takeout:resume` (state checkpoint is reused).
-- Add `--delete-archive` after confidence builds to reclaim disk space as each archive completes.
+- Prefer `npm run takeout:process -- --move-archive` to move completed archives into `data/takeout/input/uploaded-archives`.
+- Use `--archive-complete-dir <path>` if you want a custom completed-archive folder.
+- Or use `--delete-archive` if you prefer removing completed archives immediately.
 
 On `/takeout`, you can also click the buttons in order: **Start Services** → **Scan** → **Upload** → **Verify**.
 

@@ -13,6 +13,8 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:coverage:verbose": "vitest run --coverage --reporter=verbose",
     "lint": "tsc --noEmit",
     "transfer:picker:scaleway": "tsx scripts/picker-to-scaleway-transfer.ts",
     "transfer:google-batch:scaleway": "tsx scripts/google-photos-batch-transfer.ts",
@@ -35,7 +37,8 @@
   "homepage": "https://github.com/lutherh/mediatransfer#readme",
   "devDependencies": {
     "@types/node": "^25.3.0",
-    "prisma": "^6.19.2",
+    "@vitest/coverage-v8": "^4.0.18",
+    "prisma": "^7.4.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
