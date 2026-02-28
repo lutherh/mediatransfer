@@ -398,4 +398,40 @@ describe('takeout/uploader', () => {
     expect(index.has('2026/01/05/Trip/IMG_3.jpg')).toBe(true);
     expect(index.has('2026/02/20/Other/IMG_5.jpg')).toBe(true);
   });
+
+  it('does not retry ENOENT errors (missing source file)', async () => {
+    await withTempDir(async (dir) => {
+      const provider = new MockProvider();
+      const statePath = path.join(dir, 'state.json');
+
+      // Create a manifest entry pointing to a file that doesn't exist
+      const entry: ManifestEntry = {
+        sourcePath: path.join(dir, 'nonexistent', 'IMG_dup1.jpg'),
+        relativePath: 'nonexistent/IMG_dup1.jpg',
+        size: 100,
+        mtimeMs: Date.now(),
+        capturedAt: new Date('2025-12-13T00:00:00Z').toISOString(),
+        datePath: '2025/12/13',
+        destinationKey: '2025/12/13/nonexistent/IMG_dup1.jpg',
+      };
+
+      let retryCount = 0;
+      const summary = await uploadManifest({
+        provider,
+        entries: [entry],
+        statePath,
+        retryCount: 5,
+        sleep: async () => { retryCount++; },
+      });
+
+      // Should fail immediately without retries
+      expect(summary.failed).toBe(1);
+      expect(summary.uploaded).toBe(0);
+      expect(retryCount).toBe(0);
+
+      const state = await loadUploadState(statePath);
+      expect(state.items[entry.destinationKey]?.status).toBe('failed');
+      expect(state.items[entry.destinationKey]?.error).toContain('ENOENT');
+    });
+  });
 });

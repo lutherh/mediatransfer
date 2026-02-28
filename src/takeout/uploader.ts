@@ -1,6 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import { Transform, type Readable } from 'node:stream';
 import type { CloudProvider } from '../providers/types.js';
 import type { ManifestEntry } from './manifest.js';
@@ -260,6 +260,30 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
         sizeBytes: entry.size,
         attempt: 1,
         status: 'uploaded',
+      });
+      return;
+    }
+
+    // Fast-fail if source file doesn't exist on disk (e.g. stale __dup manifest entries).
+    // Uses sync check to avoid yielding the event loop (which would disrupt checkpoint timing).
+    if (!existsSync(entry.sourcePath)) {
+      const msg = `ENOENT: source file missing: ${entry.sourcePath}`;
+      state.items[entry.destinationKey] = {
+        status: 'failed',
+        attempts: 0,
+        updatedAt: new Date().toISOString(),
+        error: msg,
+      };
+      checkpointManager.markDirty();
+      summary.failed += 1;
+      summary.processed += 1;
+      emitSnapshot('running', true, {
+        key: entry.destinationKey,
+        sourcePath: entry.sourcePath,
+        sizeBytes: entry.size,
+        attempt: 0,
+        status: 'failed',
+        error: msg,
       });
       return;
     }
