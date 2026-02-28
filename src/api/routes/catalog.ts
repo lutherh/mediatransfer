@@ -438,6 +438,18 @@ function buildCatalogHtml(): string {
     .viewer-nav.next { right:12px; }
     .viewer-nav svg { width:32px; height:32px; fill:currentColor; }
     .viewer-pos { position:absolute; bottom:16px; left:50%; transform:translateX(-50%); font-size:13px; color:rgba(255,255,255,.6); z-index:2; }
+    .detail-panel { position:absolute; top:0; right:0; bottom:0; width:360px; background:var(--surface); border-left:1px solid var(--border); z-index:3; transform:translateX(100%); transition:transform .3s ease; overflow-y:auto; display:flex; flex-direction:column; }
+    .detail-panel.open { transform:translateX(0); }
+    .detail-panel-head { display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid var(--border); }
+    .detail-panel-head h3 { margin:0; font-size:16px; font-weight:500; color:var(--text); }
+    .detail-section { padding:16px 20px; border-bottom:1px solid var(--border); }
+    .detail-section-title { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--text-dim); margin-bottom:8px; }
+    .detail-row { font-size:13px; color:var(--text); line-height:1.6; word-break:break-all; }
+    .detail-row .label { color:var(--text-dim); }
+    .detail-chips { display:flex; flex-wrap:wrap; gap:6px; }
+    .detail-chip { padding:4px 12px; border-radius:9999px; background:var(--surface2); color:var(--text); font-size:12px; cursor:pointer; border:1px solid var(--border); }
+    .detail-chip:hover { background:var(--accent); color:#fff; border-color:var(--accent); }
+    @media (max-width:768px) { .detail-panel { width:100%; } }
 
     /* ── Dialog / overlay ── */
     .dialog-overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:80; display:none; place-items:center; }
@@ -617,6 +629,13 @@ function buildCatalogHtml(): string {
     <button class="viewer-nav prev" id="modalPrev"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg></button>
     <button class="viewer-nav next" id="modalNext"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg></button>
     <span class="viewer-pos" id="modalPos"></span>
+    <div class="detail-panel" id="detailPanel">
+      <div class="detail-panel-head">
+        <h3>Details</h3>
+        <button class="icon-btn" id="closeDetail" title="Close"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+      </div>
+      <div id="detailContent"></div>
+    </div>
   </div>
 
   <!-- ═══ Dialogs ═══ -->
@@ -1268,6 +1287,7 @@ function buildCatalogHtml(): string {
       $('modalPrev').disabled = modalIndex <= 0;
       $('modalNext').disabled = modalIndex >= flatVisible.length - 1;
       $('modal').dataset.ek = item.encodedKey;
+      if (detailOpen) renderDetailPanel();
     }
 
     function showViewerToolbar() {
@@ -1326,17 +1346,42 @@ function buildCatalogHtml(): string {
     });
 
     $('modalInfo').addEventListener('click', () => {
+      detailOpen = !detailOpen;
+      $('detailPanel').classList.toggle('open', detailOpen);
+      if (detailOpen) renderDetailPanel();
+    });
+
+    $('closeDetail').addEventListener('click', () => {
+      detailOpen = false;
+      $('detailPanel').classList.remove('open');
+    });
+
+    let detailOpen = false;
+    function renderDetailPanel() {
       const item = flatVisible[modalIndex];
       if (!item) return;
-      const info = [
-        'File: ' + item.key,
-        'Size: ' + formatBytes(item.size),
-        'Type: ' + (item.contentType || item.mediaType),
-        item.capturedAt ? 'Captured: ' + new Date(item.capturedAt).toLocaleString() : '',
-        item.lastModified ? 'Modified: ' + new Date(item.lastModified).toLocaleString() : '',
-      ].filter(Boolean).join('\\n');
-      toast(info.replace(/\\n/g, ' \u00b7 '), 'info');
-    });
+      let html = '';
+      if (item.capturedAt || item.lastModified) {
+        html += '<div class="detail-section"><div class="detail-section-title">📅 Date</div>';
+        if (item.capturedAt) html += '<div class="detail-row">' + new Date(item.capturedAt).toLocaleString(undefined, { weekday:'long', year:'numeric', month:'long', day:'numeric', hour:'2-digit', minute:'2-digit' }) + '</div>';
+        if (item.lastModified && item.lastModified !== item.capturedAt) html += '<div class="detail-row"><span class="label">Modified: </span>' + new Date(item.lastModified).toLocaleString() + '</div>';
+        html += '</div>';
+      }
+      html += '<div class="detail-section"><div class="detail-section-title">🖼️ File</div>';
+      html += '<div class="detail-row" style="font-weight:500">' + (item.key.split('/').pop() || item.key) + '</div>';
+      html += '<div class="detail-row"><span class="label">Path: </span>' + item.key + '</div>';
+      html += '<div class="detail-row"><span class="label">Size: </span>' + formatBytes(item.size) + '</div>';
+      html += '<div class="detail-row"><span class="label">Type: </span>' + (item.contentType || item.mediaType) + '</div>';
+      html += '</div>';
+      const itemAlbums = albums.filter(a => a.keys && a.keys.includes(item.key));
+      if (itemAlbums.length > 0) {
+        html += '<div class="detail-section"><div class="detail-section-title">📁 Albums</div>';
+        html += '<div class="detail-chips">';
+        itemAlbums.forEach(a => { html += '<div class="detail-chip">' + (a.name || 'Unnamed') + '</div>'; });
+        html += '</div></div>';
+      }
+      $('detailContent').innerHTML = html;
+    }
 
     /* ═══════════════════════════════════════════════════════════
        ALBUMS
