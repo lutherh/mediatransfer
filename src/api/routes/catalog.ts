@@ -400,9 +400,9 @@ function buildCatalogHtml(): string {
     @media (max-width:768px) { .section-header { min-height:32px; padding:12px 8px 4px; } .section-header .section-date { font-size:14px; } }
 
     /* ── Grid ── */
-    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:4px; user-select:none; }
-    @media (min-width:900px) { .grid { grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); } }
-    @media (min-width:1400px) { .grid { grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); } }
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(var(--grid-min,180px),1fr)); gap:4px; user-select:none; }
+    @media (min-width:900px) { .grid { grid-template-columns:repeat(auto-fill,minmax(var(--grid-min-md,210px),1fr)); } }
+    @media (min-width:1400px) { .grid { grid-template-columns:repeat(auto-fill,minmax(var(--grid-min-lg,240px),1fr)); } }
 
     /* ── Tile ── */
     .tile { position:relative; aspect-ratio:1; border-radius:var(--tile-radius); overflow:hidden; background:var(--surface2); cursor:pointer; content-visibility:auto; contain-intrinsic-size:200px; animation:skeleton-pulse 1.5s ease-in-out infinite; }
@@ -580,6 +580,12 @@ function buildCatalogHtml(): string {
       <button class="settings-option active" data-media="all">All media</button>
       <button class="settings-option" data-media="image">Photos only</button>
       <button class="settings-option" data-media="video">Videos only</button>
+    </div>
+    <div class="settings-group">
+      <div class="settings-label">Grid size</div>
+      <button class="settings-option" data-grid="small">Small</button>
+      <button class="settings-option active" data-grid="medium">Medium</button>
+      <button class="settings-option" data-grid="large">Large</button>
     </div>
     <div class="settings-divider"></div>
     <button class="settings-action" id="settingsReload"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>Reload</button>
@@ -1828,6 +1834,7 @@ function buildCatalogHtml(): string {
         document.querySelectorAll('#settingsMenu .settings-option[data-sort]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         $('sortOrder').value = btn.dataset.sort;
+        localStorage.setItem('catalogSort', btn.dataset.sort);
         $('sortOrder').dispatchEvent(new Event('change'));
       });
     });
@@ -1836,7 +1843,23 @@ function buildCatalogHtml(): string {
         document.querySelectorAll('#settingsMenu .settings-option[data-media]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         $('mediaType').value = btn.dataset.media;
+        localStorage.setItem('catalogMedia', btn.dataset.media);
         $('mediaType').dispatchEvent(new Event('change'));
+      });
+    });
+    const GRID_SIZES = { small: ['140px','160px','180px'], medium: ['180px','210px','240px'], large: ['220px','260px','300px'] };
+    function applyGridSize(size) {
+      const vals = GRID_SIZES[size] || GRID_SIZES.medium;
+      document.documentElement.style.setProperty('--grid-min', vals[0]);
+      document.documentElement.style.setProperty('--grid-min-md', vals[1]);
+      document.documentElement.style.setProperty('--grid-min-lg', vals[2]);
+    }
+    document.querySelectorAll('#settingsMenu .settings-option[data-grid]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#settingsMenu .settings-option[data-grid]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        localStorage.setItem('catalogGrid', btn.dataset.grid);
+        applyGridSize(btn.dataset.grid);
       });
     });
     $('settingsReload').addEventListener('click', () => {
@@ -1905,6 +1928,24 @@ function buildCatalogHtml(): string {
     });
 
     const savedScroll = Number(sessionStorage.getItem('catalog.scrollY') || '0');
+
+    // Restore persisted settings
+    const savedSort = localStorage.getItem('catalogSort');
+    if (savedSort && $('sortOrder').querySelector('option[value="' + savedSort + '"]')) {
+      $('sortOrder').value = savedSort;
+      document.querySelectorAll('#settingsMenu .settings-option[data-sort]').forEach(b => b.classList.toggle('active', b.dataset.sort === savedSort));
+    }
+    const savedMedia = localStorage.getItem('catalogMedia');
+    if (savedMedia && $('mediaType').querySelector('option[value="' + savedMedia + '"]')) {
+      $('mediaType').value = savedMedia;
+      document.querySelectorAll('#settingsMenu .settings-option[data-media]').forEach(b => b.classList.toggle('active', b.dataset.media === savedMedia));
+    }
+    const savedGrid = localStorage.getItem('catalogGrid');
+    if (savedGrid && GRID_SIZES[savedGrid]) {
+      applyGridSize(savedGrid);
+      document.querySelectorAll('#settingsMenu .settings-option[data-grid]').forEach(b => b.classList.toggle('active', b.dataset.grid === savedGrid));
+    }
+
     resetAndReload();
     loadStats();
     if (savedScroll > 0) setTimeout(() => window.scrollTo(0, savedScroll), 200);
