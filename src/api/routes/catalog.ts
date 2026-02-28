@@ -359,6 +359,15 @@ function buildCatalogHtml(): string {
     .sidebar-item.active { background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--accent); font-weight:500; }
     .sidebar-item svg { width:22px; height:22px; flex-shrink:0; fill:currentColor; }
     .sidebar-item .item-label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .sidebar-item .item-badge { font-size:11px; background:var(--surface2); color:var(--text-dim); padding:2px 8px; border-radius:99px; min-width:18px; text-align:center; }
+    .sidebar-item .item-chevron { width:18px; height:18px; flex-shrink:0; transition:transform .2s; }
+    .sidebar-item.expanded .item-chevron { transform:rotate(90deg); }
+    .album-sublist { display:none; padding:0 0 4px 0; }
+    .album-sublist.open { display:block; }
+    .album-subitem { display:flex; align-items:center; gap:8px; padding:0 16px 0 50px; height:36px; cursor:pointer; font-size:13px; color:var(--text-dim); border-radius:9999px; margin:1px 8px; transition:all .15s; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .album-subitem:hover { background:var(--surface2); color:var(--text); }
+    .album-subitem.create-link { color:var(--accent); font-weight:500; }
+    .album-subitem .subitem-count { font-size:11px; color:var(--text-dim); margin-left:auto; }
     .sidebar-bottom { padding:12px 20px; border-top:1px solid var(--border); font-size:12px; color:var(--text-dim); display:flex; flex-direction:column; gap:4px; }
     .sidebar-bottom .stat-line { display:flex; align-items:center; gap:6px; }
     .sidebar-bottom .stat-value { color:var(--text); font-weight:600; }
@@ -510,10 +519,13 @@ function buildCatalogHtml(): string {
         <span class="item-label">Photos</span>
       </button>
       <div class="sidebar-section">Library</div>
-      <button class="sidebar-item" data-nav="albums">
+      <button class="sidebar-item" data-nav="albums" id="albumsNavBtn">
         <svg viewBox="0 0 24 24"><path fill="currentColor" d="M22 16V4c0-1.1-.9-2-2-2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2zm-11-4l2.03 2.71L16 11l4 5H8l3-4zM2 6v14c0 1.1.9 2 2 2h14v-2H4V6H2z"/></svg>
         <span class="item-label">Albums</span>
+        <span class="item-badge" id="albumBadge">0</span>
+        <svg class="item-chevron" viewBox="0 0 24 24"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
       </button>
+      <div class="album-sublist" id="albumSublist"></div>
       <div class="sidebar-section">Tools</div>
       <button class="sidebar-item" data-nav="repair">
         <svg viewBox="0 0 24 24"><path fill="currentColor" d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
@@ -767,7 +779,18 @@ function buildCatalogHtml(): string {
     }
 
     document.querySelectorAll('.sidebar-item').forEach(btn => {
-      btn.addEventListener('click', () => navigateTo(btn.dataset.nav));
+      btn.addEventListener('click', () => {
+        if (btn.dataset.nav === 'albums') {
+          // Toggle album sub-list expand/collapse
+          btn.classList.toggle('expanded');
+          $('albumSublist').classList.toggle('open');
+          if ($('albumSublist').classList.contains('open') && albums.length === 0) {
+            loadAlbums();
+          }
+          return;
+        }
+        navigateTo(btn.dataset.nav);
+      });
     });
 
     $('hamburgerBtn').addEventListener('click', toggleSidebar);
@@ -1426,7 +1449,30 @@ function buildCatalogHtml(): string {
       }
     }
 
+    function renderSidebarAlbums() {
+      const list = $('albumSublist');
+      list.innerHTML = '';
+      $('albumBadge').textContent = albums.length;
+      albums.forEach(album => {
+        const row = document.createElement('div');
+        row.className = 'album-subitem';
+        row.textContent = album.name;
+        const cnt = document.createElement('span');
+        cnt.className = 'subitem-count';
+        cnt.textContent = album.keys.length;
+        row.appendChild(cnt);
+        row.addEventListener('click', () => { viewAlbum(album); closeSidebar(); });
+        list.appendChild(row);
+      });
+      const create = document.createElement('div');
+      create.className = 'album-subitem create-link';
+      create.textContent = '+ Create album';
+      create.addEventListener('click', () => { $('createAlbumBtn').click(); closeSidebar(); });
+      list.appendChild(create);
+    }
+
     function renderAlbums() {
+      renderSidebarAlbums();
       const grid = $('albumGrid');
       grid.innerHTML = '';
       if (albums.length === 0) {
