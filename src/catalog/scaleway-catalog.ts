@@ -171,10 +171,11 @@ export class ScalewayCatalogService implements CatalogService {
       }
     }
 
-    items.sort((a, b) => b.capturedAt.localeCompare(a.capturedAt));
-    if (items.length > max) {
-      items.length = max;
-    }
+    // Items returned in S3 lexicographic (key) order.
+    // Do NOT sort or truncate here — the continuation token corresponds to the
+    // last S3 position fetched.  Sorting+truncating would discard items between
+    // the truncation point and the token, silently losing data on subsequent pages.
+    // The frontend sorts globally via compareItems().
 
     return {
       items,
