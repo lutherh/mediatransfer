@@ -9,6 +9,13 @@ export default defineConfig({
       '@': path.resolve(__dirname, 'src'),
     },
   },
+  server: {
+    hmr: {
+      // Use a dedicated path for HMR WebSocket so query params (e.g. ?token=)
+      // don't interfere with the WebSocket handshake
+      path: '/__vite_hmr',
+    },
+  },
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
