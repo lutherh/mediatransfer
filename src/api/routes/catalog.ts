@@ -591,6 +591,20 @@ function buildCatalogHtml(): string {
     const PREFETCH_MAX_ITEMS = 5000, PREFETCH_MAX_PAGES = 40;
     const sections = new Map();
     const selected = new Set(); // encodedKeys
+
+    /* Lazy-load observer: sets src on media only when tile enters viewport */
+    let lazyObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const media = entry.target.querySelector('[data-src]');
+        if (media) {
+          media.src = media.dataset.src;
+          delete media.dataset.src;
+          if (media.tagName === 'VIDEO') media.preload = 'metadata';
+        }
+        lazyObserver.unobserve(entry.target);
+      }
+    }, { rootMargin: '400px 0px' }); // 400px ahead
     let currentTab = 'photos';
     let albums = [];
     let modalIndex = -1;
@@ -907,6 +921,20 @@ function buildCatalogHtml(): string {
     function renderAllItems() {
       renderQueued = false;
       sections.clear();
+      // Disconnect old observer and create fresh one
+      lazyObserver.disconnect();
+      lazyObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const media = entry.target.querySelector('[data-src]');
+          if (media) {
+            media.src = media.dataset.src;
+            delete media.dataset.src;
+            if (media.tagName === 'VIDEO') media.preload = 'metadata';
+          }
+          lazyObserver.unobserve(entry.target);
+        }
+      }, { rootMargin: '400px 0px' });
       $('content').innerHTML = '';
       const items = getVisibleItems().slice().sort(compareItems);
       flatVisible = items;
@@ -998,15 +1026,15 @@ function buildCatalogHtml(): string {
       check.innerHTML = '<svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
       check.addEventListener('click', (e) => { e.stopPropagation(); toggleSelect(item.encodedKey, tile); });
 
-      // Media element
+      // Media element — use data-src; IntersectionObserver sets real src when visible
       const media = document.createElement(item.mediaType === 'video' ? 'video' : 'img');
       media.loading = 'lazy';
       media.decoding = 'async';
-      media.src = src;
+      media.dataset.src = src;
       if (item.mediaType === 'video') {
         media.muted = true;
         media.playsInline = true;
-        media.preload = 'metadata';
+        // preload set by observer when tile enters viewport
       }
 
       tile.appendChild(check);
@@ -1050,6 +1078,7 @@ function buildCatalogHtml(): string {
       });
 
       grid.appendChild(tile);
+      lazyObserver.observe(tile);
     }
 
     /* ═══════════════════════════════════════════════════════════
