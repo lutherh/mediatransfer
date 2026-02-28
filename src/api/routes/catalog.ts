@@ -776,10 +776,28 @@ function buildCatalogHtml(): string {
     /* ═══════════════════════════════════════════════════════════
        SELECTION
        ═══════════════════════════════════════════════════════════ */
+    let lastSelectedIdx = -1;
+
     function updateSelectionToolbar() {
       const bar = $('selToolbar');
       bar.classList.toggle('visible', selected.size > 0);
       $('selCount').textContent = selected.size + ' selected';
+    }
+
+    function shiftSelectRange(fromIdx, toIdx) {
+      const start = Math.min(fromIdx, toIdx);
+      const end = Math.max(fromIdx, toIdx);
+      for (let i = start; i <= end; i++) {
+        const item = flatVisible[i];
+        if (item && !selected.has(item.encodedKey)) {
+          selected.add(item.encodedKey);
+        }
+      }
+      document.querySelectorAll('.tile').forEach(tile => {
+        tile.classList.toggle('selected', selected.has(tile.dataset.ek));
+      });
+      updateSelectionToolbar();
+      updateSectionChecks();
     }
 
     function toggleSelect(encodedKey, el) {
@@ -796,6 +814,7 @@ function buildCatalogHtml(): string {
 
     function clearSelection() {
       selected.clear();
+      lastSelectedIdx = -1;
       document.querySelectorAll('.tile.selected').forEach(t => t.classList.remove('selected'));
       updateSelectionToolbar();
       updateSectionChecks();
@@ -1191,7 +1210,15 @@ function buildCatalogHtml(): string {
       const check = document.createElement('div');
       check.className = 'check-circle';
       check.innerHTML = '<svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>';
-      check.addEventListener('click', (e) => { e.stopPropagation(); toggleSelect(item.encodedKey, tile); });
+      check.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (e.shiftKey && lastSelectedIdx >= 0) {
+          shiftSelectRange(lastSelectedIdx, globalIdx);
+        } else {
+          toggleSelect(item.encodedKey, tile);
+          lastSelectedIdx = globalIdx;
+        }
+      });
 
       // Media element — use data-src; IntersectionObserver sets real src when visible
       const media = document.createElement(item.mediaType === 'video' ? 'video' : 'img');
@@ -1240,9 +1267,11 @@ function buildCatalogHtml(): string {
       }
 
       tile.addEventListener('click', (e) => {
-        if (selected.size > 0) {
-          // In selection mode, click toggles selection
+        if (e.shiftKey && lastSelectedIdx >= 0) {
+          shiftSelectRange(lastSelectedIdx, globalIdx);
+        } else if (selected.size > 0) {
           toggleSelect(item.encodedKey, tile);
+          lastSelectedIdx = globalIdx;
         } else {
           openModal(globalIdx);
         }
