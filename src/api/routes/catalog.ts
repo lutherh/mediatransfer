@@ -420,18 +420,24 @@ function buildCatalogHtml(): string {
     .empty-state h3 { margin:0 0 8px; font-size:18px; font-weight:500; color:var(--text); }
     .empty-state p { margin:0; font-size:14px; }
 
-    /* ── Modal ── */
-    .modal { position:fixed; inset:0; display:none; place-items:center; background:rgba(0,0,0,.85); z-index:70; }
-    .modal.open { display:grid; }
-    .modal-inner { width:min(94vw,1300px); height:min(92vh,950px); background:var(--bg); border:1px solid var(--border); border-radius:12px; overflow:hidden; display:grid; grid-template-rows:auto 1fr auto; }
-    .modal-head { display:flex; justify-content:space-between; align-items:center; padding:10px 14px; border-bottom:1px solid var(--border); font-size:13px; }
-    .modal-head .title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; margin-right:12px; }
-    .modal-body { display:grid; place-items:center; padding:8px; overflow:hidden; }
-    .modal-body img, .modal-body video { max-width:100%; max-height:100%; object-fit:contain; }
-    .modal-nav { display:flex; justify-content:center; align-items:center; gap:12px; padding:10px; border-top:1px solid var(--border); }
-    .modal-nav button { padding:6px 16px; border-radius:8px; border:1px solid var(--border); background:var(--surface2); color:var(--text); cursor:pointer; }
-    .modal-nav button:disabled { opacity:.3; cursor:default; }
-    .modal-nav .pos { font-size:12px; color:var(--text-dim); }
+    /* ── Viewer ── */
+    .modal { position:fixed; inset:0; display:none; z-index:70; background:#000; }
+    .modal.open { display:flex; flex-direction:column; }
+    .viewer-toolbar { position:absolute; top:0; left:0; right:0; z-index:2; display:flex; align-items:center; gap:8px; padding:8px 16px; background:linear-gradient(to bottom, rgba(0,0,0,.6), transparent); transition:opacity .3s; }
+    .viewer-toolbar.hidden { opacity:0; pointer-events:none; }
+    .viewer-toolbar .title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#fff; font-size:14px; margin:0 8px; }
+    .viewer-toolbar .icon-btn { color:rgba(255,255,255,.8); }
+    .viewer-toolbar .icon-btn:hover { color:#fff; background:rgba(255,255,255,.15); }
+    .viewer-body { flex:1; display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; cursor:default; }
+    .viewer-body img, .viewer-body video { max-width:100%; max-height:100%; object-fit:contain; transition:transform .2s; }
+    .viewer-nav { position:absolute; top:50%; transform:translateY(-50%); z-index:2; width:48px; height:80px; border:none; background:rgba(0,0,0,.4); color:#fff; cursor:pointer; border-radius:8px; display:flex; align-items:center; justify-content:center; opacity:0; transition:opacity .2s; }
+    .viewer-nav:hover { opacity:1 !important; background:rgba(0,0,0,.6); }
+    .modal:hover .viewer-nav { opacity:.6; }
+    .viewer-nav:disabled { display:none; }
+    .viewer-nav.prev { left:12px; }
+    .viewer-nav.next { right:12px; }
+    .viewer-nav svg { width:32px; height:32px; fill:currentColor; }
+    .viewer-pos { position:absolute; bottom:16px; left:50%; transform:translateX(-50%); font-size:13px; color:rgba(255,255,255,.6); z-index:2; }
 
     /* ── Dialog / overlay ── */
     .dialog-overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:80; display:none; place-items:center; }
@@ -598,24 +604,19 @@ function buildCatalogHtml(): string {
 
   <button id="toTop" title="Back to top">↑</button>
 
-  <!-- ═══ Preview modal ═══ -->
+  <!-- ═══ Viewer ═══ -->
   <div class="modal" id="modal">
-    <div class="modal-inner">
-      <div class="modal-head">
-        <span class="title" id="modalTitle">Preview</span>
-        <div style="display:flex;gap:4px;">
-          <button class="icon-btn" id="modalDownload" title="Download"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg></button>
-          <button class="icon-btn danger" id="modalDelete" title="Delete"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>
-          <button class="icon-btn" id="closeModal" title="Close"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
-        </div>
-      </div>
-      <div class="modal-body" id="modalBody"></div>
-      <div class="modal-nav">
-        <button id="modalPrev">← Prev</button>
-        <span class="pos" id="modalPos"></span>
-        <button id="modalNext">Next →</button>
-      </div>
+    <div class="viewer-toolbar" id="viewerToolbar">
+      <button class="icon-btn" id="closeModal" title="Back (Esc)"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg></button>
+      <span class="title" id="modalTitle">Preview</span>
+      <button class="icon-btn" id="modalInfo" title="Info (I)"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg></button>
+      <button class="icon-btn" id="modalDownload" title="Download (D)"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg></button>
+      <button class="icon-btn danger" id="modalDelete" title="Delete"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>
     </div>
+    <div class="viewer-body" id="modalBody"></div>
+    <button class="viewer-nav prev" id="modalPrev"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg></button>
+    <button class="viewer-nav next" id="modalNext"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg></button>
+    <span class="viewer-pos" id="modalPos"></span>
   </div>
 
   <!-- ═══ Dialogs ═══ -->
@@ -1233,12 +1234,23 @@ function buildCatalogHtml(): string {
     }
 
     /* ═══════════════════════════════════════════════════════════
-       MODAL (with prev/next)
+       VIEWER
        ═══════════════════════════════════════════════════════════ */
+    let viewerTimeout;
+    let viewerZoom = 1;
+
     function openModal(idx) {
       modalIndex = idx;
+      viewerZoom = 1;
       renderModal();
       $('modal').classList.add('open');
+      showViewerToolbar();
+    }
+
+    function closeViewer() {
+      $('modal').classList.remove('open');
+      $('modalBody').innerHTML = '';
+      clearTimeout(viewerTimeout);
     }
 
     function renderModal() {
@@ -1246,6 +1258,7 @@ function buildCatalogHtml(): string {
       if (!item) return;
       $('modalTitle').textContent = item.key;
       $('modalBody').innerHTML = '';
+      viewerZoom = 1;
       const src = mediaUrl(item.encodedKey);
       const media = document.createElement(item.mediaType === 'video' ? 'video' : 'img');
       media.src = src;
@@ -1254,22 +1267,49 @@ function buildCatalogHtml(): string {
       $('modalPos').textContent = (modalIndex + 1) + ' / ' + flatVisible.length;
       $('modalPrev').disabled = modalIndex <= 0;
       $('modalNext').disabled = modalIndex >= flatVisible.length - 1;
-      // Store current item for modal actions
       $('modal').dataset.ek = item.encodedKey;
     }
+
+    function showViewerToolbar() {
+      $('viewerToolbar').classList.remove('hidden');
+      clearTimeout(viewerTimeout);
+      viewerTimeout = setTimeout(() => $('viewerToolbar').classList.add('hidden'), 3000);
+    }
+
+    $('modal').addEventListener('mousemove', showViewerToolbar);
 
     $('modalPrev').addEventListener('click', () => { if (modalIndex > 0) { modalIndex--; renderModal(); } });
     $('modalNext').addEventListener('click', () => { if (modalIndex < flatVisible.length - 1) { modalIndex++; renderModal(); } });
 
-    $('closeModal').addEventListener('click', () => { $('modal').classList.remove('open'); $('modalBody').innerHTML = ''; });
-    $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) { $('modal').classList.remove('open'); $('modalBody').innerHTML = ''; } });
+    $('closeModal').addEventListener('click', closeViewer);
+    $('modal').addEventListener('click', (e) => { if (e.target === $('modal') || e.target === $('modalBody')) closeViewer(); });
 
-    // Keyboard nav for modal
+    // Zoom support
+    $('modalBody').addEventListener('wheel', (e) => {
+      e.preventDefault();
+      viewerZoom = Math.max(0.5, Math.min(5, viewerZoom + (e.deltaY > 0 ? -0.2 : 0.2)));
+      const media = $('modalBody').querySelector('img, video');
+      if (media) media.style.transform = 'scale(' + viewerZoom + ')';
+    }, { passive: false });
+    $('modalBody').addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      viewerZoom = viewerZoom > 1 ? 1 : 2;
+      const media = $('modalBody').querySelector('img, video');
+      if (media) media.style.transform = 'scale(' + viewerZoom + ')';
+    });
+
+    // Keyboard nav for viewer
     document.addEventListener('keydown', (e) => {
       if (!$('modal').classList.contains('open')) return;
       if (e.key === 'ArrowLeft') { $('modalPrev').click(); }
       else if (e.key === 'ArrowRight') { $('modalNext').click(); }
-      else if (e.key === 'Escape') { $('closeModal').click(); }
+      else if (e.key === 'Escape') { closeViewer(); }
+      else if (e.key === 'd' || e.key === 'D') { $('modalDownload').click(); }
+      else if (e.key === 'i' || e.key === 'I') { $('modalInfo').click(); }
+      else if (e.key === 'Delete') { $('modalDelete').click(); }
+      else if (e.key === '+' || e.key === '=') { viewerZoom = Math.min(5, viewerZoom + 0.25); const m = $('modalBody').querySelector('img, video'); if (m) m.style.transform = 'scale(' + viewerZoom + ')'; }
+      else if (e.key === '-') { viewerZoom = Math.max(0.5, viewerZoom - 0.25); const m = $('modalBody').querySelector('img, video'); if (m) m.style.transform = 'scale(' + viewerZoom + ')'; }
+      else if (e.key === '0') { viewerZoom = 1; const m = $('modalBody').querySelector('img, video'); if (m) m.style.transform = 'scale(1)'; }
     });
 
     $('modalDownload').addEventListener('click', () => {
@@ -1280,10 +1320,22 @@ function buildCatalogHtml(): string {
     $('modalDelete').addEventListener('click', () => {
       const ek = $('modal').dataset.ek;
       if (ek) {
-        $('modal').classList.remove('open');
-        $('modalBody').innerHTML = '';
+        closeViewer();
         showDeleteDialog([ek]);
       }
+    });
+
+    $('modalInfo').addEventListener('click', () => {
+      const item = flatVisible[modalIndex];
+      if (!item) return;
+      const info = [
+        'File: ' + item.key,
+        'Size: ' + formatBytes(item.size),
+        'Type: ' + (item.contentType || item.mediaType),
+        item.capturedAt ? 'Captured: ' + new Date(item.capturedAt).toLocaleString() : '',
+        item.lastModified ? 'Modified: ' + new Date(item.lastModified).toLocaleString() : '',
+      ].filter(Boolean).join('\\n');
+      toast(info.replace(/\\n/g, ' \u00b7 '), 'info');
     });
 
     /* ═══════════════════════════════════════════════════════════
