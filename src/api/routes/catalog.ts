@@ -961,6 +961,23 @@ function buildCatalogHtml(): string {
       }
     }
 
+    async function prefetchAllForSearch() {
+      if (prefetchingAll || !hasMore) return;
+      prefetchingAll = true;
+      $('status').textContent = 'Loading all items for search…';
+      try {
+        let pages = 0;
+        while (hasMore && pages < PREFETCH_MAX_PAGES && allItems.length < PREFETCH_MAX_ITEMS) {
+          await loadMore();
+          pages++;
+          await new Promise(r => setTimeout(r, 0));
+        }
+      } finally {
+        prefetchingAll = false;
+        scheduleRender();
+      }
+    }
+
     function updateItemStats() {
       $('stats').textContent = lastVisibleCount + ' shown / ' + loaded + ' loaded';
     }
@@ -968,9 +985,38 @@ function buildCatalogHtml(): string {
     /* ═══════════════════════════════════════════════════════════
        SORTING / FILTERING
        ═══════════════════════════════════════════════════════════ */
+    const MONTH_NAMES = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+
+    function matchesSearchQuery(item, query) {
+      if (!query) return true;
+      // Match filename/key
+      if (item.key && item.key.toLowerCase().includes(query)) return true;
+      // Match section date string
+      if (item.sectionDate && item.sectionDate.toLowerCase().includes(query)) return true;
+      // Match captured date
+      if (item.capturedAt && item.capturedAt.toLowerCase().includes(query)) return true;
+      // Match date by month name or year
+      const dateStr = item.capturedAt || item.lastModified || item.sectionDate;
+      if (dateStr) {
+        const d = new Date(dateStr);
+        if (!isNaN(d)) {
+          if (String(d.getFullYear()).includes(query)) return true;
+          const mn = MONTH_NAMES[d.getMonth()];
+          if (mn && (mn.includes(query) || mn.slice(0,3).includes(query))) return true;
+        }
+      }
+      // Match album name
+      if (albums.some(a => a.name && a.name.toLowerCase().includes(query) && a.keys && a.keys.includes(item.key))) return true;
+      return false;
+    }
+
     function getVisibleItems() {
       const type = $('mediaType').value;
-      return allItems.filter(i => type === 'all' || i.mediaType === type);
+      const query = ($('searchInput') ? $('searchInput').value : '').trim().toLowerCase();
+      return allItems.filter(i => {
+        if (type !== 'all' && i.mediaType !== type) return false;
+        return matchesSearchQuery(i, query);
+      });
     }
 
     function parseDateValue(item) {
@@ -1579,14 +1625,20 @@ function buildCatalogHtml(): string {
       const val = $('searchInput').value;
       $('searchClear').style.display = val ? 'flex' : 'none';
       clearTimeout(searchTimeout);
-      searchTimeout = setTimeout(() => resetAndReload(), 300);
+      searchTimeout = setTimeout(() => {
+        if (val.trim() && hasMore && allItems.length < PREFETCH_MAX_ITEMS) {
+          prefetchAllForSearch();
+        } else {
+          scheduleRender();
+        }
+      }, 200);
     });
     $('searchInput').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); clearTimeout(searchTimeout); resetAndReload(); }
     });
     $('searchClear').addEventListener('click', () => {
       $('searchInput').value = ''; $('searchClear').style.display = 'none';
-      resetAndReload();
+      scheduleRender();
     });
 
     /* ═══ Settings menu ═══ */
