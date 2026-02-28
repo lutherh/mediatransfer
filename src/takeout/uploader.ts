@@ -344,7 +344,9 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
 
         inFlightBytes.delete(entry.destinationKey);
 
-        if (attempt <= retryCount) {
+        // Don't retry filesystem errors like ENOENT — the file doesn't exist
+        // on disk and retrying will never help (e.g. stale __dup manifest entries).
+        if (!isNonRetryableError(error) && attempt <= retryCount) {
           const delay = computeBackoffDelay(baseDelayMs, attempt);
           emitSnapshot('running', true, {
             key: entry.destinationKey,
@@ -595,6 +597,18 @@ function defaultSleep(ms: number): Promise<void> {
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Errors that should NOT be retried because the file genuinely doesn't exist
+ * on disk (e.g. stale manifest entries for __dup files that were never created).
+ */
+function isNonRetryableError(error: unknown): boolean {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const code = (error as { code: string }).code;
+    return code === 'ENOENT' || code === 'EACCES' || code === 'EPERM';
+  }
+  return false;
 }
 
 function createProgressTrackedStream(
