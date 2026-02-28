@@ -308,11 +308,26 @@ function buildCatalogHtml(): string {
 
     /* ── Top bar ── */
     .topbar { position:sticky; top:0; z-index:50; display:flex; gap:10px; align-items:center; padding:8px 16px; background:var(--surface); border-bottom:1px solid var(--border); min-height:56px; }
-    .topbar .logo { font-size:18px; font-weight:600; white-space:nowrap; display:flex; align-items:center; gap:8px; }
-    .topbar .logo svg { width:24px; height:24px; }
-    .topbar input, .topbar select { height:36px; border-radius:8px; border:1px solid var(--border); padding:0 12px; background:var(--bg); color:var(--text); font-size:13px; }
-    .topbar input:focus, .topbar select:focus { outline:none; border-color:var(--accent); }
     .topbar .spacer { flex:1; }
+    .search-container { flex:1; max-width:720px; position:relative; display:flex; align-items:center; }
+    .search-container input { width:100%; height:40px; padding:0 40px; border:none; border-radius:9999px; background:var(--surface2); color:var(--text); font-size:14px; outline:none; transition:background .15s, box-shadow .15s; font-family:inherit; }
+    .search-container input:focus { background:var(--bg); box-shadow:0 0 0 2px var(--accent); }
+    .search-container input::placeholder { color:var(--text-dim); }
+    .search-icon { position:absolute; left:12px; width:20px; height:20px; color:var(--text-dim); pointer-events:none; fill:currentColor; }
+    .search-clear { position:absolute; right:8px; width:28px; height:28px; border:none; background:none; color:var(--text-dim); cursor:pointer; border-radius:50%; display:flex; align-items:center; justify-content:center; padding:0; transition:background .15s; }
+    .search-clear:hover { background:var(--surface2); color:var(--text); }
+    .search-clear svg { width:18px; height:18px; fill:currentColor; }
+    .settings-menu { position:fixed; top:56px; right:16px; width:220px; background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.3); z-index:70; padding:8px 0; display:none; }
+    .settings-menu.visible { display:block; }
+    .settings-group { padding:8px 16px; }
+    .settings-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--text-dim); padding-bottom:6px; }
+    .settings-option { display:block; width:100%; padding:6px 12px; border:none; background:none; color:var(--text-dim); font-size:13px; cursor:pointer; text-align:left; border-radius:6px; font-family:inherit; transition:background .15s; }
+    .settings-option:hover { background:var(--surface2); color:var(--text); }
+    .settings-option.active { color:var(--accent); font-weight:500; }
+    .settings-divider { height:1px; background:var(--border); margin:4px 0; }
+    .settings-action { display:flex; align-items:center; gap:8px; width:calc(100% - 16px); padding:8px 12px; margin:0 8px; border:none; background:none; color:var(--text-dim); font-size:13px; cursor:pointer; font-family:inherit; border-radius:6px; transition:background .15s; }
+    .settings-action:hover { background:var(--surface2); color:var(--text); }
+    .settings-action svg { width:18px; height:18px; fill:currentColor; }
     .icon-btn { width:36px; height:36px; border-radius:50%; border:none; background:transparent; color:var(--text-dim); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; transition:background .15s; }
     .icon-btn:hover { background:var(--surface2); color:var(--text); }
     .icon-btn svg { width:20px; height:20px; fill:currentColor; }
@@ -484,17 +499,19 @@ function buildCatalogHtml(): string {
   <!-- ═══ Top bar ═══ -->
   <div class="topbar" id="topbar">
     <button class="icon-btn hamburger" id="hamburgerBtn" title="Menu"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg></button>
-    <div class="logo">
-      <svg viewBox="0 0 24 24"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
-      Catalog
+    <div class="search-container">
+      <svg class="search-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0016 9.5 6.5 6.5 0 109.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+      <input id="searchInput" type="text" placeholder="Search your photos…" autocomplete="off" />
+      <button class="search-clear" id="searchClear" style="display:none"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
     </div>
-    <input id="prefix" placeholder="Search prefix…" style="width:180px" />
-    <select id="mediaType" title="Filter by media type">
+    <span id="stats" style="font-size:12px;color:var(--text-dim)"></span>
+    <button class="icon-btn" id="settingsBtn" title="Settings"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg></button>
+    <select id="mediaType" style="display:none" title="Filter by media type">
       <option value="all">All media</option>
       <option value="image">Photos</option>
       <option value="video">Videos</option>
     </select>
-    <select id="sortOrder" title="Arrange order">
+    <select id="sortOrder" style="display:none" title="Arrange order">
       <option value="date-desc">Newest first</option>
       <option value="date-asc">Oldest first</option>
       <option value="key-asc">Name A→Z</option>
@@ -502,9 +519,25 @@ function buildCatalogHtml(): string {
       <option value="size-desc">Largest first</option>
       <option value="size-asc">Smallest first</option>
     </select>
-    <div class="spacer"></div>
-    <button class="icon-btn" id="reloadBtn" title="Reload"><svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
-    <span id="stats" style="font-size:12px;color:var(--text-dim)"></span>
+  </div>
+  <div class="settings-menu" id="settingsMenu">
+    <div class="settings-group">
+      <div class="settings-label">Sort by</div>
+      <button class="settings-option active" data-sort="date-desc">Newest first</button>
+      <button class="settings-option" data-sort="date-asc">Oldest first</button>
+      <button class="settings-option" data-sort="key-asc">Name A→Z</button>
+      <button class="settings-option" data-sort="key-desc">Name Z→A</button>
+      <button class="settings-option" data-sort="size-desc">Largest first</button>
+      <button class="settings-option" data-sort="size-asc">Smallest first</button>
+    </div>
+    <div class="settings-group">
+      <div class="settings-label">Media type</div>
+      <button class="settings-option active" data-media="all">All media</button>
+      <button class="settings-option" data-media="image">Photos only</button>
+      <button class="settings-option" data-media="video">Videos only</button>
+    </div>
+    <div class="settings-divider"></div>
+    <button class="settings-action" id="settingsReload"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>Reload</button>
   </div>
 
   <!-- ═══ Selection toolbar ═══ -->
@@ -856,7 +889,7 @@ function buildCatalogHtml(): string {
       const params = new URLSearchParams();
       params.set('max', isDateSortSelected() ? '200' : '90');
       if (nextToken) params.set('token', nextToken);
-      const prefix = $('prefix').value.trim();
+      const prefix = $('searchInput').value.trim();
       if (prefix) params.set('prefix', prefix);
       if (apiToken) params.set('apiToken', apiToken);
 
@@ -1277,7 +1310,7 @@ function buildCatalogHtml(): string {
 
     function viewAlbum(album) {
       // Filter to show only album items in main view
-      $('prefix').value = '';
+      $('searchInput').value = ''; $('searchClear').style.display = 'none';
       clearSelection();
       navigateTo('photos');
 
@@ -1493,7 +1526,53 @@ function buildCatalogHtml(): string {
       else loadMore();
     }
 
-    $('reloadBtn').addEventListener('click', resetAndReload);
+    /* ═══ Search ═══ */
+    let searchTimeout;
+    $('searchInput').addEventListener('input', () => {
+      const val = $('searchInput').value;
+      $('searchClear').style.display = val ? 'flex' : 'none';
+      clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(() => resetAndReload(), 300);
+    });
+    $('searchInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); clearTimeout(searchTimeout); resetAndReload(); }
+    });
+    $('searchClear').addEventListener('click', () => {
+      $('searchInput').value = ''; $('searchClear').style.display = 'none';
+      resetAndReload();
+    });
+
+    /* ═══ Settings menu ═══ */
+    $('settingsBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      $('settingsMenu').classList.toggle('visible');
+    });
+    document.addEventListener('click', (e) => {
+      if (!$('settingsMenu').contains(e.target) && e.target !== $('settingsBtn')) {
+        $('settingsMenu').classList.remove('visible');
+      }
+    });
+    document.querySelectorAll('#settingsMenu .settings-option[data-sort]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#settingsMenu .settings-option[data-sort]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        $('sortOrder').value = btn.dataset.sort;
+        $('sortOrder').dispatchEvent(new Event('change'));
+      });
+    });
+    document.querySelectorAll('#settingsMenu .settings-option[data-media]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#settingsMenu .settings-option[data-media]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        $('mediaType').value = btn.dataset.media;
+        $('mediaType').dispatchEvent(new Event('change'));
+      });
+    });
+    $('settingsReload').addEventListener('click', () => {
+      $('settingsMenu').classList.remove('visible');
+      resetAndReload();
+    });
+
     $('mediaType').addEventListener('change', scheduleRender);
     $('sortOrder').addEventListener('change', () => {
       scheduleRender();
