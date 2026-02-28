@@ -326,17 +326,33 @@ function buildCatalogHtml(): string {
     .sel-toolbar .icon-btn:hover { background:var(--surface2); }
     .sel-toolbar .icon-btn.danger:hover { background:var(--danger-dim); color:var(--danger); }
 
-    /* ── Stats bar ── */
-    .stats-bar { display:flex; gap:16px; align-items:center; padding:8px 16px; background:var(--surface); border-bottom:1px solid var(--border); font-size:13px; color:var(--text-dim); flex-wrap:wrap; }
-    .stats-bar .stat-value { color:var(--text); font-weight:600; }
-    .stats-bar .stat-label { margin-left:3px; }
-    .stats-bar .divider { width:1px; height:18px; background:var(--border); }
-
-    /* ── Tabs ── */
-    .tab-bar { display:flex; gap:0; padding:0 16px; background:var(--surface); border-bottom:1px solid var(--border); }
-    .tab-btn { padding:10px 20px; font-size:13px; font-weight:500; color:var(--text-dim); border:none; background:none; cursor:pointer; border-bottom:2px solid transparent; transition:all .15s; }
-    .tab-btn:hover { color:var(--text); }
-    .tab-btn.active { color:var(--accent); border-bottom-color:var(--accent); }
+    /* ── Sidebar ── */
+    .sidebar { position:fixed; left:0; top:0; bottom:0; width:256px; z-index:40; background:var(--surface); border-right:1px solid var(--border); display:flex; flex-direction:column; overflow-y:auto; overflow-x:hidden; transition:transform .2s ease; }
+    .sidebar-brand { display:flex; align-items:center; gap:10px; padding:16px 20px; font-size:18px; font-weight:600; border-bottom:1px solid var(--border); white-space:nowrap; }
+    .sidebar-brand svg { width:28px; height:28px; flex-shrink:0; color:var(--accent); }
+    .sidebar-nav { flex:1; padding:8px 0; }
+    .sidebar-section { padding:16px 20px 4px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--text-dim); }
+    .sidebar-item { display:flex; align-items:center; gap:12px; padding:0 16px; margin:2px 8px; height:44px; border-radius:9999px; cursor:pointer; font-size:14px; color:var(--text-dim); transition:all .15s; border:none; background:none; width:calc(100% - 16px); text-align:left; font-family:inherit; }
+    .sidebar-item:hover { background:var(--surface2); color:var(--text); }
+    .sidebar-item.active { background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--accent); font-weight:500; }
+    .sidebar-item svg { width:22px; height:22px; flex-shrink:0; fill:currentColor; }
+    .sidebar-item .item-label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .sidebar-bottom { padding:12px 20px; border-top:1px solid var(--border); font-size:12px; color:var(--text-dim); display:flex; flex-direction:column; gap:4px; }
+    .sidebar-bottom .stat-line { display:flex; align-items:center; gap:6px; }
+    .sidebar-bottom .stat-value { color:var(--text); font-weight:600; }
+    .sidebar-overlay { position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:39; display:none; }
+    .sidebar-overlay.visible { display:block; }
+    .main-area { margin-left:256px; min-height:100vh; }
+    .hamburger { display:none !important; }
+    @media (max-width:768px) {
+      .sidebar { transform:translateX(-100%); z-index:100; box-shadow:none; }
+      .sidebar.open { transform:translateX(0); box-shadow:0 25px 50px -12px rgba(0,0,0,.25); }
+      .main-area { margin-left:0; }
+      .hamburger { display:inline-flex !important; }
+    }
+    @media (min-width:769px) {
+      .sel-toolbar { left:256px; }
+    }
 
     /* ── Content ── */
     .content { padding:4px 8px 80px; }
@@ -435,8 +451,39 @@ function buildCatalogHtml(): string {
 </head>
 <body>
 
+  <!-- ═══ Sidebar ═══ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <svg viewBox="0 0 24 24"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
+      MediaTransfer
+    </div>
+    <nav class="sidebar-nav">
+      <button class="sidebar-item active" data-nav="photos">
+        <svg viewBox="0 0 24 24"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
+        <span class="item-label">Photos</span>
+      </button>
+      <div class="sidebar-section">Library</div>
+      <button class="sidebar-item" data-nav="albums">
+        <svg viewBox="0 0 24 24"><path fill="currentColor" d="M22 16V4c0-1.1-.9-2-2-2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2zm-11-4l2.03 2.71L16 11l4 5H8l3-4zM2 6v14c0 1.1.9 2 2 2h14v-2H4V6H2z"/></svg>
+        <span class="item-label">Albums</span>
+      </button>
+      <div class="sidebar-section">Tools</div>
+      <button class="sidebar-item" data-nav="repair">
+        <svg viewBox="0 0 24 24"><path fill="currentColor" d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
+        <span class="item-label">Date Repair</span>
+      </button>
+    </nav>
+    <div class="sidebar-bottom" id="sidebarStats">
+      <div class="stat-line">Loading stats…</div>
+    </div>
+  </aside>
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <div class="main-area">
+
   <!-- ═══ Top bar ═══ -->
   <div class="topbar" id="topbar">
+    <button class="icon-btn hamburger" id="hamburgerBtn" title="Menu"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg></button>
     <div class="logo">
       <svg viewBox="0 0 24 24"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
       Catalog
@@ -469,26 +516,6 @@ function buildCatalogHtml(): string {
     <button class="icon-btn" id="selRepairDate" title="Repair date"><svg viewBox="0 0 24 24"><path d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.11 0-2 .9-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2zm0 16H5V8h14v11zM9 10H7v2h2v-2zm4 0h-2v2h2v-2zm4 0h-2v2h2v-2z"/></svg></button>
     <button class="icon-btn" id="selDownload" title="Download"><svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg></button>
     <button class="icon-btn danger" id="selDelete" title="Delete"><svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>
-  </div>
-
-  <!-- ═══ Stats bar ═══ -->
-  <div class="stats-bar" id="statsBar" style="display:none">
-    <span>☁️ <span class="stat-value" id="statTotal">-</span><span class="stat-label">files</span></span>
-    <div class="divider"></div>
-    <span>📷 <span class="stat-value" id="statPhotos">-</span><span class="stat-label">photos</span></span>
-    <div class="divider"></div>
-    <span>🎬 <span class="stat-value" id="statVideos">-</span><span class="stat-label">videos</span></span>
-    <div class="divider"></div>
-    <span>💾 <span class="stat-value" id="statSize">-</span></span>
-    <div class="divider"></div>
-    <span>📅 <span class="stat-value" id="statRange">-</span></span>
-  </div>
-
-  <!-- ═══ Tab bar ═══ -->
-  <div class="tab-bar">
-    <button class="tab-btn active" data-tab="photos">Photos</button>
-    <button class="tab-btn" data-tab="albums">Albums</button>
-    <button class="tab-btn" data-tab="repair">Date Repair</button>
   </div>
 
   <!-- ═══ Photos tab ═══ -->
@@ -578,6 +605,8 @@ function buildCatalogHtml(): string {
 
   <div class="toast-container" id="toastContainer"></div>
 
+  </div><!-- /main-area -->
+
   <script>
     /* ═══════════════════════════════════════════════════════════
        STATE
@@ -643,21 +672,38 @@ function buildCatalogHtml(): string {
     }
 
     /* ═══════════════════════════════════════════════════════════
-       TABS
+       SIDEBAR NAVIGATION
        ═══════════════════════════════════════════════════════════ */
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        currentTab = btn.dataset.tab;
-        $('content').style.display = currentTab === 'photos' ? '' : 'none';
-        $('status').style.display = currentTab === 'photos' ? '' : 'none';
-        $('sentinel').style.display = currentTab === 'photos' ? '' : 'none';
-        $('albumsPanel').classList.toggle('visible', currentTab === 'albums');
-        $('repairPanel').classList.toggle('visible', currentTab === 'repair');
-        if (currentTab === 'albums') loadAlbums();
-      });
+    function navigateTo(section) {
+      document.querySelectorAll('.sidebar-item').forEach(b => b.classList.remove('active'));
+      const navBtn = document.querySelector('.sidebar-item[data-nav="' + section + '"]');
+      if (navBtn) navBtn.classList.add('active');
+      currentTab = section;
+      $('content').style.display = section === 'photos' ? '' : 'none';
+      $('status').style.display = section === 'photos' ? '' : 'none';
+      $('sentinel').style.display = section === 'photos' ? '' : 'none';
+      $('albumsPanel').classList.toggle('visible', section === 'albums');
+      $('repairPanel').classList.toggle('visible', section === 'repair');
+      if (section === 'albums') loadAlbums();
+      closeSidebar();
+    }
+
+    function toggleSidebar() {
+      $('sidebar').classList.toggle('open');
+      $('sidebarOverlay').classList.toggle('visible');
+    }
+
+    function closeSidebar() {
+      $('sidebar').classList.remove('open');
+      $('sidebarOverlay').classList.remove('visible');
+    }
+
+    document.querySelectorAll('.sidebar-item').forEach(btn => {
+      btn.addEventListener('click', () => navigateTo(btn.dataset.nav));
     });
+
+    $('hamburgerBtn').addEventListener('click', toggleSidebar);
+    $('sidebarOverlay').addEventListener('click', closeSidebar);
 
     /* ═══════════════════════════════════════════════════════════
        SELECTION
@@ -795,16 +841,7 @@ function buildCatalogHtml(): string {
        ═══════════════════════════════════════════════════════════ */
     $('selRepairDate').addEventListener('click', () => {
       if (selected.size === 0) return;
-      // Switch to repair tab with selected items
-      document.querySelectorAll('.tab-btn').forEach(b => {
-        b.classList.toggle('active', b.dataset.tab === 'repair');
-      });
-      currentTab = 'repair';
-      $('content').style.display = 'none';
-      $('status').style.display = 'none';
-      $('sentinel').style.display = 'none';
-      $('albumsPanel').classList.remove('visible');
-      $('repairPanel').classList.add('visible');
+      navigateTo('repair');
       showRepairItems([...selected].map(ek => allItems.find(i => i.encodedKey === ek)).filter(Boolean));
     });
 
@@ -1242,13 +1279,7 @@ function buildCatalogHtml(): string {
       // Filter to show only album items in main view
       $('prefix').value = '';
       clearSelection();
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === 'photos'));
-      currentTab = 'photos';
-      $('content').style.display = '';
-      $('status').style.display = '';
-      $('sentinel').style.display = '';
-      $('albumsPanel').classList.remove('visible');
-      $('repairPanel').classList.remove('visible');
+      navigateTo('photos');
 
       // Filter allItems to only album keys
       const keySet = new Set(album.keys);
@@ -1489,15 +1520,17 @@ function buildCatalogHtml(): string {
         clearTimeout(tm);
         if (!res.ok) return;
         const s = await res.json();
-        $('statTotal').textContent = s.totalFiles.toLocaleString();
-        $('statPhotos').textContent = s.imageCount.toLocaleString();
-        $('statVideos').textContent = s.videoCount.toLocaleString();
-        $('statSize').textContent = formatBytes(s.totalBytes);
-        if (s.oldestDate && s.newestDate) {
-          const fmt = d => new Date(d).toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' });
-          $('statRange').textContent = fmt(s.oldestDate) + ' — ' + fmt(s.newestDate);
+        const sb = $('sidebarStats');
+        if (sb) {
+          let html = '<div class="stat-line"><span class="stat-value">' + s.totalFiles.toLocaleString() + '</span> files</div>';
+          html += '<div class="stat-line">📷 ' + s.imageCount.toLocaleString() + ' photos · 🎬 ' + s.videoCount.toLocaleString() + ' videos</div>';
+          html += '<div class="stat-line">💾 ' + formatBytes(s.totalBytes) + '</div>';
+          if (s.oldestDate && s.newestDate) {
+            const fmt = d => new Date(d).toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' });
+            html += '<div class="stat-line">📅 ' + fmt(s.oldestDate) + ' — ' + fmt(s.newestDate) + '</div>';
+          }
+          sb.innerHTML = html;
         }
-        $('statsBar').style.display = 'flex';
       } catch { /* non-critical */ }
     }
 
