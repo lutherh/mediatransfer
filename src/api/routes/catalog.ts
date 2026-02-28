@@ -333,9 +333,11 @@ function buildCatalogHtml(): string {
     .settings-action { display:flex; align-items:center; gap:8px; width:calc(100% - 16px); padding:8px 12px; margin:0 8px; border:none; background:none; color:var(--text-dim); font-size:13px; cursor:pointer; font-family:inherit; border-radius:6px; transition:background .15s; }
     .settings-action:hover { background:var(--surface2); color:var(--text); }
     .settings-action svg { width:18px; height:18px; fill:currentColor; }
-    .icon-btn { width:36px; height:36px; border-radius:50%; border:none; background:transparent; color:var(--text-dim); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; transition:background .15s; }
+    .icon-btn { width:40px; height:40px; border-radius:50%; border:none; background:transparent; color:var(--text-dim); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; transition:background .15s; position:relative; overflow:hidden; }
     .icon-btn:hover { background:var(--surface2); color:var(--text); }
-    .icon-btn svg { width:20px; height:20px; fill:currentColor; }
+    .icon-btn::after { content:''; position:absolute; inset:0; background:radial-gradient(circle, var(--text) 10%, transparent 10.01%) no-repeat 50%; transform:scale(10); opacity:0; transition:transform .5s, opacity 1s; }
+    .icon-btn:active::after { transform:scale(0); opacity:.12; transition:0s; }
+    .icon-btn svg { width:24px; height:24px; fill:currentColor; }
 
     /* ── Selection toolbar ── */
     .sel-toolbar { position:fixed; top:0; left:0; right:0; z-index:60; display:flex; align-items:center; gap:8px; padding:8px 16px; background:var(--surface); border-bottom:2px solid var(--accent); transform:translateY(-100%); transition:transform .2s ease; }
