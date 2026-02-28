@@ -7,6 +7,7 @@ import {
   persistManifestJsonl,
 } from './manifest.js';
 import {
+  discoverTakeoutArchives,
   unpackAndNormalizeTakeout,
   type ArchiveExtractor,
 } from './unpack.js';
@@ -16,6 +17,7 @@ import {
   objectExistsCached,
   preloadDestinationIndex,
   uploadManifest,
+  type UploadProgressSnapshot,
   type UploadSummary,
 } from './uploader.js';
 import {
@@ -25,6 +27,18 @@ import {
 } from './report.js';
 
 export const DEFAULT_MANIFEST_FILE = 'manifest.jsonl';
+
+export type ScanProgressPhase = 'discover' | 'extract' | 'normalize' | 'manifest' | 'done';
+
+export type ScanProgressEvent = {
+  phase: ScanProgressPhase;
+  current: number;
+  total: number;
+  detail?: string;
+  percent: number;
+};
+
+export type ScanProgressCallback = (event: ScanProgressEvent) => void;
 
 export type ScanResult = {
   manifestPath: string;
@@ -47,6 +61,8 @@ export type UploadRunOptions = {
   includeFilter?: string;
   excludeFilter?: string;
   reportDir?: string;
+  progressIntervalMs?: number;
+  onUploadProgress?: (snapshot: UploadProgressSnapshot) => void;
 };
 
 export type UploadRunResult = {
@@ -58,16 +74,52 @@ export type UploadRunResult = {
 export async function runTakeoutScan(
   config: TakeoutConfig,
   extractor?: ArchiveExtractor,
+  onProgress?: ScanProgressCallback,
 ): Promise<ScanResult> {
+  onProgress?.({ phase: 'discover', current: 0, total: 0, percent: 0, detail: 'Discovering archives...' });
+
+  // Check if there are any new archives to process
+  const pendingArchives = await discoverTakeoutArchives(config.inputDir);
+  const manifestPath = path.join(config.workDir, DEFAULT_MANIFEST_FILE);
+
+  // If no new archives, check for an existing manifest from a prior run
+  if (pendingArchives.length === 0) {
+    try {
+      const existingEntries = await loadManifestJsonl(manifestPath);
+      if (existingEntries.length > 0) {
+        onProgress?.({ phase: 'done', current: 1, total: 1, percent: 100, detail: 'No new archives — existing manifest is up to date' });
+        return {
+          manifestPath,
+          mediaRoot: config.workDir,
+          archives: [],
+          entryCount: existingEntries.length,
+        };
+      }
+    } catch {
+      // No existing manifest — fall through to the normal error
+    }
+  }
+
   const { archives, mediaRoot } = await unpackAndNormalizeTakeout(
     config.inputDir,
     config.workDir,
     extractor,
+    (current, total, archiveName) => {
+      const percent = Math.round((current / Math.max(total, 1)) * 70); // extract is ~70% of work
+      onProgress?.({ phase: 'extract', current, total, percent, detail: archiveName });
+    },
   );
 
-  const entries = await buildManifest(mediaRoot);
-  const manifestPath = path.join(config.workDir, DEFAULT_MANIFEST_FILE);
+  onProgress?.({ phase: 'manifest', current: 0, total: 0, percent: 72, detail: 'Building manifest...' });
+
+  const entries = await buildManifest(mediaRoot, (processed, total) => {
+    const percent = 72 + Math.round((processed / Math.max(total, 1)) * 26); // manifest is ~26%
+    onProgress?.({ phase: 'manifest', current: processed, total, percent, detail: `${processed}/${total} files` });
+  });
+
   await persistManifestJsonl(entries, manifestPath);
+
+  onProgress?.({ phase: 'done', current: 1, total: 1, percent: 100, detail: 'Scan complete' });
 
   return {
     manifestPath,
@@ -95,6 +147,8 @@ export async function runTakeoutUpload(
     maxFailures: options.maxFailures,
     includeFilter: options.includeFilter,
     excludeFilter: options.excludeFilter,
+    progressIntervalMs: options.progressIntervalMs,
+    onProgress: options.onUploadProgress,
   });
 
   const state = await loadUploadState(config.statePath);

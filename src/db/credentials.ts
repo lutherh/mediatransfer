@@ -1,7 +1,7 @@
 import type { PrismaClient } from '../generated/prisma/client.js';
 import type { CloudCredential } from '../generated/prisma/client.js';
 import { getPrismaClient } from './client.js';
-import { decryptString, encryptString } from '../utils/crypto.js';
+import { decryptStringAsync, encryptStringAsync } from '../utils/crypto.js';
 
 export type CreateCredentialInput = {
   name: string;
@@ -19,10 +19,10 @@ export type CredentialSummary = Pick<
   'id' | 'name' | 'provider' | 'createdAt' | 'updatedAt'
 >;
 
-function decryptCredential(credential: CloudCredential): CloudCredential {
+async function decryptCredential(credential: CloudCredential): Promise<CloudCredential> {
   return {
     ...credential,
-    config: decryptString(credential.config),
+    config: await decryptStringAsync(credential.config),
   };
 }
 
@@ -34,15 +34,16 @@ export async function createCredential(
   client?: PrismaClient,
 ): Promise<CloudCredential> {
   const prisma = client ?? getPrismaClient();
-  const encryptedConfig = encryptString(input.config);
+  const encryptedConfig = await encryptStringAsync(input.config);
 
-  return prisma.cloudCredential.create({
+  const created = await prisma.cloudCredential.create({
     data: {
       name: input.name,
       provider: input.provider,
       config: encryptedConfig,
     },
-  }).then(decryptCredential);
+  });
+  return decryptCredential(created);
 }
 
 /**
@@ -54,7 +55,7 @@ export async function getCredentialById(
 ): Promise<CloudCredential | null> {
   const prisma = client ?? getPrismaClient();
   const credential = await prisma.cloudCredential.findUnique({ where: { id } });
-  return credential ? decryptCredential(credential) : null;
+  return credential ? await decryptCredential(credential) : null;
 }
 
 /**
@@ -69,7 +70,7 @@ export async function listCredentials(
     where: provider ? { provider } : undefined,
     orderBy: { createdAt: 'desc' },
   });
-  return credentials.map(decryptCredential);
+  return Promise.all(credentials.map(decryptCredential));
 }
 
 /**
@@ -103,13 +104,14 @@ export async function updateCredential(
 ): Promise<CloudCredential> {
   const prisma = client ?? getPrismaClient();
 
-  return prisma.cloudCredential.update({
+  const updated = await prisma.cloudCredential.update({
     where: { id },
     data: {
       ...(input.name !== undefined ? { name: input.name } : {}),
-      ...(input.config !== undefined ? { config: encryptString(input.config) } : {}),
+      ...(input.config !== undefined ? { config: await encryptStringAsync(input.config) } : {}),
     },
-  }).then(decryptCredential);
+  });
+  return decryptCredential(updated);
 }
 
 /**

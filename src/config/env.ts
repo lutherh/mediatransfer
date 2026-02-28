@@ -65,13 +65,28 @@ const envSchema = z.object({
 
 export type Env = z.infer<typeof envSchema>;
 
+/** Cached result for `loadEnv()` with no overrides. */
+let cachedEnv: Env | undefined;
+
 /**
  * Parse and validate environment variables.
- * @param overrides - Optional partial env for testing. Merged on top of process.env.
+ * Results are cached when called without overrides (the common case).
+ *
+ * @param overrides - Optional partial env for testing. Merged on top of process.env. Bypasses cache.
  * @returns Validated, typed environment config.
  * @throws ZodError if validation fails.
  */
 export function loadEnv(overrides?: Record<string, string | undefined>): Env {
-  const source = overrides ?? process.env;
-  return envSchema.parse(source);
+  if (overrides) {
+    return envSchema.parse(overrides);
+  }
+  if (!cachedEnv) {
+    cachedEnv = envSchema.parse(process.env);
+  }
+  return cachedEnv;
+}
+
+/** Clear the cached env (useful for tests that mutate `process.env`). */
+export function clearEnvCache(): void {
+  cachedEnv = undefined;
 }

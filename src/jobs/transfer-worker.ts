@@ -58,14 +58,39 @@ function getRetryStrategy(providerName: string): RetryStrategy {
   return { maxAttempts: 3, baseDelayMs: 350, maxDelayMs: 2500 };
 }
 
+/** HTTP status codes that indicate a transient failure worth retrying. */
+const RETRYABLE_HTTP_CODES = new Set([408, 429, 500, 502, 503, 504]);
+
+/** Node/system error codes that indicate a retryable network issue. */
+const RETRYABLE_SYSTEM_CODES = new Set([
+  'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE',
+  'ENETUNREACH', 'EHOSTUNREACH', 'EAI_AGAIN',
+]);
+
 function isRetryableError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  // 1. Check structured error code (Node system errors, AWS SDK errors)
+  const code = (error as { code?: string }).code;
+  if (typeof code === 'string' && RETRYABLE_SYSTEM_CODES.has(code)) {
+    return true;
+  }
+
+  // 2. Check HTTP status code (AWS SDK $metadata.httpStatusCode)
+  const httpStatus =
+    (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode ??
+    (error as { statusCode?: number }).statusCode;
+  if (typeof httpStatus === 'number' && RETRYABLE_HTTP_CODES.has(httpStatus)) {
+    return true;
+  }
+
+  // 3. Fall back to message matching for unstructured errors
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   return (
     message.includes('timeout') ||
-    message.includes('network') ||
-    message.includes('econnreset') ||
     message.includes('rate limit') ||
-    message.includes('temporar') ||
     message.includes('throttle')
   );
 }

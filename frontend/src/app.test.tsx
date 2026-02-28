@@ -64,6 +64,8 @@ vi.mock('@/lib/api', () => ({
   queueAllTransferItems: vi.fn(async () => ({ message: 'Queued all' })),
   fetchTakeoutStatus: vi.fn(async () => ({
     paths: {
+      inputDir: 'data/takeout/input',
+      workDir: 'data/takeout/work',
       manifestPath: 'data/takeout/work/manifest.jsonl',
       statePath: 'data/takeout/state.json',
     },
@@ -178,9 +180,24 @@ describe('frontend pages', () => {
   it('shows navigation links', async () => {
     renderRoute('/');
     expect(await screen.findByRole('link', { name: 'Photo Transfer' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Upload' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Takeout' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Transfers' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Catalog' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Costs' })).toBeInTheDocument();
+  });
+
+  it('shows stale stats warning when last scan failed but data exists', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchTakeoutActionStatus).mockResolvedValueOnce({
+      running: false,
+      action: 'scan',
+      success: false,
+      exitCode: 1,
+      output: ['❌ Takeout scan failed:', '   No media files found'],
+    });
+
+    renderRoute('/takeout');
+    expect(await screen.findByText(/last scan failed.*stats below are from a previous/i)).toBeInTheDocument();
   });
 });

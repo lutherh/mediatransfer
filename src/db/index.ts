@@ -8,3 +8,4 @@ export {
 export * from './jobs.js';
 export * from './credentials.js';
 export * from './logs.js';
+export * from './media-items.js';

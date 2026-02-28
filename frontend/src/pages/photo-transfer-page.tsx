@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { Stepper, type StepDef } from '@/components/ui/stepper';
+import { Card } from '@/components/ui/card';
 import { ConnectGoogleStep } from '@/components/steps/connect-google-step';
 import { PickPhotosStep } from '@/components/steps/pick-photos-step';
 import { ReviewTransferStep } from '@/components/steps/review-transfer-step';
@@ -118,6 +119,15 @@ export function PhotoTransferPage() {
           Transfer photos from Google Photos to your cloud storage
         </p>
       </div>
+
+      <Card>
+        <p className="text-sm font-medium text-slate-900">Quick guide</p>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-600">
+          <li>Use this wizard for selective transfers (albums, recent items, or specific files).</li>
+          <li>For full-library migration, use the <span className="font-semibold">Takeout</span> page instead.</li>
+          <li>If OAuth popup is blocked, allow popups for this site and retry Connect.</li>
+        </ul>
+      </Card>
 
       <Stepper steps={STEPS} currentStep={currentStep} />
 

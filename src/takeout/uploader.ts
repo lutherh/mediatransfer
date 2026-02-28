@@ -1,6 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
+import { Transform, type Readable } from 'node:stream';
 import type { CloudProvider } from '../providers/types.js';
 import type { ManifestEntry } from './manifest.js';
 
@@ -28,6 +29,42 @@ export type UploadSummary = {
   failureLimitReached: boolean;
 };
 
+export type UploadProgressPhase = 'running' | 'completed';
+
+export type UploadProgressItemStatus =
+  | 'starting'
+  | 'uploading'
+  | 'uploaded'
+  | 'skipped'
+  | 'retrying'
+  | 'failed';
+
+export type UploadProgressSnapshot = {
+  phase: UploadProgressPhase;
+  dryRun: boolean;
+  totalItems: number;
+  processedItems: number;
+  uploadedItems: number;
+  skippedItems: number;
+  failedItems: number;
+  inFlightItems: number;
+  totalBytes: number;
+  transferredBytes: number;
+  timestamp: string;
+  lastItem?: {
+    key: string;
+    sourcePath: string;
+    sizeBytes: number;
+    uploadedBytes?: number;
+    attempt: number;
+    status: UploadProgressItemStatus;
+    speedBytesPerSec?: number;
+    etaSeconds?: number;
+    delayMs?: number;
+    error?: string;
+  };
+};
+
 export type UploadOptions = {
   provider: CloudProvider;
   entries: ManifestEntry[];
@@ -42,6 +79,8 @@ export type UploadOptions = {
   includeFilter?: string;
   excludeFilter?: string;
   sleep?: (ms: number) => Promise<void>;
+  progressIntervalMs?: number;
+  onProgress?: (snapshot: UploadProgressSnapshot) => void;
 };
 
 const DEFAULT_RETRY_COUNT = 5;
@@ -49,6 +88,8 @@ const DEFAULT_BASE_DELAY_MS = 300;
 const DEFAULT_UPLOAD_CONCURRENCY = 1;
 const DEFAULT_PERSIST_EVERY = 25;
 const DEFAULT_FLUSH_INTERVAL_MS = 3000;
+const DEFAULT_PROGRESS_INTERVAL_MS = 2000;
+const LARGE_FILE_READ_CHUNK_BYTES = 8 * 1024 * 1024;
 
 const CONTENT_TYPES: Record<string, string> = {
   '.jpg': 'image/jpeg',
@@ -69,6 +110,10 @@ const CONTENT_TYPES: Record<string, string> = {
   '.3gp': 'video/3gpp',
   '.mkv': 'video/x-matroska',
   '.webm': 'video/webm',
+  '.zip': 'application/zip',
+  '.tar': 'application/x-tar',
+  '.tgz': 'application/gzip',
+  '.gz': 'application/gzip',
 };
 
 export async function uploadManifest(options: UploadOptions): Promise<UploadSummary> {
@@ -79,10 +124,19 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
   const uploadConcurrency = Math.max(1, Math.floor(options.uploadConcurrency ?? DEFAULT_UPLOAD_CONCURRENCY));
   const persistEvery = Math.max(1, Math.floor(options.persistEvery ?? DEFAULT_PERSIST_EVERY));
   const flushIntervalMs = Math.max(250, Math.floor(options.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS));
+  const progressIntervalMs = Math.max(
+    250,
+    Math.floor(options.progressIntervalMs ?? DEFAULT_PROGRESS_INTERVAL_MS),
+  );
 
   const state = await loadUploadState(options.statePath);
   const entries = applyFilters(options.entries, options.includeFilter, options.excludeFilter);
-  const preloadedExistingKeys = await preloadDestinationIndex(options.provider, entries);
+  let preloadedExistingKeys = new Set<string>();
+  try {
+    preloadedExistingKeys = await preloadDestinationIndex(options.provider, entries);
+  } catch {
+    preloadedExistingKeys = new Set<string>();
+  }
   const confirmedExistingKeys = new Set<string>(preloadedExistingKeys);
   const existenceCache = new Map<string, boolean>();
   const checkpointManager = new StateCheckpointManager(
@@ -103,6 +157,49 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
     failureLimitReached: false,
   };
 
+  const totalBytes = entries.reduce((sum, entry) => sum + Math.max(0, entry.size ?? 0), 0);
+  const inFlightBytes = new Map<string, number>();
+  let committedTransferredBytes = 0;
+  let lastSnapshotAt = 0;
+
+  const emitSnapshot = (
+    phase: UploadProgressPhase,
+    force: boolean,
+    lastItem?: UploadProgressSnapshot['lastItem'],
+  ): void => {
+    if (!options.onProgress) {
+      return;
+    }
+
+    const now = Date.now();
+    if (!force && phase === 'running' && now - lastSnapshotAt < progressIntervalMs) {
+      return;
+    }
+    lastSnapshotAt = now;
+
+    const inFlightTransferredBytes = [...inFlightBytes.values()]
+      .reduce((sum, value) => sum + value, 0);
+
+    options.onProgress({
+      phase,
+      dryRun,
+      totalItems: summary.total,
+      processedItems: summary.processed,
+      uploadedItems: summary.uploaded,
+      skippedItems: summary.skipped,
+      failedItems: summary.failed,
+      inFlightItems: inFlightBytes.size,
+      totalBytes,
+      transferredBytes: committedTransferredBytes + inFlightTransferredBytes,
+      timestamp: new Date(now).toISOString(),
+      lastItem,
+    });
+  };
+
+  const progressTimer = setInterval(() => {
+    emitSnapshot('running', false);
+  }, progressIntervalMs);
+
   // Safe: nextIndex++ and summary mutations are synchronous between awaits
   // in single-threaded Node.js — no two workers touch them in the same microtick.
   let nextIndex = 0;
@@ -113,15 +210,27 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
     if (existingState?.status === 'uploaded' || existingState?.status === 'skipped') {
       summary.skipped += 1;
       summary.processed += 1;
+      emitSnapshot('running', true, {
+        key: entry.destinationKey,
+        sourcePath: entry.sourcePath,
+        sizeBytes: entry.size,
+        attempt: existingState.attempts,
+        status: 'skipped',
+      });
       return;
     }
 
-    const destinationExists = await objectExistsCached(
-      options.provider,
-      entry.destinationKey,
-      confirmedExistingKeys,
-      existenceCache,
-    );
+    let destinationExists = false;
+    try {
+      destinationExists = await objectExistsCached(
+        options.provider,
+        entry.destinationKey,
+        confirmedExistingKeys,
+        existenceCache,
+      );
+    } catch {
+      destinationExists = false;
+    }
 
     if (destinationExists) {
       state.items[entry.destinationKey] = {
@@ -132,12 +241,50 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
       checkpointManager.markDirty();
       summary.skipped += 1;
       summary.processed += 1;
+      emitSnapshot('running', true, {
+        key: entry.destinationKey,
+        sourcePath: entry.sourcePath,
+        sizeBytes: entry.size,
+        attempt: existingState?.attempts ?? 0,
+        status: 'skipped',
+      });
       return;
     }
 
     if (dryRun) {
       summary.uploaded += 1;
       summary.processed += 1;
+      emitSnapshot('running', true, {
+        key: entry.destinationKey,
+        sourcePath: entry.sourcePath,
+        sizeBytes: entry.size,
+        attempt: 1,
+        status: 'uploaded',
+      });
+      return;
+    }
+
+    // Fast-fail if source file doesn't exist on disk (e.g. stale __dup manifest entries).
+    // Uses sync check to avoid yielding the event loop (which would disrupt checkpoint timing).
+    if (!existsSync(entry.sourcePath)) {
+      const msg = `ENOENT: source file missing: ${entry.sourcePath}`;
+      state.items[entry.destinationKey] = {
+        status: 'failed',
+        attempts: 0,
+        updatedAt: new Date().toISOString(),
+        error: msg,
+      };
+      checkpointManager.markDirty();
+      summary.failed += 1;
+      summary.processed += 1;
+      emitSnapshot('running', true, {
+        key: entry.destinationKey,
+        sourcePath: entry.sourcePath,
+        sizeBytes: entry.size,
+        attempt: 0,
+        status: 'failed',
+        error: msg,
+      });
       return;
     }
 
@@ -145,12 +292,55 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
 
     for (let attempt = 1; attempt <= retryCount + 1; attempt += 1) {
       try {
-        const stream = createReadStream(entry.sourcePath);
+        const startMs = Date.now();
+        inFlightBytes.set(entry.destinationKey, 0);
+        emitSnapshot('running', true, {
+          key: entry.destinationKey,
+          sourcePath: entry.sourcePath,
+          sizeBytes: entry.size,
+          attempt,
+          status: 'starting',
+        });
+
+        const stream = createReadStream(entry.sourcePath, {
+          highWaterMark: LARGE_FILE_READ_CHUNK_BYTES,
+        });
+        const trackedStream = createProgressTrackedStream(
+          stream,
+          {
+            intervalMs: progressIntervalMs,
+            sizeBytes: entry.size,
+            onProgress(stats) {
+              inFlightBytes.set(entry.destinationKey, stats.uploadedBytes);
+              emitSnapshot('running', false, {
+                key: entry.destinationKey,
+                sourcePath: entry.sourcePath,
+                sizeBytes: entry.size,
+                uploadedBytes: stats.uploadedBytes,
+                attempt,
+                status: 'uploading',
+                speedBytesPerSec: stats.speedBytesPerSec,
+                etaSeconds: stats.etaSeconds,
+              });
+            },
+          },
+        );
+
         await options.provider.upload(
           entry.destinationKey,
-          stream,
+          trackedStream,
           contentTypeForPath(entry.sourcePath),
         );
+
+        const uploadedBytes = inFlightBytes.get(entry.destinationKey) ?? entry.size;
+        inFlightBytes.delete(entry.destinationKey);
+        committedTransferredBytes += uploadedBytes;
+        const elapsedMs = Math.max(1, Date.now() - startMs);
+        const speedBytesPerSec = Math.floor((uploadedBytes / elapsedMs) * 1000);
+        const remainingBytes = Math.max(0, totalBytes - committedTransferredBytes);
+        const etaSeconds = speedBytesPerSec > 0
+          ? Math.floor(remainingBytes / speedBytesPerSec)
+          : undefined;
 
         confirmedExistingKeys.add(entry.destinationKey);
         existenceCache.set(entry.destinationKey, true);
@@ -162,12 +352,35 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
         checkpointManager.markDirty();
         summary.uploaded += 1;
         summary.processed += 1;
+        emitSnapshot('running', true, {
+          key: entry.destinationKey,
+          sourcePath: entry.sourcePath,
+          sizeBytes: entry.size,
+          uploadedBytes,
+          attempt,
+          status: 'uploaded',
+          speedBytesPerSec,
+          etaSeconds,
+        });
         return;
       } catch (error) {
         lastError = error;
 
-        if (attempt <= retryCount) {
+        inFlightBytes.delete(entry.destinationKey);
+
+        // Don't retry filesystem errors like ENOENT — the file doesn't exist
+        // on disk and retrying will never help (e.g. stale __dup manifest entries).
+        if (!isNonRetryableError(error) && attempt <= retryCount) {
           const delay = computeBackoffDelay(baseDelayMs, attempt);
+          emitSnapshot('running', true, {
+            key: entry.destinationKey,
+            sourcePath: entry.sourcePath,
+            sizeBytes: entry.size,
+            attempt,
+            status: 'retrying',
+            delayMs: delay,
+            error: toErrorMessage(error),
+          });
           await sleep(delay);
           continue;
         }
@@ -181,6 +394,14 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
         checkpointManager.markDirty();
         summary.failed += 1;
         summary.processed += 1;
+        emitSnapshot('running', true, {
+          key: entry.destinationKey,
+          sourcePath: entry.sourcePath,
+          sizeBytes: entry.size,
+          attempt,
+          status: 'failed',
+          error: toErrorMessage(error),
+        });
       }
     }
 
@@ -215,11 +436,16 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
     }
   });
 
+  emitSnapshot('running', true);
+
   try {
     await Promise.all(workers);
   } finally {
+    clearInterval(progressTimer);
     await checkpointManager.stopAndFlush();
   }
+
+  emitSnapshot('completed', true);
 
   return summary;
 }
@@ -391,6 +617,76 @@ function contentTypeForPath(filePath: string): string | undefined {
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Errors that should NOT be retried because the file genuinely doesn't exist
+ * on disk (e.g. stale manifest entries for __dup files that were never created).
+ */
+function isNonRetryableError(error: unknown): boolean {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const code = (error as { code: string }).code;
+    return code === 'ENOENT' || code === 'EACCES' || code === 'EPERM';
+  }
+  return false;
+}
+
+function createProgressTrackedStream(
+  source: Readable,
+  options: {
+    intervalMs: number;
+    sizeBytes: number;
+    onProgress: (stats: {
+      uploadedBytes: number;
+      speedBytesPerSec: number;
+      etaSeconds: number | undefined;
+    }) => void;
+  },
+): Readable {
+  const startedAt = Date.now();
+  let uploadedBytes = 0;
+  let lastEmittedAt = 0;
+
+  const emitProgress = (force: boolean): void => {
+    const now = Date.now();
+    if (!force && now - lastEmittedAt < options.intervalMs) {
+      return;
+    }
+
+    lastEmittedAt = now;
+    const elapsedMs = Math.max(1, now - startedAt);
+    const speedBytesPerSec = Math.floor((uploadedBytes / elapsedMs) * 1000);
+    const remainingBytes = Math.max(0, options.sizeBytes - uploadedBytes);
+    const etaSeconds = speedBytesPerSec > 0
+      ? Math.floor(remainingBytes / speedBytesPerSec)
+      : undefined;
+
+    options.onProgress({
+      uploadedBytes,
+      speedBytesPerSec,
+      etaSeconds,
+    });
+  };
+
+  const tracker = new Transform({
+    transform(chunk, _encoding, callback) {
+      uploadedBytes += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk);
+      emitProgress(false);
+      callback(null, chunk);
+    },
+    flush(callback) {
+      emitProgress(true);
+      callback();
+    },
+  });
+
+  source.on('error', (error) => tracker.destroy(error));
+  source.pipe(tracker);
+  return tracker;
 }
 
 function applyFilters(

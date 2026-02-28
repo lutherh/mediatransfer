@@ -1,3 +1,4 @@
 // Shared utilities (logger, crypto, etc.)
 export { createLogger } from './logger.js';
-export { encryptString, decryptString } from './crypto.js';
+export { encryptString, decryptString, encryptStringAsync, decryptStringAsync, clearKeyCache } from './crypto.js';
+export { formatDuration, formatBytes } from './format.js';

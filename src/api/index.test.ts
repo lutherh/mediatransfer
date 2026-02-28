@@ -123,6 +123,17 @@ function createServices(): ApiServices {
         ],
         nextToken: 'next-token',
       })),
+      listAll: vi.fn(async () => [
+        {
+          key: '2026/02/20/photo.jpg',
+          encodedKey: 'MjAyNi8wMi8yMC9waG90by5qcGc',
+          size: 123,
+          lastModified: '2026-02-20T10:00:00.000Z',
+          capturedAt: '2026-02-20T09:32:10.000Z',
+          mediaType: 'image',
+          sectionDate: '2026-02-20',
+        },
+      ]),
       getObject: vi.fn(async () => ({
         stream: Readable.from([Buffer.from('mock-image')]),
         contentType: 'image/jpeg',
@@ -130,6 +141,28 @@ function createServices(): ApiServices {
         lastModified: '2026-02-20T10:00:00.000Z',
         contentLength: 10,
       })),
+      getStats: vi.fn(async () => ({
+        totalFiles: 100,
+        totalBytes: 1024000,
+        imageCount: 80,
+        videoCount: 20,
+        oldestDate: '2019-01-01T00:00:00.000Z',
+        newestDate: '2024-12-31T00:00:00.000Z',
+      })),
+      deleteObjects: vi.fn(async (keys: string[]) => ({
+        deleted: keys.map(() => '2026/02/20/photo.jpg'),
+        failed: [],
+      })),
+      moveObject: vi.fn(async (ek: string, newDate: string) => ({
+        from: '2026/02/20/photo.jpg',
+        to: newDate + '/photo.jpg',
+      })),
+      getAlbums: vi.fn(async () => ({
+        albums: [
+          { id: 'album-1', name: 'Vacation', keys: ['2026/02/20/photo.jpg'], createdAt: '2024-01-01T00:00:00.000Z', updatedAt: '2024-01-01T00:00:00.000Z' },
+        ],
+      })),
+      saveAlbums: vi.fn(async () => {}),
     },
     cloudUsage: {
       getSummary: vi.fn(async () => ({
@@ -847,6 +880,219 @@ describe('api server', () => {
     expect(res.json().error.code).toBe('INTERNAL_ERROR');
     expect(res.json().error.message).toBe('Internal server error');
     expect(res.json()).toHaveProperty('requestId');
+
+    await app.close();
+  });
+
+  it('deletes catalog items via DELETE /catalog/api/items', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/catalog/api/items',
+      payload: { encodedKeys: ['MjAyNi8wMi8yMC9waG90by5qcGc'] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.deleted).toHaveLength(1);
+    expect(body.failed).toHaveLength(0);
+    expect(services.catalog?.deleteObjects).toHaveBeenCalledWith(['MjAyNi8wMi8yMC9waG90by5qcGc']);
+
+    await app.close();
+  });
+
+  it('rejects delete with empty keys array', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/catalog/api/items',
+      payload: { encodedKeys: [] },
+    });
+
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it('moves catalog item via PATCH /catalog/api/items/move', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/catalog/api/items/move',
+      payload: { encodedKey: 'MjAyNi8wMi8yMC9waG90by5qcGc', newDatePrefix: '2020/03/15' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.from).toBe('2026/02/20/photo.jpg');
+    expect(body.to).toBe('2020/03/15/photo.jpg');
+
+    await app.close();
+  });
+
+  it('rejects move with invalid date prefix', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/catalog/api/items/move',
+      payload: { encodedKey: 'MjAyNi8wMi8yMC9waG90by5qcGc', newDatePrefix: '2020-03-15' },
+    });
+
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it('bulk moves catalog items via PATCH /catalog/api/items/bulk-move', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/catalog/api/items/bulk-move',
+      payload: {
+        moves: [
+          { encodedKey: 'MjAyNi8wMi8yMC9waG90by5qcGc', newDatePrefix: '2020/03/15' },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.moved).toHaveLength(1);
+    expect(body.failed).toHaveLength(0);
+
+    await app.close();
+  });
+
+  it('lists all items via GET /catalog/api/items/all', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const res = await app.inject({ method: 'GET', url: '/catalog/api/items/all' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items).toHaveLength(1);
+    expect(services.catalog?.listAll).toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('returns catalog stats via GET /catalog/api/stats', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const res = await app.inject({ method: 'GET', url: '/catalog/api/stats' });
+
+    expect(res.statusCode).toBe(200);
+    const stats = res.json();
+    expect(stats.totalFiles).toBe(100);
+    expect(stats.imageCount).toBe(80);
+    expect(stats.videoCount).toBe(20);
+
+    await app.close();
+  });
+
+  it('lists albums via GET /catalog/api/albums', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const res = await app.inject({ method: 'GET', url: '/catalog/api/albums' });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.albums).toHaveLength(1);
+    expect(body.albums[0].name).toBe('Vacation');
+
+    await app.close();
+  });
+
+  it('creates album via POST /catalog/api/albums', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/catalog/api/albums',
+      payload: { name: 'Summer 2024' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.name).toBe('Summer 2024');
+    expect(body.id).toBeDefined();
+    expect(services.catalog?.saveAlbums).toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('updates album via PATCH /catalog/api/albums/:albumId', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/catalog/api/albums/album-1',
+      payload: { name: 'Updated Name', addKeys: ['new-key.jpg'] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.name).toBe('Updated Name');
+    expect(body.keys).toContain('new-key.jpg');
+
+    await app.close();
+  });
+
+  it('returns 404 for non-existent album update', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/catalog/api/albums/non-existent',
+      payload: { name: 'Fail' },
+    });
+
+    expect(res.statusCode).toBe(404);
+
+    await app.close();
+  });
+
+  it('deletes album via DELETE /catalog/api/albums/:albumId', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/catalog/api/albums/album-1',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().deleted).toBe('album-1');
+    expect(services.catalog?.saveAlbums).toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('returns 404 when deleting non-existent album', async () => {
+    const services = createServices();
+    const app = await createApiServer({ services });
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/catalog/api/albums/non-existent',
+    });
+
+    expect(res.statusCode).toBe(404);
 
     await app.close();
   });

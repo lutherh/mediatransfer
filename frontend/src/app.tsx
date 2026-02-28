@@ -9,6 +9,7 @@ import { PhotoTransferPage } from '@/pages/photo-transfer-page';
 import { OAuthCallbackPage } from '@/pages/oauth-callback-page';
 import { CostsPage } from '@/pages/costs-page';
 import { CatalogPage } from '@/pages/catalog-page';
+import { UploadPage } from '@/pages/upload-page';
 
 const queryClient = new QueryClient();
 
@@ -21,6 +22,7 @@ export function App() {
           <Route element={<OAuthCallbackPage />} path="auth/google/callback" />
           <Route element={<Layout />} path="/">
             <Route element={<PhotoTransferPage />} index />
+            <Route element={<UploadPage />} path="upload" />
             <Route element={<TakeoutProgressPage />} path="takeout" />
             <Route element={<TransfersListPage />} path="transfers" />
             <Route element={<CatalogPage />} path="catalog" />

@@ -74,6 +74,15 @@ export function CostsPage() {
       <h1 className="text-xl sm:text-2xl font-semibold">Costs</h1>
 
       <Card>
+        <p className="text-sm font-medium text-slate-900">How to use this estimate</p>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-600">
+          <li>Storage totals come from your current uploaded objects.</li>
+          <li>Request, retrieval, lifecycle, and egress costs are based on your assumptions below.</li>
+          <li>Use this as planning guidance; final billing can vary by provider billing rules.</li>
+        </ul>
+      </Card>
+
+      <Card>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-sm font-medium text-slate-900">Detailed cost estimate</p>
