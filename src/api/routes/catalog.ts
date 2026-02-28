@@ -301,8 +301,13 @@ function buildCatalogHtml(): string {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Scaleway Catalog Browser</title>
+  <script>document.documentElement.dataset.theme=localStorage.getItem('catalogTheme')||'dark'</script>
   <style>
-    :root { color-scheme: light dark; --bg: #0f1115; --surface: #141923; --surface2: #1a2030; --border: #252b39; --text: #e8ecf3; --text-dim: #9aa6bf; --accent: #4d8bff; --accent-light: #6ba0ff; --danger: #ff4d6a; --danger-dim: #3d1520; --warning: #ffb84d; --warning-dim: #3d2e15; --success: #4dff88; --check-bg: #4d8bff; --select-ring: #4d8bff55; --tile-radius: 4px; }
+    :root { color-scheme: dark; --bg: #0f1115; --surface: #141923; --surface2: #1a2030; --border: #252b39; --text: #e8ecf3; --text-dim: #9aa6bf; --accent: #4d8bff; --accent-light: #6ba0ff; --danger: #ff4d6a; --danger-dim: #3d1520; --warning: #ffb84d; --warning-dim: #3d2e15; --success: #4dff88; --check-bg: #4d8bff; --select-ring: #4d8bff55; --tile-radius: 4px; }
+    [data-theme="light"] { color-scheme: light; --bg: #ffffff; --surface: #f8f9fa; --surface2: #f1f3f4; --border: #dadce0; --text: #202124; --text-dim: #5f6368; --accent: #1a73e8; --accent-light: #4285f4; --danger: #d93025; --danger-dim: #fce8e6; --warning: #f9ab00; --warning-dim: #fef7e0; --success: #1e8e3e; --check-bg: #1a73e8; --select-ring: #1a73e855; --tile-radius: 4px; }
+    #themeToggle .theme-moon { display:none; }
+    [data-theme="light"] #themeToggle .theme-sun { display:none; }
+    [data-theme="light"] #themeToggle .theme-moon { display:block; }
     * { box-sizing: border-box; }
     body { margin:0; font-family: 'Google Sans', Inter, system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--text); }
 
@@ -505,6 +510,7 @@ function buildCatalogHtml(): string {
       <button class="search-clear" id="searchClear" style="display:none"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
     </div>
     <span id="stats" style="font-size:12px;color:var(--text-dim)"></span>
+    <button class="icon-btn" id="themeToggle" title="Toggle theme"><svg class="theme-sun" viewBox="0 0 24 24"><path fill="currentColor" d="M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69zM12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6zm0-10c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4z"/></svg><svg class="theme-moon" viewBox="0 0 24 24"><path fill="currentColor" d="M9.5 2c-1.82 0-3.53.5-5 1.35 2.99 1.73 5 4.95 5 8.65s-2.01 6.92-5 8.65c1.47.85 3.18 1.35 5 1.35 5.52 0 10-4.48 10-10S15.02 2 9.5 2z"/></svg></button>
     <button class="icon-btn" id="settingsBtn" title="Settings"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg></button>
     <select id="mediaType" style="display:none" title="Filter by media type">
       <option value="all">All media</option>
@@ -1525,6 +1531,18 @@ function buildCatalogHtml(): string {
       if (isDateSortSelected()) prefetchAllForDateSort();
       else loadMore();
     }
+
+    /* ═══ Theme toggle ═══ */
+    function setTheme(theme) {
+      document.documentElement.dataset.theme = theme;
+      localStorage.setItem('catalogTheme', theme);
+      const btn = $('themeToggle');
+      if (btn) btn.title = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    }
+    $('themeToggle').addEventListener('click', () => {
+      const current = document.documentElement.dataset.theme || 'dark';
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
 
     /* ═══ Search ═══ */
     let searchTimeout;
