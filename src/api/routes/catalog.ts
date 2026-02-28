@@ -722,6 +722,7 @@ function buildCatalogHtml(): string {
     }, { rootMargin: '400px 0px' }); // 400px ahead
     let currentTab = 'photos';
     let albums = [];
+    let albumKeyIndex = new Map(); // key → Set<albumName> for O(1) search
     let modalIndex = -1;
     let flatVisible = [];
 
@@ -784,15 +785,28 @@ function buildCatalogHtml(): string {
       $('sidebarOverlay').classList.remove('visible');
     }
 
+    // Chevron click: expand/collapse album sublist without navigation
+    document.querySelectorAll('.sidebar-item .item-chevron').forEach(chevron => {
+      chevron.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const btn = chevron.closest('.sidebar-item');
+        btn.classList.toggle('expanded');
+        $('albumSublist').classList.toggle('open');
+        if ($('albumSublist').classList.contains('open') && albums.length === 0) {
+          loadAlbums();
+        }
+      });
+    });
+
     document.querySelectorAll('.sidebar-item').forEach(btn => {
       btn.addEventListener('click', () => {
         if (btn.dataset.nav === 'albums') {
-          // Toggle album sub-list expand/collapse
-          btn.classList.toggle('expanded');
-          $('albumSublist').classList.toggle('open');
-          if ($('albumSublist').classList.contains('open') && albums.length === 0) {
-            loadAlbums();
+          // Navigate to albums panel AND expand sublist
+          if (!btn.classList.contains('expanded')) {
+            btn.classList.add('expanded');
+            $('albumSublist').classList.add('open');
           }
+          navigateTo('albums');
           return;
         }
         navigateTo(btn.dataset.nav);
@@ -883,42 +897,75 @@ function buildCatalogHtml(): string {
     $('selClose').addEventListener('click', clearSelection);
 
     /* ═══════════════════════════════════════════════════════════
-       DELETE
+       DELETE (with undo toast — Immich pattern)
        ═══════════════════════════════════════════════════════════ */
+    let pendingDelete = null; // { encodedKeys, removedItems, timeoutId, toastEl }
+
     function showDeleteDialog(encodedKeys) {
-      $('deleteMsg').textContent = 'This will permanently delete ' + encodedKeys.length + ' item' + (encodedKeys.length > 1 ? 's' : '') + ' from Scaleway storage. This cannot be undone.';
-      $('deleteDialog').classList.add('open');
-      $('deleteConfirmBtn').onclick = async () => {
-        $('deleteDialog').classList.remove('open');
-        toast('Deleting ' + encodedKeys.length + ' items…');
-        try {
-          const res = await fetch('/catalog/api/items', {
-            method: 'DELETE',
-            headers: apiHeaders(),
-            body: JSON.stringify({ encodedKeys }),
-          });
-          const result = await res.json();
-          if (result.deleted?.length) {
-            toast(result.deleted.length + ' items deleted', 'success');
-            // Remove from allItems
-            const deletedSet = new Set(result.deleted);
-            allItems = allItems.filter(i => !deletedSet.has(i.key));
-            selected.clear();
-            updateSelectionToolbar();
-            scheduleRender();
-            loadStats();
-          }
-          if (result.failed?.length) {
-            toast(result.failed.length + ' items failed to delete', 'error');
-          }
-        } catch (err) {
-          toast('Delete failed: ' + err.message, 'error');
-        }
-      };
+      // Cancel any previous pending delete first
+      if (pendingDelete) commitDelete();
+
+      // Immediately remove items from view (optimistic)
+      const ekSet = new Set(encodedKeys);
+      const removedItems = allItems.filter(i => ekSet.has(i.encodedKey));
+      allItems = allItems.filter(i => !ekSet.has(i.encodedKey));
+      selected.clear();
+      updateSelectionToolbar();
+      scheduleRender();
+
+      // Show undo toast
+      const el = document.createElement('div');
+      el.className = 'toast info';
+      el.style.display = 'flex'; el.style.alignItems = 'center'; el.style.gap = '12px';
+      el.innerHTML = '<span>' + encodedKeys.length + ' item' + (encodedKeys.length > 1 ? 's' : '') + ' deleted</span>';
+      const undoBtn = document.createElement('button');
+      undoBtn.textContent = 'Undo';
+      undoBtn.style.cssText = 'background:var(--accent);color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:13px;font-weight:500;';
+      undoBtn.addEventListener('click', () => {
+        // Restore items
+        clearTimeout(pendingDelete.timeoutId);
+        allItems = allItems.concat(pendingDelete.removedItems);
+        pendingDelete.toastEl.remove();
+        pendingDelete = null;
+        scheduleRender();
+        toast('Delete undone', 'success');
+      });
+      el.appendChild(undoBtn);
+      $('toastContainer').appendChild(el);
+
+      const timeoutId = setTimeout(() => commitDelete(), 5000);
+      pendingDelete = { encodedKeys, removedItems, timeoutId, toastEl: el };
     }
 
-    $('deleteCancelBtn').addEventListener('click', () => $('deleteDialog').classList.remove('open'));
-    $('deleteDialog').addEventListener('click', (e) => { if (e.target === $('deleteDialog')) $('deleteDialog').classList.remove('open'); });
+    async function commitDelete() {
+      if (!pendingDelete) return;
+      const { encodedKeys, toastEl } = pendingDelete;
+      clearTimeout(pendingDelete.timeoutId);
+      toastEl.style.opacity = '0';
+      setTimeout(() => toastEl.remove(), 300);
+      pendingDelete = null;
+
+      try {
+        const res = await fetch('/catalog/api/items', {
+          method: 'DELETE',
+          headers: apiHeaders(),
+          body: JSON.stringify({ encodedKeys }),
+        });
+        const result = await res.json();
+        if (result.deleted?.length) {
+          toast(result.deleted.length + ' items permanently deleted', 'success');
+          loadStats();
+        }
+        if (result.failed?.length) {
+          toast(result.failed.length + ' items failed to delete', 'error');
+          // Reload to restore state
+          resetAndReload();
+        }
+      } catch (err) {
+        toast('Delete failed: ' + err.message, 'error');
+        resetAndReload();
+      }
+    }
 
     $('selDelete').addEventListener('click', () => {
       if (selected.size === 0) return;
@@ -1073,8 +1120,13 @@ function buildCatalogHtml(): string {
           if (mn && (mn.includes(query) || mn.slice(0,3).includes(query))) return true;
         }
       }
-      // Match album name
-      if (albums.some(a => a.name && a.name.toLowerCase().includes(query) && a.keys && a.keys.includes(item.key))) return true;
+      // Match album name — O(1) via albumKeyIndex
+      const itemAlbumNames = albumKeyIndex.get(item.key);
+      if (itemAlbumNames) {
+        for (const name of itemAlbumNames) {
+          if (name.includes(query)) return true;
+        }
+      }
       return false;
     }
 
@@ -1143,6 +1195,7 @@ function buildCatalogHtml(): string {
       const items = getVisibleItems().slice().sort(compareItems);
       flatVisible = items;
       lastVisibleCount = items.length;
+      buildProblematicIndex(items);
 
       // Empty state
       const existingEmpty = $('content').querySelector('.empty-state');
@@ -1162,7 +1215,12 @@ function buildCatalogHtml(): string {
         if (version !== renderVersion) return;
         const end = Math.min(idx + BATCH, items.length);
         for (; idx < end; idx++) renderItem(items[idx], idx);
-        if (idx < items.length) requestAnimationFrame(chunk);
+        if (idx < items.length) {
+          requestAnimationFrame(chunk);
+        } else {
+          // All batches done — update section counts accurately
+          updateAllSectionCounts();
+        }
       }
       requestAnimationFrame(chunk);
     }
@@ -1171,6 +1229,28 @@ function buildCatalogHtml(): string {
       if (renderQueued) return;
       renderQueued = true;
       requestAnimationFrame(() => { renderAllItems(); updateItemStats(); });
+    }
+
+    function updateAllSectionCounts() {
+      sections.forEach((grid, dateStr) => {
+        const sec = grid.closest('section');
+        if (!sec) return;
+        const countLabel = sec.querySelector('.section-count');
+        if (countLabel) countLabel.textContent = grid.children.length + ' items';
+      });
+    }
+
+    // Pre-computed problematic counts per section date (rebuilt before each render)
+    let problematicBySection = new Map();
+
+    function buildProblematicIndex(items) {
+      problematicBySection = new Map();
+      for (const item of items) {
+        if (isProblematic(item.key)) {
+          const d = item.sectionDate || 'Unknown date';
+          problematicBySection.set(d, (problematicBySection.get(d) || 0) + 1);
+        }
+      }
     }
 
     function getSection(dateStr) {
@@ -1200,9 +1280,8 @@ function buildCatalogHtml(): string {
       header.appendChild(dateLabel);
       header.appendChild(countLabel);
 
-      // Check if this section has problematic items
-      const sectionItems = allItems.filter(i => i.sectionDate === dateStr);
-      const problemCount = sectionItems.filter(i => isProblematic(i.key)).length;
+      // Use pre-computed problematic count (O(1) lookup)
+      const problemCount = problematicBySection.get(dateStr) || 0;
       if (problemCount > 0) {
         const warn = document.createElement('span');
         warn.className = 'section-warn';
@@ -1217,11 +1296,6 @@ function buildCatalogHtml(): string {
       sec.appendChild(grid);
       $('content').appendChild(sec);
       sections.set(dateStr, grid);
-
-      // Update count after rendering
-      requestAnimationFrame(() => {
-        countLabel.textContent = grid.children.length + ' items';
-      });
 
       return grid;
     }
@@ -1444,11 +1518,25 @@ function buildCatalogHtml(): string {
     /* ═══════════════════════════════════════════════════════════
        ALBUMS
        ═══════════════════════════════════════════════════════════ */
+    function rebuildAlbumKeyIndex() {
+      albumKeyIndex = new Map();
+      albums.forEach(a => {
+        if (!a.keys || !a.name) return;
+        const lowerName = a.name.toLowerCase();
+        a.keys.forEach(k => {
+          let names = albumKeyIndex.get(k);
+          if (!names) { names = new Set(); albumKeyIndex.set(k, names); }
+          names.add(lowerName);
+        });
+      });
+    }
+
     async function loadAlbums() {
       try {
         const res = await fetch('/catalog/api/albums', { headers: apiHeaders() });
         const data = await res.json();
         albums = data.albums || [];
+        rebuildAlbumKeyIndex();
         renderAlbums();
       } catch (err) {
         toast('Failed to load albums', 'error');
@@ -1568,10 +1656,21 @@ function buildCatalogHtml(): string {
     }
 
     function viewAlbum(album) {
-      // Filter to show only album items in main view
+      // Show album items in main content area, keeping Albums active in sidebar
       $('searchInput').value = ''; $('searchClear').style.display = 'none';
       clearSelection();
-      navigateTo('photos');
+
+      // Show content area but keep Albums sidebar item active
+      currentTab = 'photos';
+      $('content').style.display = '';
+      $('status').style.display = '';
+      $('sentinel').style.display = '';
+      $('albumsPanel').classList.remove('visible');
+      $('repairPanel').classList.remove('visible');
+      document.querySelectorAll('.sidebar-item').forEach(b => b.classList.remove('active'));
+      const albumNav = document.querySelector('.sidebar-item[data-nav="albums"]');
+      if (albumNav) albumNav.classList.add('active');
+      closeSidebar();
 
       // Filter allItems to only album keys
       const keySet = new Set(album.keys);
@@ -1584,7 +1683,7 @@ function buildCatalogHtml(): string {
       header.style.cssText = 'padding:12px 8px;display:flex;align-items:center;gap:12px;';
       header.innerHTML = '<button class="icon-btn" id="albumBack" title="Back"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg></button><h3 style="margin:0">' + album.name + ' <span style="font-weight:400;color:var(--text-dim);font-size:14px">(' + album.keys.length + ' items)</span></h3>';
       $('content').appendChild(header);
-      header.querySelector('#albumBack').addEventListener('click', () => { scheduleRender(); });
+      header.querySelector('#albumBack').addEventListener('click', () => { navigateTo('albums'); });
 
       flatVisible = albumItems.sort(compareItems);
       lastVisibleCount = albumItems.length;
