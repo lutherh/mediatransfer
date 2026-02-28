@@ -17,6 +17,8 @@ export type UnpackResult = {
   mediaRoot: string;
 };
 
+export type ExtractProgressCallback = (current: number, total: number, archiveName: string) => void;
+
 /**
  * Discover Google Takeout archive files in input directory.
  */
@@ -38,10 +40,13 @@ export async function extractTakeoutArchives(
   archivePaths: string[],
   workDir: string,
   extractor: ArchiveExtractor = extractArchive,
+  onProgress?: ExtractProgressCallback,
 ): Promise<void> {
   await fs.mkdir(workDir, { recursive: true });
 
-  for (const archivePath of archivePaths) {
+  for (let i = 0; i < archivePaths.length; i++) {
+    const archivePath = archivePaths[i];
+    onProgress?.(i + 1, archivePaths.length, path.basename(archivePath));
     await extractor(archivePath, workDir);
   }
 }
@@ -99,6 +104,7 @@ export async function unpackAndNormalizeTakeout(
   inputDir: string,
   workDir: string,
   extractor: ArchiveExtractor = extractArchive,
+  onExtractProgress?: ExtractProgressCallback,
 ): Promise<UnpackResult> {
   const archives = await discoverTakeoutArchives(inputDir);
   if (archives.length === 0) {
@@ -116,10 +122,28 @@ export async function unpackAndNormalizeTakeout(
     );
   }
 
-  await extractTakeoutArchives(archives, workDir, extractor);
-  const mediaRoot = await normalizeTakeoutMediaRoot(workDir);
+  await extractTakeoutArchives(archives, workDir, extractor, onExtractProgress);
 
-  return { archives, mediaRoot };
+  const roots = await findGooglePhotosRoots(workDir);
+  if (roots.length > 0) {
+    const mediaRoot = await normalizeTakeoutMediaRoot(workDir);
+    return { archives, mediaRoot };
+  }
+
+  const hasMediaInWorkDir = await containsMediaFiles(workDir);
+  if (hasMediaInWorkDir) {
+    return {
+      archives,
+      mediaRoot: workDir,
+    };
+  }
+
+  const hasArchiveBrowser = await exists(path.join(workDir, 'Takeout', 'archive_browser.html'));
+  if (hasArchiveBrowser) {
+    throw new Error(buildMetadataOnlyError(archives, inputDir));
+  }
+
+  throw new Error(buildNoMediaError(archives, inputDir));
 }
 
 /**
@@ -227,4 +251,97 @@ async function containsMediaFiles(rootDir: string): Promise<boolean> {
   }
 
   return false;
+}
+
+/**
+ * Detect multi-part archive naming patterns like `-001.tgz`, `-002.zip`, etc.
+ * Returns the part numbers found, or empty if no pattern detected.
+ */
+export function detectArchiveParts(archivePaths: string[]): { partNumbers: number[]; isMultiPart: boolean } {
+  const partPattern = /-(\d{3})\.(zip|tar|tgz|tar\.gz)$/i;
+  const partNumbers: number[] = [];
+
+  for (const archivePath of archivePaths) {
+    const match = path.basename(archivePath).match(partPattern);
+    if (match) {
+      partNumbers.push(parseInt(match[1], 10));
+    }
+  }
+
+  return {
+    partNumbers: partNumbers.sort((a, b) => a - b),
+    isMultiPart: partNumbers.length > 0,
+  };
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+async function getTotalArchiveSize(archivePaths: string[]): Promise<number> {
+  let total = 0;
+  for (const p of archivePaths) {
+    try {
+      const stat = await fs.stat(p);
+      total += stat.size;
+    } catch {
+      // skip if inaccessible
+    }
+  }
+  return total;
+}
+
+function buildMetadataOnlyError(archives: string[], inputDir: string): string {
+  const { partNumbers, isMultiPart } = detectArchiveParts(archives);
+  const lines: string[] = [];
+
+  lines.push('The extracted archive(s) only contain Takeout metadata (archive_browser.html), not actual photos or videos.');
+  lines.push('');
+
+  if (isMultiPart) {
+    const partsStr = partNumbers.join(', ');
+    lines.push(`You have part(s): ${partsStr}`);
+    lines.push('Google Takeout splits large exports into multiple numbered archives (e.g. -001.tgz, -002.tgz, -003.tgz).');
+    lines.push('Part 1 typically contains only metadata. The actual photos are in the remaining parts.');
+    lines.push('');
+    lines.push('To fix this:');
+    lines.push('  1. Go back to https://takeout.google.com and check your export');
+    lines.push('  2. Download ALL parts (not just part 1)');
+    lines.push(`  3. Place every .tgz/.zip file into: ${inputDir}`);
+    lines.push('  4. Run takeout:scan again');
+  } else {
+    lines.push('This usually means the Google Takeout export is incomplete or only a partial download.');
+    lines.push('');
+    lines.push('To fix this:');
+    lines.push('  1. Go to https://takeout.google.com and create a new export of Google Photos');
+    lines.push('  2. Download ALL archive parts (exports are often split into multiple files)');
+    lines.push(`  3. Place every .tgz/.zip file into: ${inputDir}`);
+    lines.push('  4. Run takeout:scan again');
+  }
+
+  return lines.join('\n');
+}
+
+function buildNoMediaError(archives: string[], inputDir: string): string {
+  const archiveNames = archives.map((a) => path.basename(a)).join(', ');
+  const lines: string[] = [];
+
+  lines.push(`No Google Photos folders or media files found after extracting: ${archiveNames}`);
+  lines.push('');
+  lines.push('This can happen if:');
+  lines.push('  - The archive does not contain Google Photos data');
+  lines.push('  - The Takeout export did not include Google Photos');
+  lines.push('  - The archive is corrupted or incomplete');
+  lines.push('');
+  lines.push('To fix this:');
+  lines.push('  1. Go to https://takeout.google.com');
+  lines.push('  2. Make sure "Google Photos" is selected in the export options');
+  lines.push('  3. Download all archive parts');
+  lines.push(`  4. Place them in: ${inputDir}`);
+  lines.push('  5. Run takeout:scan again');
+
+  return lines.join('\n');
 }

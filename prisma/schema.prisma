@@ -8,6 +8,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 // ── Enums ─────────────────────────────────────────────────────
@@ -75,5 +76,24 @@ model TransferLog {
 
   @@index([jobId])
   @@map("transfer_logs")
+}
+
+/// A media item (photo or video) stored in the user's library.
+model MediaItem {
+  id          String    @id @default(uuid())
+  filename    String                          /// Original filename from upload
+  s3Key       String    @unique @map("s3_key") /// Object key in Scaleway storage
+  sha256      String                          /// SHA-256 hash of file contents for dedup
+  size        Int                             /// File size in bytes
+  contentType String    @map("content_type")  /// MIME type (e.g. image/jpeg, video/mp4)
+  width       Int?                            /// Image/video width in pixels
+  height      Int?                            /// Image/video height in pixels
+  capturedAt  DateTime? @map("captured_at")   /// Original capture date (from EXIF or filename)
+  source      String    @default("upload")    /// How the item entered the library: "upload", "takeout", "transfer"
+  uploadedAt  DateTime  @default(now()) @map("uploaded_at")
+
+  @@index([sha256])
+  @@index([capturedAt])
+  @@map("media_items")
 }
 

@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createReadStream } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 
 type UploadStateItem = {
@@ -18,6 +19,14 @@ type UploadState = {
 
 type TakeoutAction = 'scan' | 'upload' | 'verify' | 'resume' | 'start-services';
 
+type ScanProgress = {
+  phase: string;
+  current: number;
+  total: number;
+  percent: number;
+  detail?: string;
+};
+
 type ActionStatus = {
   running: boolean;
   action?: TakeoutAction;
@@ -26,10 +35,12 @@ type ActionStatus = {
   exitCode?: number;
   success?: boolean;
   output: string[];
+  scanProgress?: ScanProgress;
 };
 
 const MAX_OUTPUT_LINES = 300;
 const ACTION_TIMEOUT_MS = 30 * 60 * 1000;
+const MANIFEST_COUNT_TIMEOUT_MS = 5000;
 const RUN_STATUS: ActionStatus = {
   running: false,
   output: [],
@@ -37,17 +48,22 @@ const RUN_STATUS: ActionStatus = {
 
 let currentProcess: ChildProcess | null = null;
 let currentTimeout: NodeJS.Timeout | null = null;
+const manifestCountCache = new Map<string, {
+  mtimeMs: number;
+  size: number;
+  count: number;
+}>();
 
 export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void> {
   app.get('/takeout/status', async () => {
+    const inputDir = path.resolve(process.env.TAKEOUT_INPUT_DIR ?? './data/takeout/input');
     const workDir = path.resolve(process.env.TAKEOUT_WORK_DIR ?? './data/takeout/work');
     const statePath = path.resolve(process.env.TRANSFER_STATE_PATH ?? './data/takeout/state.json');
     const manifestPath = path.join(workDir, 'manifest.jsonl');
 
-    const [manifestCount, state] = await Promise.all([
-      readManifestCount(manifestPath),
-      readUploadState(statePath),
-    ]);
+    const state = await readUploadState(statePath);
+    const fallbackTotal = Object.keys(state.items).length;
+    const manifestCount = await readManifestCount(manifestPath, fallbackTotal);
 
     const summary = summarizeState(state.items);
     const total = manifestCount;
@@ -57,6 +73,8 @@ export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void>
 
     return {
       paths: {
+        inputDir,
+        workDir,
         manifestPath,
         statePath,
       },
@@ -230,7 +248,34 @@ function appendOutput(chunk: string): void {
   }
 }
 
+function parseScanProgress(): ScanProgress | undefined {
+  // Find the last [SCAN_PROGRESS] line in output
+  for (let i = RUN_STATUS.output.length - 1; i >= 0; i--) {
+    const line = RUN_STATUS.output[i];
+    if (line.startsWith('[SCAN_PROGRESS]')) {
+      try {
+        const json = line.slice('[SCAN_PROGRESS]'.length);
+        const parsed = JSON.parse(json);
+        return {
+          phase: String(parsed.phase ?? 'unknown'),
+          current: Number(parsed.current ?? 0),
+          total: Number(parsed.total ?? 0),
+          percent: Math.min(100, Math.max(0, Number(parsed.percent ?? 0))),
+          detail: parsed.detail ? String(parsed.detail) : undefined,
+        };
+      } catch {
+        // malformed line, skip
+      }
+    }
+  }
+  return undefined;
+}
+
 function snapshotStatus(): ActionStatus {
+  const scanProgress = (RUN_STATUS.running && RUN_STATUS.action === 'scan')
+    ? parseScanProgress()
+    : undefined;
+
   return {
     running: RUN_STATUS.running,
     action: RUN_STATUS.action,
@@ -239,6 +284,7 @@ function snapshotStatus(): ActionStatus {
     exitCode: RUN_STATUS.exitCode,
     success: RUN_STATUS.success,
     output: [...RUN_STATUS.output],
+    scanProgress,
   };
 }
 
@@ -250,16 +296,75 @@ function isAction(value: string | undefined): value is TakeoutAction {
     || value === 'start-services';
 }
 
-async function readManifestCount(manifestPath: string): Promise<number> {
+async function readManifestCount(manifestPath: string, fallbackCount: number): Promise<number> {
   try {
-    const content = await fs.readFile(manifestPath, 'utf8');
-    return content
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0).length;
+    const stat = await fs.stat(manifestPath);
+    const cached = manifestCountCache.get(manifestPath);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return cached.count;
+    }
+
+    const count = await countManifestLinesStream(manifestPath, MANIFEST_COUNT_TIMEOUT_MS);
+    manifestCountCache.set(manifestPath, {
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      count,
+    });
+    return count;
   } catch {
-    return 0;
+    const cached = manifestCountCache.get(manifestPath);
+    return cached?.count ?? fallbackCount;
   }
+}
+
+async function countManifestLinesStream(manifestPath: string, timeoutMs: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const stream = createReadStream(manifestPath, { encoding: 'utf8' });
+
+    let count = 0;
+    let remainder = '';
+    let settled = false;
+
+    const finish = (handler: () => void): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      handler();
+    };
+
+    const timeout = setTimeout(() => {
+      stream.destroy(new Error('Manifest count timed out'));
+    }, timeoutMs);
+
+    stream.on('data', (chunk: string) => {
+      const text = remainder + chunk;
+      const lines = text.split(/\r?\n/);
+      remainder = lines.pop() ?? '';
+
+      for (const line of lines) {
+        if (line.trim().length > 0) {
+          count += 1;
+        }
+      }
+    });
+
+    stream.on('end', () => {
+      finish(() => {
+        if (remainder.trim().length > 0) {
+          count += 1;
+        }
+        resolve(count);
+      });
+    });
+
+    stream.on('error', (error) => {
+      finish(() => {
+        reject(error);
+      });
+    });
+  });
 }
 
 async function readUploadState(statePath: string): Promise<UploadState> {

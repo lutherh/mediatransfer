@@ -14,3 +14,5 @@ data/takeout/work/
 data/takeout/state.json
 data/takeout/state.backup.json
 debug-output.txt
+data/takeout/state.json.pre-exif-repair.bak
+scripts/takeout-repair-exif.ts

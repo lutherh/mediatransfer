@@ -1,4 +1,5 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000';
+const TAKEOUT_FETCH_TIMEOUT_MS = 10_000;
 
 export type TransferJob = {
   id: string;
@@ -80,6 +81,8 @@ export type CloudUsageSummary = {
 
 export type TakeoutStatus = {
   paths: {
+    inputDir: string;
+    workDir: string;
     manifestPath: string;
     statePath: string;
   };
@@ -104,6 +107,14 @@ export type TakeoutStatus = {
 
 export type TakeoutAction = 'scan' | 'upload' | 'verify' | 'resume' | 'start-services';
 
+export type ScanProgress = {
+  phase: string;
+  current: number;
+  total: number;
+  percent: number;
+  detail?: string;
+};
+
 export type TakeoutActionStatus = {
   running: boolean;
   action?: TakeoutAction;
@@ -112,6 +123,7 @@ export type TakeoutActionStatus = {
   exitCode?: number;
   success?: boolean;
   output: string[];
+  scanProgress?: ScanProgress;
 };
 
 export async function fetchTransfers(): Promise<TransferJob[]> {
@@ -230,7 +242,11 @@ export async function createTransfer(payload: {
 }
 
 export async function fetchTakeoutStatus(): Promise<TakeoutStatus> {
-  const response = await fetch(`${API_BASE_URL}/takeout/status`);
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/takeout/status`,
+    undefined,
+    TAKEOUT_FETCH_TIMEOUT_MS,
+  );
   if (!response.ok) {
     throw new Error('Failed to fetch takeout status');
   }
@@ -239,7 +255,11 @@ export async function fetchTakeoutStatus(): Promise<TakeoutStatus> {
 }
 
 export async function fetchTakeoutActionStatus(): Promise<TakeoutActionStatus> {
-  const response = await fetch(`${API_BASE_URL}/takeout/action-status`);
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/takeout/action-status`,
+    undefined,
+    TAKEOUT_FETCH_TIMEOUT_MS,
+  );
   if (!response.ok) {
     throw new Error('Failed to fetch takeout action status');
   }
@@ -248,9 +268,13 @@ export async function fetchTakeoutActionStatus(): Promise<TakeoutActionStatus> {
 }
 
 export async function runTakeoutAction(action: TakeoutAction): Promise<{ message: string; status: TakeoutActionStatus }> {
-  const response = await fetch(`${API_BASE_URL}/takeout/actions/${action}`, {
-    method: 'POST',
-  });
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/takeout/actions/${action}`,
+    {
+      method: 'POST',
+    },
+    TAKEOUT_FETCH_TIMEOUT_MS,
+  );
 
   if (!response.ok) {
     const raw = await response.text();
@@ -274,6 +298,29 @@ function parseApiErrorMessage(raw: string): string | undefined {
   }
 
   return raw;
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  timeoutMs = TAKEOUT_FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Request timed out. Ensure backend is running and reachable.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ── Google Auth ────────────────────────────────────────────────
@@ -370,5 +417,114 @@ export async function fetchPickedItems(
 
 export async function deletePickerSession(sessionId: string): Promise<void> {
   await fetch(`${API_BASE_URL}/picker/session/${sessionId}`, { method: 'DELETE' });
+}
+
+// ── Uploads ────────────────────────────────────────────────────
+
+export type UploadResult = {
+  filename: string;
+  status: 'uploaded' | 'duplicate' | 'error';
+  mediaItemId?: string;
+  s3Key?: string;
+  size?: number;
+  capturedAt?: string;
+  message?: string;
+};
+
+export type UploadResponse = {
+  summary: {
+    total: number;
+    uploaded: number;
+    duplicates: number;
+    errors: number;
+  };
+  results: UploadResult[];
+};
+
+export type MediaItem = {
+  id: string;
+  filename: string;
+  s3Key: string;
+  sha256: string;
+  size: number;
+  contentType: string;
+  width?: number;
+  height?: number;
+  capturedAt?: string;
+  source: string;
+  uploadedAt: string;
+};
+
+export type UploadListResponse = {
+  items: MediaItem[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type UploadStats = {
+  totalItems: number;
+};
+
+/**
+ * Upload one or more files to the library.
+ * Uses XMLHttpRequest for progress tracking.
+ */
+export function uploadFiles(
+  files: File[],
+  onProgress?: (loaded: number, total: number) => void,
+): { promise: Promise<UploadResponse>; abort: () => void } {
+  const formData = new FormData();
+  for (const file of files) {
+    formData.append('files', file);
+  }
+
+  const xhr = new XMLHttpRequest();
+  const promise = new Promise<UploadResponse>((resolve, reject) => {
+    xhr.open('POST', `${API_BASE_URL}/uploads`);
+
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(e.loaded, e.total);
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      try {
+        const data = JSON.parse(xhr.responseText) as UploadResponse;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(data);
+        } else {
+          reject(new Error((data as unknown as { error?: string })?.error ?? `Upload failed (${xhr.status})`));
+        }
+      } catch {
+        reject(new Error(`Upload failed (${xhr.status})`));
+      }
+    });
+
+    xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
+    xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
+
+    xhr.send(formData);
+  });
+
+  return { promise, abort: () => xhr.abort() };
+}
+
+export async function fetchUploadList(limit = 50, offset = 0): Promise<UploadListResponse> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const response = await fetch(`${API_BASE_URL}/uploads?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch uploads');
+  }
+  return response.json();
+}
+
+export async function fetchUploadStats(): Promise<UploadStats> {
+  const response = await fetch(`${API_BASE_URL}/uploads/stats`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch upload stats');
+  }
+  return response.json();
 }
 

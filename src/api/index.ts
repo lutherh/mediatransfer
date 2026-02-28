@@ -15,6 +15,10 @@ import {
 	listJobs,
 	listTransferLogs,
 	updateJob,
+	createMediaItem,
+	findMediaItemByHash,
+	listMediaItems,
+	countMediaItems,
 } from '../db/index.js';
 import { createRedisConnection } from '../jobs/connection.js';
 import { enqueueBulkTransfer } from '../jobs/bulk-transfer.js';
@@ -44,6 +48,7 @@ import { registerCatalogRoutes } from './routes/catalog.js';
 import { registerTakeoutRoutes } from './routes/takeout.js';
 import { registerGoogleAuthRoutes } from './routes/google-auth.js';
 import { registerCloudUsageRoutes } from './routes/cloud-usage.js';
+import { registerUploadRoutes } from './routes/uploads.js';
 import { getStoredTokens, setStoredTokens } from './routes/google-token-store.js';
 import type { ApiServices } from './types.js';
 
@@ -160,7 +165,7 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 
 	const runtime: { services: ApiServices; dispose?: () => Promise<void> } = options?.services
 		? { services: options.services }
-		: createDefaultServices();
+		: await createDefaultServices();
 
 	await registerHealthRoutes(app);
 	await registerCredentialsRoutes(app, runtime.services.credentials);
@@ -168,6 +173,7 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	await registerProviderRoutes(app, runtime.services.providers);
 	await registerCatalogRoutes(app, runtime.services.catalog);
 	await registerCloudUsageRoutes(app, runtime.services.cloudUsage);
+	await registerUploadRoutes(app, runtime.services.uploads);
 	await registerTakeoutRoutes(app);
 	await registerGoogleAuthRoutes(app);
 
@@ -178,19 +184,40 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	return app;
 }
 
-function createDefaultServices(): { services: ApiServices; dispose: () => Promise<void> } {
-	const redis = createRedisConnection();
-	const queue = createTransferQueue(redis);
-	const deadLetterQueue = createTransferDeadLetterQueue(redis);
-	const worker = createTransferWorker(
-		redis,
-		async (payload) => processQueuedTransfer(payload),
-		{ connection: redis as any, deadLetterQueue },
-	);
+async function createDefaultServices(): Promise<{ services: ApiServices; dispose: () => Promise<void> }> {
+	let redis: ReturnType<typeof createRedisConnection> | null = null;
+	let queue: ReturnType<typeof createTransferQueue> | null = null;
+	let deadLetterQueue: ReturnType<typeof createTransferDeadLetterQueue> | null = null;
+	let worker: ReturnType<typeof createTransferWorker> | null = null;
 
-	worker.on('error', (err) => {
-		console.error('[transfer-worker] Worker error', err);
-	});
+	try {
+		redis = createRedisConnection();
+		// Attach error handler immediately to suppress "[ioredis] Unhandled error event" noise
+		redis.on('error', () => { /* handled below via connect()/ping() rejection */ });
+		await redis.connect(); // explicitly connect (lazyConnect is enabled)
+		await redis.ping(); // verify Redis is actually reachable
+		queue = createTransferQueue(redis);
+		deadLetterQueue = createTransferDeadLetterQueue(redis);
+		worker = createTransferWorker(
+			redis,
+			async (payload) => processQueuedTransfer(payload),
+			{ connection: redis as any, deadLetterQueue },
+		);
+
+		worker.on('error', (err) => {
+			console.error('[transfer-worker] Worker error', err);
+		});
+
+		console.log('[redis] Redis connected – queue features enabled');
+	} catch (err) {
+		console.warn('[redis] Redis is not reachable – running without queue support:', (err as Error).message ?? err);
+		// Clean up partial connections
+		try { await redis?.disconnect(); } catch { /* ignore */ }
+		redis = null;
+		queue = null;
+		deadLetterQueue = null;
+		worker = null;
+	}
 
 	const services: ApiServices = {
 		credentials: {
@@ -244,19 +271,22 @@ function createDefaultServices(): { services: ApiServices; dispose: () => Promis
 			},
 		},
 		queue: {
-			enqueueBulk: (input) => enqueueBulkTransfer(queue as any, input),
+			enqueueBulk: queue
+				? (input) => enqueueBulkTransfer(queue as any, input)
+				: async () => { throw new Error('Queue is unavailable – Redis is not connected'); },
 		},
 		catalog: createCatalogServiceFromEnv(),
 		cloudUsage: createCloudUsageServiceFromEnv(),
+		uploads: createUploadServiceFromEnv(),
 	};
 
 	return {
 		services,
 		dispose: async () => {
-			await worker.close();
-			await deadLetterQueue.close();
-			await queue.close();
-			await redis.quit();
+			await worker?.close();
+			await deadLetterQueue?.close();
+			await queue?.close();
+			await redis?.quit();
 		},
 	};
 }
@@ -777,6 +807,39 @@ function createCloudUsageServiceFromEnv() {
 				measuredAt: new Date(measuredAtMs).toISOString(),
 			};
 		},
+	};
+}
+
+function createUploadServiceFromEnv() {
+	const region = process.env.SCW_REGION;
+	const bucket = process.env.SCW_BUCKET;
+	const accessKey = process.env.SCW_ACCESS_KEY;
+	const secretKey = process.env.SCW_SECRET_KEY;
+	const prefix = process.env.SCW_PREFIX;
+
+	if (!region || !bucket || !accessKey || !secretKey) {
+		return undefined;
+	}
+
+	const provider = createScalewayProvider(
+		validateScalewayConfig({
+			provider: 'scaleway',
+			region,
+			bucket,
+			accessKey,
+			secretKey,
+			prefix,
+		}),
+	);
+
+	return {
+		findByHash: (sha256: string) => findMediaItemByHash(sha256),
+		createMediaItem: (input: Parameters<typeof createMediaItem>[0]) => createMediaItem(input),
+		listMediaItems: (filter?: Parameters<typeof listMediaItems>[0], limit?: number, offset?: number) =>
+			listMediaItems(filter, limit, offset),
+		countMediaItems: () => countMediaItems(),
+		uploadToStorage: (key: string, stream: Readable, contentType?: string) =>
+			provider.upload(key, stream, contentType),
 	};
 }
 

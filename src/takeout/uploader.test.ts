@@ -12,8 +12,14 @@ class MockProvider implements CloudProvider {
   readonly objects = new Set<string>();
   readonly failAttempts = new Map<string, number>();
   readonly uploadAttempts = new Map<string, number>();
+  listFailuresRemaining = 0;
 
   async list(options?: { prefix?: string; maxResults?: number }): Promise<ObjectInfo[]> {
+    if (this.listFailuresRemaining > 0) {
+      this.listFailuresRemaining -= 1;
+      throw new Error('transient list failure');
+    }
+
     const keys = [...this.objects].filter((key) =>
       options?.prefix ? key.startsWith(options.prefix) : true,
     );
@@ -309,6 +315,26 @@ describe('takeout/uploader', () => {
     });
   });
 
+  it('continues upload when preloading/list checks fail transiently', async () => {
+    await withTempDir(async (dir) => {
+      const provider = new MockProvider();
+      provider.listFailuresRemaining = 2;
+
+      const entry = await createEntry(dir, 'Album/IMG_L1.jpg', '2025/12/13/Album/IMG_L1.jpg');
+      const summary = await uploadManifest({
+        provider,
+        entries: [entry],
+        statePath: path.join(dir, 'state.json'),
+        retryCount: 0,
+        sleep: async () => {},
+      });
+
+      expect(summary.uploaded).toBe(1);
+      expect(summary.failed).toBe(0);
+      expect(provider.objects.has(entry.destinationKey)).toBe(true);
+    });
+  });
+
   it('batches state persistence according to persistEvery', async () => {
     await withTempDir(async (dir) => {
       const provider = new MockProvider();
@@ -371,5 +397,41 @@ describe('takeout/uploader', () => {
     expect(index.has('2025/12/13/Album/IMG_1.jpg')).toBe(true);
     expect(index.has('2026/01/05/Trip/IMG_3.jpg')).toBe(true);
     expect(index.has('2026/02/20/Other/IMG_5.jpg')).toBe(true);
+  });
+
+  it('does not retry ENOENT errors (missing source file)', async () => {
+    await withTempDir(async (dir) => {
+      const provider = new MockProvider();
+      const statePath = path.join(dir, 'state.json');
+
+      // Create a manifest entry pointing to a file that doesn't exist
+      const entry: ManifestEntry = {
+        sourcePath: path.join(dir, 'nonexistent', 'IMG_dup1.jpg'),
+        relativePath: 'nonexistent/IMG_dup1.jpg',
+        size: 100,
+        mtimeMs: Date.now(),
+        capturedAt: new Date('2025-12-13T00:00:00Z').toISOString(),
+        datePath: '2025/12/13',
+        destinationKey: '2025/12/13/nonexistent/IMG_dup1.jpg',
+      };
+
+      let retryCount = 0;
+      const summary = await uploadManifest({
+        provider,
+        entries: [entry],
+        statePath,
+        retryCount: 5,
+        sleep: async () => { retryCount++; },
+      });
+
+      // Should fail immediately without retries
+      expect(summary.failed).toBe(1);
+      expect(summary.uploaded).toBe(0);
+      expect(retryCount).toBe(0);
+
+      const state = await loadUploadState(statePath);
+      expect(state.items[entry.destinationKey]?.status).toBe('failed');
+      expect(state.items[entry.destinationKey]?.error).toContain('ENOENT');
+    });
   });
 });

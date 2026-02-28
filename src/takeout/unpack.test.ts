@@ -8,6 +8,7 @@ import {
   findGooglePhotosRoots,
   normalizeTakeoutMediaRoot,
   unpackAndNormalizeTakeout,
+  detectArchiveParts,
 } from './unpack.js';
 
 async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
@@ -116,6 +117,28 @@ describe('takeout/unpack', () => {
     });
   });
 
+  it('falls back to extracted workDir when media exists but Google Photos folder name is different', async () => {
+    await withTempDir(async (dir) => {
+      const inputDir = path.join(dir, 'input');
+      const workDir = path.join(dir, 'work');
+      await fs.mkdir(inputDir, { recursive: true });
+      await fs.writeFile(path.join(inputDir, 'takeout-1.zip'), 'archive');
+
+      const result = await unpackAndNormalizeTakeout(
+        inputDir,
+        workDir,
+        async (_archivePath, destinationDir) => {
+          const mediaDir = path.join(destinationDir, 'Takeout', 'Fotos', 'AlbumX');
+          await fs.mkdir(mediaDir, { recursive: true });
+          await fs.writeFile(path.join(mediaDir, 'file.jpg'), 'content');
+        },
+      );
+
+      expect(result.archives).toHaveLength(1);
+      expect(result.mediaRoot).toBe(workDir);
+    });
+  });
+
   it('throws actionable error when no archives are found', async () => {
     await withTempDir(async (dir) => {
       const inputDir = path.join(dir, 'input');
@@ -125,6 +148,64 @@ describe('takeout/unpack', () => {
         'Place one or more Google Takeout .zip/.tar/.tgz archives there and run takeout:scan again.',
       );
     });
+  });
+
+  it('throws actionable error when extraction only contains archive_browser metadata', async () => {
+    await withTempDir(async (dir) => {
+      const inputDir = path.join(dir, 'input');
+      const workDir = path.join(dir, 'work');
+      await fs.mkdir(inputDir, { recursive: true });
+      await fs.writeFile(path.join(inputDir, 'takeout-1.tgz'), 'archive');
+
+      await expect(unpackAndNormalizeTakeout(
+        inputDir,
+        workDir,
+        async (_archivePath, destinationDir) => {
+          const reportPath = path.join(destinationDir, 'Takeout', 'archive_browser.html');
+          await fs.mkdir(path.dirname(reportPath), { recursive: true });
+          await fs.writeFile(reportPath, '<html></html>');
+        },
+      )).rejects.toThrow('only contain Takeout metadata (archive_browser.html)');
+    });
+  });
+
+  it('detects multi-part archive naming and includes part numbers in error', async () => {
+    await withTempDir(async (dir) => {
+      const inputDir = path.join(dir, 'input');
+      const workDir = path.join(dir, 'work');
+      await fs.mkdir(inputDir, { recursive: true });
+      await fs.writeFile(path.join(inputDir, 'takeout-20260224T151101Z-001.tgz'), 'archive');
+
+      const err = await unpackAndNormalizeTakeout(
+        inputDir,
+        workDir,
+        async (_archivePath, destinationDir) => {
+          const reportPath = path.join(destinationDir, 'Takeout', 'archive_browser.html');
+          await fs.mkdir(path.dirname(reportPath), { recursive: true });
+          await fs.writeFile(reportPath, '<html></html>');
+        },
+      ).catch((e: Error) => e);
+
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toContain('You have part(s): 1');
+      expect(err.message).toContain('Download ALL parts');
+      expect(err.message).toContain('takeout.google.com');
+    });
+  });
+
+  it('detectArchiveParts identifies multi-part archives', () => {
+    const result = detectArchiveParts([
+      '/input/takeout-20260224T151101Z-001.tgz',
+      '/input/takeout-20260224T151101Z-003.tgz',
+    ]);
+    expect(result.isMultiPart).toBe(true);
+    expect(result.partNumbers).toEqual([1, 3]);
+  });
+
+  it('detectArchiveParts returns false for non-numbered archives', () => {
+    const result = detectArchiveParts(['/input/photos-backup.zip']);
+    expect(result.isMultiPart).toBe(false);
+    expect(result.partNumbers).toEqual([]);
   });
 
   it('supports direct media folders when no archives are present', async () => {
