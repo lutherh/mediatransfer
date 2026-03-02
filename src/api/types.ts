@@ -64,6 +64,7 @@ export type CatalogService = {
   listPage(input?: { max?: number; token?: string; prefix?: string }): Promise<{ items: CatalogItem[]; nextToken?: string }>;
   listAll(prefix?: string): Promise<CatalogItem[]>;
   getObject(encodedKey: string): Promise<CatalogObject>;
+  getObjectBuffer(encodedKey: string, maxBytes?: number): Promise<{ buffer: Buffer; contentType?: string; contentLength?: number }>;
   getStats(): Promise<CatalogStats>;
   deleteObjects(encodedKeys: string[]): Promise<DeleteResult>;
   moveObject(encodedKey: string, newDatePrefix: string): Promise<{ from: string; to: string }>;
