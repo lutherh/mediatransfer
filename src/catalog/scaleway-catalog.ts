@@ -76,6 +76,8 @@ export type CatalogService = {
   }): Promise<CatalogPage>;
   listAll(prefix?: string): Promise<CatalogItem[]>;
   getObject(encodedKey: string): Promise<CatalogObject>;
+  /** Fetch up to `maxBytes` of an object as a Buffer (for EXIF parsing etc.). */
+  getObjectBuffer(encodedKey: string, maxBytes?: number): Promise<{ buffer: Buffer; contentType?: string; contentLength?: number }>;
   getStats(): Promise<CatalogStats>;
   deleteObjects(encodedKeys: string[]): Promise<DeleteResult>;
   moveObject(encodedKey: string, newDatePrefix: string): Promise<{ from: string; to: string }>;
@@ -207,6 +209,42 @@ export class ScalewayCatalogService implements CatalogService {
       contentType: response.ContentType ?? inferContentType(decodedKey),
       etag: response.ETag,
       lastModified: response.LastModified?.toISOString(),
+      contentLength: response.ContentLength,
+    };
+  }
+
+  async getObjectBuffer(
+    encodedKey: string,
+    maxBytes = 65536,
+  ): Promise<{ buffer: Buffer; contentType?: string; contentLength?: number }> {
+    const decodedKey = decodeKey(encodedKey);
+    const fullKey = this.withPrefix(decodedKey);
+    const response = await this.client.send(
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: fullKey,
+        Range: `bytes=0-${maxBytes - 1}`,
+      }),
+      { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
+    );
+
+    if (!response.Body) {
+      throw new Error(`Object has empty body: ${decodedKey}`);
+    }
+
+    const stream =
+      response.Body instanceof Readable
+        ? response.Body
+        : Readable.fromWeb(response.Body as ReadableStream<Uint8Array>);
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+
+    return {
+      buffer: Buffer.concat(chunks),
+      contentType: response.ContentType ?? inferContentType(decodedKey),
       contentLength: response.ContentLength,
     };
   }

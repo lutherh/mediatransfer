@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { CatalogService } from '../../catalog/scaleway-catalog.js';
+import { extractExifMetadata } from '../../utils/exif.js';
 
 const listQuerySchema = z.object({
   max: z.coerce.number().int().min(1).max(200).optional(),
@@ -270,6 +271,56 @@ export async function registerCatalogRoutes(
     }
     return reply.send(media.stream);
   });
+
+  // ── EXIF metadata ──
+  app.get('/catalog/api/exif/:encodedKey', async (req, reply) => {
+    if (!catalog) {
+      return reply.status(503).send({ error: 'CATALOG_UNAVAILABLE', message: 'Scaleway catalog is not configured' });
+    }
+
+    const { encodedKey } = mediaParamsSchema.parse(req.params);
+
+    try {
+      const { buffer, contentType, contentLength } = await catalog.getObjectBuffer(encodedKey, 65536);
+
+      const exif = await extractExifMetadata(buffer);
+
+      // Build a raw EXIF dump for power users (best-effort, never throws)
+      let rawExif: Record<string, unknown> | undefined;
+      try {
+        const exifr = await import('exifr');
+        const raw = await exifr.default.parse(buffer, { translateValues: true, mergeOutput: true });
+        if (raw && typeof raw === 'object') {
+          rawExif = {};
+          for (const [k, v] of Object.entries(raw)) {
+            // Skip binary/buffer values; keep primitives, dates, and arrays
+            if (v instanceof Uint8Array || Buffer.isBuffer(v)) continue;
+            rawExif[k] = v instanceof Date ? v.toISOString() : v;
+          }
+        }
+      } catch {
+        // Raw EXIF unavailable — non-critical
+      }
+
+      return {
+        capturedAt: exif.capturedAt?.toISOString() ?? null,
+        width: exif.width ?? null,
+        height: exif.height ?? null,
+        make: exif.make ?? null,
+        model: exif.model ?? null,
+        latitude: exif.latitude ?? null,
+        longitude: exif.longitude ?? null,
+        contentType: contentType ?? null,
+        fileSize: contentLength ?? null,
+        raw: rawExif ?? null,
+      };
+    } catch (error) {
+      if (error instanceof Error && (error.name === 'NoSuchKey' || (error as Error & { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404)) {
+        return reply.status(404).send({ error: 'CATALOG_MEDIA_NOT_FOUND', message: 'Catalog media not found' });
+      }
+      throw error;
+    }
+  });
 }
 
 function normalizeEtag(value: string | undefined): string | undefined {
@@ -338,6 +389,10 @@ function buildCatalogHtml(): string {
     .icon-btn::after { content:''; position:absolute; inset:0; background:radial-gradient(circle, var(--text) 10%, transparent 10.01%) no-repeat 50%; transform:scale(10); opacity:0; transition:transform .5s, opacity 1s; }
     .icon-btn:active::after { transform:scale(0); opacity:.12; transition:0s; }
     .icon-btn svg { width:24px; height:24px; fill:currentColor; }
+
+    /* ── Custom Tooltip ── */
+    .custom-tooltip { position:fixed; z-index:100; padding:6px 12px; border-radius:6px; background:var(--surface2); border:1px solid var(--border); color:var(--text); font-size:12px; font-weight:500; pointer-events:none; white-space:nowrap; box-shadow:0 4px 12px rgba(0,0,0,.25); opacity:0; transition:opacity .15s; }
+    .custom-tooltip.visible { opacity:1; }
 
     /* ── Selection toolbar ── */
     .sel-toolbar { position:fixed; top:0; left:0; right:0; z-index:60; display:flex; align-items:center; gap:8px; padding:8px 16px; background:var(--surface); border-bottom:2px solid var(--accent); transform:translateY(-100%); transition:transform .2s ease; }
@@ -425,6 +480,18 @@ function buildCatalogHtml(): string {
     .status { text-align:center; color:var(--text-dim); font-size:13px; padding:16px; }
     #sentinel { height:1px; }
     #toTop { position:fixed; right:16px; bottom:16px; width:44px; height:44px; border-radius:50%; border:none; background:var(--accent); color:#fff; cursor:pointer; display:none; z-index:30; box-shadow:0 2px 8px rgba(0,0,0,.4); font-size:18px; }
+
+    /* ── Month Scrubber ── */
+    .month-scrubber { position:fixed; right:0; top:56px; bottom:0; width:48px; z-index:20; display:flex; flex-direction:column; align-items:center; justify-content:center; user-select:none; pointer-events:none; }
+    .month-scrubber.active { pointer-events:auto; }
+    .month-scrubber-track { display:flex; flex-direction:column; align-items:center; gap:0; max-height:calc(100vh - 80px); overflow:hidden; }
+    .month-scrubber-label { font-size:10px; font-weight:500; color:var(--text-dim); padding:2px 6px; border-radius:4px; cursor:pointer; white-space:nowrap; transition:all .15s; pointer-events:auto; line-height:1.4; }
+    .month-scrubber-label:hover { color:var(--text); background:var(--surface2); }
+    .month-scrubber-label.current { color:var(--accent); font-weight:600; }
+    .month-scrubber-indicator { position:fixed; right:52px; padding:6px 14px; border-radius:8px; background:var(--surface); border:1px solid var(--border); color:var(--text); font-size:14px; font-weight:600; box-shadow:0 4px 12px rgba(0,0,0,.3); display:none; white-space:nowrap; z-index:21; pointer-events:none; }
+    .month-scrubber-indicator.visible { display:block; }
+    @media (max-width:768px) { .month-scrubber { display:none; } }
+    @media (min-width:769px) { .month-scrubber { right:0; } }
     .empty-state { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:80px 20px; color:var(--text-dim); text-align:center; }
     .empty-state h3 { margin:0 0 8px; font-size:18px; font-weight:500; color:var(--text); }
     .empty-state p { margin:0; font-size:14px; }
@@ -634,6 +701,12 @@ function buildCatalogHtml(): string {
 
   <button id="toTop" title="Back to top">↑</button>
 
+  <!-- ═══ Month Scrubber ═══ -->
+  <div class="month-scrubber" id="monthScrubber">
+    <div class="month-scrubber-track" id="scrubberTrack"></div>
+  </div>
+  <div class="month-scrubber-indicator" id="scrubberIndicator"></div>
+
   <!-- ═══ Viewer ═══ -->
   <div class="modal" id="modal">
     <div class="viewer-toolbar" id="viewerToolbar">
@@ -690,6 +763,7 @@ function buildCatalogHtml(): string {
   </div>
 
   <div class="toast-container" id="toastContainer"></div>
+  <div class="custom-tooltip" id="customTooltip"></div>
 
   </div><!-- /main-area -->
 
@@ -1238,7 +1312,89 @@ function buildCatalogHtml(): string {
         const countLabel = sec.querySelector('.section-count');
         if (countLabel) countLabel.textContent = grid.children.length + ' items';
       });
+      updateScrubber();
     }
+
+    /* ═══════════════════════════════════════════════════════════
+       MONTH SCRUBBER
+       ═══════════════════════════════════════════════════════════ */
+    const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    let scrubberMonths = []; // { label, dateStr, el (section element) }
+
+    function updateScrubber() {
+      const track = $('scrubberTrack');
+      const scrubber = $('monthScrubber');
+      if (!track || !scrubber) return;
+      track.innerHTML = '';
+      scrubberMonths = [];
+
+      // Collect unique months from rendered sections
+      const seenMonths = new Set();
+      const sectionDates = [...sections.keys()].sort();
+      for (const dateStr of sectionDates) {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) continue;
+        const monthKey = d.getFullYear() + '-' + String(d.getMonth()).padStart(2, '0');
+        if (seenMonths.has(monthKey)) continue;
+        seenMonths.add(monthKey);
+        const label = MONTH_SHORT[d.getMonth()] + ' ' + d.getFullYear();
+        const grid = sections.get(dateStr);
+        const sectionEl = grid?.closest('section');
+        scrubberMonths.push({ label, monthKey, dateStr, el: sectionEl });
+      }
+
+      // Only show scrubber if we have enough months
+      if (scrubberMonths.length < 3) {
+        scrubber.classList.remove('active');
+        return;
+      }
+      scrubber.classList.add('active');
+
+      // Limit visible labels to avoid overflow — show every Nth label if too many
+      const maxLabels = Math.floor((window.innerHeight - 100) / 20);
+      const step = scrubberMonths.length > maxLabels ? Math.ceil(scrubberMonths.length / maxLabels) : 1;
+
+      scrubberMonths.forEach((m, idx) => {
+        const lbl = document.createElement('div');
+        lbl.className = 'month-scrubber-label';
+        lbl.textContent = (idx % step === 0 || idx === scrubberMonths.length - 1) ? m.label : '';
+        lbl.dataset.idx = idx;
+        lbl.addEventListener('click', () => scrollToSection(m));
+        track.appendChild(lbl);
+      });
+
+      highlightCurrentMonth();
+    }
+
+    function scrollToSection(month) {
+      if (month.el) {
+        month.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
+
+    function highlightCurrentMonth() {
+      if (scrubberMonths.length === 0) return;
+      const scrollY = window.scrollY + 120; // offset for sticky header
+      let currentIdx = 0;
+      for (let i = scrubberMonths.length - 1; i >= 0; i--) {
+        if (scrubberMonths[i].el && scrubberMonths[i].el.offsetTop <= scrollY) {
+          currentIdx = i;
+          break;
+        }
+      }
+      const labels = $('scrubberTrack')?.querySelectorAll('.month-scrubber-label') || [];
+      labels.forEach((lbl, i) => lbl.classList.toggle('current', i === currentIdx));
+    }
+
+    // Sync scrubber highlight on scroll
+    let scrubberScrollRaf = 0;
+    window.addEventListener('scroll', () => {
+      if (scrubberScrollRaf) return;
+      scrubberScrollRaf = requestAnimationFrame(() => {
+        highlightCurrentMonth();
+        scrubberScrollRaf = 0;
+      });
+    }, { passive: true });
 
     // Pre-computed problematic counts per section date (rebuilt before each render)
     let problematicBySection = new Map();
@@ -1489,6 +1645,8 @@ function buildCatalogHtml(): string {
     });
 
     let detailOpen = false;
+    let exifCache = new Map(); // encodedKey → exif response
+
     function renderDetailPanel() {
       const item = flatVisible[modalIndex];
       if (!item) return;
@@ -1505,6 +1663,10 @@ function buildCatalogHtml(): string {
       html += '<div class="detail-row"><span class="label">Size: </span>' + formatBytes(item.size) + '</div>';
       html += '<div class="detail-row"><span class="label">Type: </span>' + (item.contentType || item.mediaType) + '</div>';
       html += '</div>';
+
+      // EXIF placeholder — will be filled async
+      html += '<div id="exifSection"></div>';
+
       const itemAlbums = albums.filter(a => a.keys && a.keys.includes(item.key));
       if (itemAlbums.length > 0) {
         html += '<div class="detail-section"><div class="detail-section-title">📁 Albums</div>';
@@ -1513,6 +1675,112 @@ function buildCatalogHtml(): string {
         html += '</div></div>';
       }
       $('detailContent').innerHTML = html;
+
+      // Fetch EXIF data async (only for images)
+      if (item.mediaType === 'image') {
+        loadExifData(item.encodedKey);
+      }
+    }
+
+    async function loadExifData(encodedKey) {
+      const section = $('exifSection');
+      if (!section) return;
+
+      // Check cache
+      if (exifCache.has(encodedKey)) {
+        renderExifSection(section, exifCache.get(encodedKey));
+        return;
+      }
+
+      section.innerHTML = '<div class="detail-section"><div class="detail-section-title">📷 Camera</div><div class="detail-row" style="color:var(--text-dim)">Loading EXIF…</div></div>';
+
+      try {
+        const url = '/catalog/api/exif/' + encodedKey + (apiToken ? '?apiToken=' + apiToken : '');
+        const res = await fetch(url, { headers: apiToken ? { 'x-api-key': apiToken } : {} });
+        if (!res.ok) throw new Error('EXIF fetch failed');
+        const data = await res.json();
+        exifCache.set(encodedKey, data);
+        // Only render if still viewing the same item
+        if (flatVisible[modalIndex]?.encodedKey === encodedKey && $('exifSection')) {
+          renderExifSection($('exifSection'), data);
+        }
+      } catch {
+        if (section) section.innerHTML = '';
+      }
+    }
+
+    function renderExifSection(container, data) {
+      let html = '';
+
+      // Dimensions from EXIF (or from image naturalWidth/Height)
+      if (data.width && data.height) {
+        const mp = ((data.width * data.height) / 1e6).toFixed(1);
+        html += '<div class="detail-section"><div class="detail-section-title">📐 Dimensions</div>';
+        html += '<div class="detail-row">' + data.width + ' × ' + data.height + ' · ' + mp + ' MP</div>';
+        if (data.fileSize) html += '<div class="detail-row"><span class="label">File size: </span>' + formatBytes(data.fileSize) + '</div>';
+        html += '</div>';
+      }
+
+      // Camera info
+      if (data.make || data.model) {
+        html += '<div class="detail-section"><div class="detail-section-title">📷 Camera</div>';
+        if (data.make && data.model) {
+          html += '<div class="detail-row" style="font-weight:500">' + data.make + ' ' + data.model + '</div>';
+        } else {
+          html += '<div class="detail-row" style="font-weight:500">' + (data.make || data.model) + '</div>';
+        }
+        // Look for exposure details in raw EXIF
+        if (data.raw) {
+          const parts = [];
+          if (data.raw.ExposureTime) {
+            const et = data.raw.ExposureTime;
+            parts.push(et < 1 ? '1/' + Math.round(1/et) + 's' : et + 's');
+          }
+          if (data.raw.FNumber) parts.push('f/' + data.raw.FNumber);
+          if (data.raw.ISO) parts.push('ISO ' + data.raw.ISO);
+          if (data.raw.FocalLength) parts.push(data.raw.FocalLength + 'mm');
+          if (parts.length > 0) html += '<div class="detail-row">' + parts.join(' · ') + '</div>';
+        }
+        html += '</div>';
+      }
+
+      // Location
+      if (data.latitude != null && data.longitude != null) {
+        html += '<div class="detail-section"><div class="detail-section-title">📍 Location</div>';
+        html += '<div class="detail-row">' + data.latitude.toFixed(6) + ', ' + data.longitude.toFixed(6) + '</div>';
+        html += '<div class="detail-row"><a href="https://www.openstreetmap.org/?mlat=' + data.latitude + '&mlon=' + data.longitude + '#map=15/' + data.latitude + '/' + data.longitude + '" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">View on OpenStreetMap →</a></div>';
+        html += '</div>';
+      }
+
+      // Raw EXIF expandable
+      if (data.raw && Object.keys(data.raw).length > 0) {
+        html += '<div class="detail-section"><div class="detail-section-title" style="cursor:pointer" onclick="this.parentElement.querySelector(\\'.exif-raw\\').classList.toggle(\\'.open\\');var c=this.querySelector(\\'.chevron\\');if(c)c.textContent=c.textContent===\\'▸\\'?\\'▾\\':\\'▸\\'">';
+        html += '<span class="chevron">▸</span> Raw EXIF (' + Object.keys(data.raw).length + ' tags)</div>';
+        html += '<div class="exif-raw" style="display:none;max-height:400px;overflow-y:auto;font-size:12px;font-family:monospace;">';
+        const sorted = Object.entries(data.raw).sort((a,b) => a[0].localeCompare(b[0]));
+        sorted.forEach(([k, v]) => {
+          let val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+          if (val.length > 120) val = val.slice(0, 120) + '…';
+          html += '<div class="detail-row" style="display:flex;gap:8px;"><span class="label" style="min-width:120px;flex-shrink:0;">' + k + '</span><span style="word-break:break-all;">' + val + '</span></div>';
+        });
+        html += '</div></div>';
+      }
+
+      container.innerHTML = html;
+
+      // Wire up the raw EXIF toggle (since onclick with escaped quotes in template literals is fragile)
+      const toggleTitle = container.querySelector('.detail-section-title[style*="cursor"]');
+      if (toggleTitle) {
+        toggleTitle.addEventListener('click', () => {
+          const rawDiv = toggleTitle.parentElement.querySelector('.exif-raw');
+          if (rawDiv) {
+            const visible = rawDiv.style.display !== 'none';
+            rawDiv.style.display = visible ? 'none' : 'block';
+            const chevron = toggleTitle.querySelector('.chevron');
+            if (chevron) chevron.textContent = visible ? '▸' : '▾';
+          }
+        });
+      }
     }
 
     /* ═══════════════════════════════════════════════════════════
@@ -2044,6 +2312,45 @@ function buildCatalogHtml(): string {
       applyGridSize(savedGrid);
       document.querySelectorAll('#settingsMenu .settings-option[data-grid]').forEach(b => b.classList.toggle('active', b.dataset.grid === savedGrid));
     }
+
+    /* ═══ Custom Tooltips ═══ */
+    (function initTooltips() {
+      const tip = $('customTooltip');
+      let showTimeout;
+      function showTooltip(el) {
+        const text = el.getAttribute('data-tooltip') || el.getAttribute('title');
+        if (!text) return;
+        // Stash and remove title to prevent native tooltip
+        if (el.hasAttribute('title')) {
+          el.setAttribute('data-tooltip', el.getAttribute('title'));
+          el.removeAttribute('title');
+        }
+        clearTimeout(showTimeout);
+        showTimeout = setTimeout(() => {
+          tip.textContent = text;
+          tip.classList.add('visible');
+          const rect = el.getBoundingClientRect();
+          const tipW = tip.offsetWidth;
+          let left = rect.left + rect.width / 2 - tipW / 2;
+          left = Math.max(4, Math.min(left, window.innerWidth - tipW - 4));
+          tip.style.top = (rect.bottom + 8) + 'px';
+          tip.style.left = left + 'px';
+        }, 500);
+      }
+      function hideTooltip() {
+        clearTimeout(showTimeout);
+        tip.classList.remove('visible');
+      }
+      document.addEventListener('mouseover', (e) => {
+        const el = e.target.closest('[title], [data-tooltip]');
+        if (el) showTooltip(el);
+      });
+      document.addEventListener('mouseout', (e) => {
+        const el = e.target.closest('[title], [data-tooltip]');
+        if (el) hideTooltip();
+      });
+      document.addEventListener('click', hideTooltip);
+    })();
 
     resetAndReload();
     loadStats();
