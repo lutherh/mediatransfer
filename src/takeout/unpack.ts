@@ -223,7 +223,12 @@ async function exists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
     return true;
-  } catch {
+  } catch (err) {
+    // ENOENT is the expected case — file simply doesn't exist yet.
+    // Only log genuinely unexpected access errors (permissions etc.).
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn('[unpack] Path not accessible', { filePath, err });
+    }
     return false;
   }
 }
@@ -252,6 +257,8 @@ async function containsMediaFiles(rootDir: string): Promise<boolean> {
 
   return false;
 }
+
+export { containsMediaFiles };
 
 /**
  * Detect multi-part archive naming patterns like `-001.tgz`, `-002.zip`, etc.
@@ -287,7 +294,8 @@ async function getTotalArchiveSize(archivePaths: string[]): Promise<number> {
     try {
       const stat = await fs.stat(p);
       total += stat.size;
-    } catch {
+    } catch (err) {
+      console.debug('[unpack] Failed to stat archive for size calculation', { archivePath: p, err });
       // skip if inaccessible
     }
   }

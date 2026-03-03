@@ -1,23 +1,24 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
+import os from 'node:os';
 import { createReadStream } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
+import type { Env } from '../../config/env.js';
+import type { UploadState, UploadStateItem } from '../../takeout/uploader.js';
+import { apiError } from '../errors.js';
+import { createJob, updateJob } from '../../db/jobs.js';
 
-type UploadStateItem = {
-  status: 'uploaded' | 'skipped' | 'failed';
-  attempts: number;
-  updatedAt: string;
-  error?: string;
-};
-
-type UploadState = {
-  version: 1;
-  updatedAt: string;
-  items: Record<string, UploadStateItem>;
-};
-
-type TakeoutAction = 'scan' | 'upload' | 'verify' | 'resume' | 'start-services';
+type TakeoutAction =
+  | 'scan'
+  | 'upload'
+  | 'verify'
+  | 'resume'
+  | 'start-services'
+  | 'cleanup-move'
+  | 'cleanup-delete'
+  | 'cleanup-force-move'
+  | 'cleanup-force-delete';
 
 type ScanProgress = {
   phase: string;
@@ -38,9 +39,34 @@ type ActionStatus = {
   scanProgress?: ScanProgress;
 };
 
+type ActionCommand = {
+  command: string;
+  args: string[];
+  display: string;
+};
+
 const MAX_OUTPUT_LINES = 300;
-const ACTION_TIMEOUT_MS = 30 * 60 * 1000;
+const ACTION_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours — scan of many large archives can take >30 min
 const MANIFEST_COUNT_TIMEOUT_MS = 5000;
+
+// --- Transfer job tracking ---
+// When an upload or resume action runs, we create a TransferJob so
+// the /transfers page can display progress alongside other transfers.
+const UPLOAD_PROGRESS_RE = /items\s+\d+\/\d+\s+\((\d+)%\)/;
+const PROGRESS_UPDATE_INTERVAL_MS = 5_000; // throttle DB writes
+let currentTransferJobId: string | null = null;
+let lastProgressUpdateMs = 0;
+const ALLOWED_ACTIONS: TakeoutAction[] = [
+  'scan',
+  'upload',
+  'verify',
+  'resume',
+  'start-services',
+  'cleanup-move',
+  'cleanup-delete',
+  'cleanup-force-move',
+  'cleanup-force-delete',
+];
 const RUN_STATUS: ActionStatus = {
   running: false,
   output: [],
@@ -53,23 +79,50 @@ const manifestCountCache = new Map<string, {
   size: number;
   count: number;
 }>();
+// Cache for manifest destination keys (invalidated when manifest file changes)
+const manifestKeysCache = new Map<string, {
+  mtimeMs: number;
+  size: number;
+  keys: Set<string>;
+}>();
 
-export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void> {
+export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Promise<void> {
   app.get('/takeout/status', async () => {
-    const inputDir = path.resolve(process.env.TAKEOUT_INPUT_DIR ?? './data/takeout/input');
-    const workDir = path.resolve(process.env.TAKEOUT_WORK_DIR ?? './data/takeout/work');
-    const statePath = path.resolve(process.env.TRANSFER_STATE_PATH ?? './data/takeout/state.json');
+    const inputDir = path.resolve(env.TAKEOUT_INPUT_DIR);
+    const workDir = path.resolve(env.TAKEOUT_WORK_DIR);
+    const statePath = path.resolve(env.TRANSFER_STATE_PATH);
     const manifestPath = path.join(workDir, 'manifest.jsonl');
 
-    const state = await readUploadState(statePath);
-    const fallbackTotal = Object.keys(state.items).length;
-    const manifestCount = await readManifestCount(manifestPath, fallbackTotal);
+    const [state, manifestKeys] = await Promise.all([
+      readUploadState(statePath),
+      readManifestKeys(manifestPath),
+    ]);
 
-    const summary = summarizeState(state.items);
-    const total = manifestCount;
+    // Count only state entries that correspond to current manifest keys.
+    // This avoids inflated counts from orphaned keys left over by previous runs.
+    const manifestItems: Record<string, UploadStateItem> = {};
+    for (const key of manifestKeys) {
+      const item = state.items[key];
+      if (item) manifestItems[key] = item;
+    }
+
+    const summary = summarizeState(manifestItems);
+    const total = manifestKeys.size;
     const processed = summary.uploaded + summary.skipped + summary.failed;
     const pending = Math.max(total - processed, 0);
     const progress = total > 0 ? Math.min(processed / total, 1) : 0;
+
+    // Count archive files waiting in the input directory
+    let archivesInInput = 0;
+    try {
+      const inputEntries = await fs.readdir(inputDir, { withFileTypes: true });
+      archivesInInput = inputEntries.filter(
+        (e) => e.isFile() && /\.(zip|tar|tgz|tar\.gz)$/i.test(e.name),
+      ).length;
+    } catch (err) {
+      app.log.debug({ err, inputDir }, 'Unable to list takeout input directory');
+      // input dir may not exist yet
+    }
 
     return {
       paths: {
@@ -90,6 +143,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void>
       stateUpdatedAt: state.updatedAt,
       recentFailures: summary.recentFailures,
       isComplete: total > 0 && pending === 0 && summary.failed === 0,
+      archivesInInput,
     };
   });
 
@@ -97,18 +151,20 @@ export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void>
     return snapshotStatus();
   });
 
-  app.post('/takeout/actions/:action', async (req, reply) => {
+  app.post('/takeout/actions/:action', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const action = (req.params as { action?: string }).action;
     if (!isAction(action)) {
       return reply.code(400).send({
-        error: `Unknown action: ${String(action)}`,
-        allowedActions: ['scan', 'upload', 'verify', 'resume', 'start-services'],
+        ...apiError('UNKNOWN_ACTION', `Unknown action: ${String(action)}`),
+        allowedActions: ALLOWED_ACTIONS,
       });
     }
 
     if (RUN_STATUS.running) {
       return reply.code(409).send({
-        error: 'Another takeout action is already running',
+        ...apiError('ACTION_ALREADY_RUNNING', 'Another takeout action is already running'),
         status: snapshotStatus(),
       });
     }
@@ -124,7 +180,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void>
 
 function runAction(action: TakeoutAction): void {
   const projectRoot = path.resolve(process.cwd());
-  const command = resolveActionCommand(action);
+  const commands = resolveActionCommands(action);
 
   RUN_STATUS.running = true;
   RUN_STATUS.action = action;
@@ -134,71 +190,126 @@ function runAction(action: TakeoutAction): void {
   RUN_STATUS.success = undefined;
   RUN_STATUS.output = [];
 
-  const child = spawn(command, {
-    cwd: projectRoot,
-    env: process.env,
-    shell: true,
-  });
+  // Create a TransferJob record so uploads appear on the /transfers page.
+  if (action === 'upload' || action === 'resume') {
+    createTransferJobForUpload();
+  }
 
-  currentProcess = child;
-  appendOutput(`$ ${command}`);
+  const runCommand = (index: number): void => {
+    const current = commands[index];
+    const child = spawn(current.command, current.args, {
+      cwd: projectRoot,
+      env: process.env,
+      shell: os.platform() === 'win32',
+    });
 
-  currentTimeout = setTimeout(() => {
-    if (!RUN_STATUS.running) {
-      return;
-    }
+    currentProcess = child;
+    appendOutput(`$ ${current.display}`);
 
-    appendOutput(`Action timed out after ${Math.round(ACTION_TIMEOUT_MS / 60000)} minutes.`);
-    child.kill();
-    RUN_STATUS.running = false;
-    RUN_STATUS.finishedAt = new Date().toISOString();
-    RUN_STATUS.exitCode = -1;
-    RUN_STATUS.success = false;
-    currentProcess = null;
-    currentTimeout = null;
-  }, ACTION_TIMEOUT_MS);
-
-  child.stdout.on('data', (chunk) => {
-    appendOutput(String(chunk));
-  });
-
-  child.stderr.on('data', (chunk) => {
-    appendOutput(String(chunk));
-  });
-
-  child.on('error', (error) => {
-    appendOutput(`Process error: ${error.message}`);
-    RUN_STATUS.running = false;
-    RUN_STATUS.finishedAt = new Date().toISOString();
-    RUN_STATUS.exitCode = -1;
-    RUN_STATUS.success = false;
-    currentProcess = null;
     if (currentTimeout) {
       clearTimeout(currentTimeout);
-      currentTimeout = null;
     }
-  });
+    currentTimeout = setTimeout(() => {
+      if (!RUN_STATUS.running) {
+        return;
+      }
 
-  child.on('close', (code) => {
-    RUN_STATUS.running = false;
-    RUN_STATUS.finishedAt = new Date().toISOString();
-    RUN_STATUS.exitCode = typeof code === 'number' ? code : -1;
-    RUN_STATUS.success = code === 0;
-    if (action === 'start-services' && RUN_STATUS.success === false) {
-      appendStartServicesFailureHints();
-    }
-    appendOutput(`Action finished with code ${RUN_STATUS.exitCode}`);
-    currentProcess = null;
-    if (currentTimeout) {
-      clearTimeout(currentTimeout);
+      appendOutput(`Action timed out after ${Math.round(ACTION_TIMEOUT_MS / 60000)} minutes.`);
+      child.kill();
+      RUN_STATUS.running = false;
+      RUN_STATUS.finishedAt = new Date().toISOString();
+      RUN_STATUS.exitCode = -1;
+      RUN_STATUS.success = false;
+      currentProcess = null;
       currentTimeout = null;
-    }
-  });
+      finalizeTransferJob(false, 'Upload timed out');
+    }, ACTION_TIMEOUT_MS);
+
+    child.stdout.on('data', (chunk) => {
+      appendOutput(String(chunk));
+    });
+
+    child.stderr.on('data', (chunk) => {
+      appendOutput(String(chunk));
+    });
+
+    child.on('error', (error) => {
+      appendOutput(`Process error: ${error.message}`);
+      RUN_STATUS.running = false;
+      RUN_STATUS.finishedAt = new Date().toISOString();
+      RUN_STATUS.exitCode = -1;
+      RUN_STATUS.success = false;
+      currentProcess = null;
+      if (currentTimeout) {
+        clearTimeout(currentTimeout);
+        currentTimeout = null;
+      }
+      finalizeTransferJob(false, error.message);
+    });
+
+    child.on('close', (code) => {
+      const exitCode = typeof code === 'number' ? code : -1;
+      const success = exitCode === 0;
+      currentProcess = null;
+      if (currentTimeout) {
+        clearTimeout(currentTimeout);
+        currentTimeout = null;
+      }
+
+      if (!success && index + 1 < commands.length) {
+        appendOutput(`Action attempt failed with code ${exitCode}; trying fallback command.`);
+        runCommand(index + 1);
+        return;
+      }
+
+      RUN_STATUS.finishedAt = new Date().toISOString();
+      RUN_STATUS.exitCode = exitCode;
+
+      // After a successful upload or resume, automatically move completed archives
+      // out of the input folder so the user doesn't have to do it manually.
+      if (success && (action === 'upload' || action === 'resume')) {
+        finalizeTransferJob(true);
+        appendOutput(`Action finished with code ${exitCode}`);
+        appendOutput('✅ Upload complete — moving completed archives to uploaded-archives/...');
+        RUN_STATUS.running = true;
+        RUN_STATUS.action = 'cleanup-move';
+        RUN_STATUS.startedAt = new Date().toISOString();
+        RUN_STATUS.finishedAt = undefined;
+        RUN_STATUS.exitCode = undefined;
+        RUN_STATUS.success = undefined;
+        runAction('cleanup-move');
+        return;
+      }
+
+      RUN_STATUS.running = false;
+      RUN_STATUS.success = success;
+      if (!success) {
+        finalizeTransferJob(false, `Process exited with code ${exitCode}`);
+      }
+      if (action === 'start-services' && !success) {
+        appendStartServicesFailureHints();
+      }
+      appendOutput(`Action finished with code ${exitCode}`);
+    });
+  };
+
+  runCommand(0);
 }
 
-function resolveActionCommand(action: TakeoutAction): string {
+function resolveActionCommands(action: TakeoutAction): ActionCommand[] {
   if (action === 'start-services') {
-    return 'docker compose up -d postgres redis || docker-compose up -d postgres redis';
+    return [
+      {
+        command: 'docker',
+        args: ['compose', 'up', '-d', 'postgres', 'redis'],
+        display: 'docker compose up -d postgres redis',
+      },
+      {
+        command: 'docker-compose',
+        args: ['up', '-d', 'postgres', 'redis'],
+        display: 'docker-compose up -d postgres redis',
+      },
+    ];
   }
 
   const scriptByAction: Record<Exclude<TakeoutAction, 'start-services'>, string> = {
@@ -206,9 +317,17 @@ function resolveActionCommand(action: TakeoutAction): string {
     upload: 'takeout:upload',
     verify: 'takeout:verify',
     resume: 'takeout:resume',
+    'cleanup-move': 'takeout:cleanup -- --apply --move-archives --include-unscanned',
+    'cleanup-delete': 'takeout:cleanup -- --apply --delete-archives --include-unscanned',
+    'cleanup-force-move': 'takeout:cleanup -- --apply --move-archives --force --include-unscanned',
+    'cleanup-force-delete': 'takeout:cleanup -- --apply --delete-archives --force --include-unscanned',
   };
 
-  return `npm run ${scriptByAction[action]}`;
+  return [{
+    command: 'npm',
+    args: ['run', ...scriptByAction[action].split(' ')],
+    display: `npm run ${scriptByAction[action]}`,
+  }];
 }
 
 function appendStartServicesFailureHints(): void {
@@ -232,6 +351,65 @@ function appendStartServicesFailureHints(): void {
   appendOutput('Hint: Service startup failed. Run "docker compose logs postgres redis" and fix reported issues, then retry.');
 }
 
+// ---------------------------------------------------------------------------
+// Transfer-job helpers – fire-and-forget DB writes wrapped in try/catch so
+// a missing PostgreSQL never breaks the takeout flow.
+// ---------------------------------------------------------------------------
+
+/** Create a TransferJob record so the /transfers page can show the upload. */
+function createTransferJobForUpload(): void {
+  createJob({
+    sourceProvider: 'Google Takeout',
+    destProvider: 'Scaleway S3',
+  })
+    .then((job) => {
+      currentTransferJobId = job.id;
+      lastProgressUpdateMs = 0;
+      return updateJob(job.id, { status: 'IN_PROGRESS' as const, startedAt: new Date() });
+    })
+    .catch((err) => {
+      console.warn('[takeout] Could not create transfer job (DB may be unavailable):', err);
+    });
+}
+
+/** Throttled: update the transfer-job progress from upload output lines. */
+function maybeUpdateTransferProgress(lines: string[]): void {
+  if (!currentTransferJobId) return;
+
+  const now = Date.now();
+  if (now - lastProgressUpdateMs < PROGRESS_UPDATE_INTERVAL_MS) return;
+
+  // Scan the batch for the latest progress percentage
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const match = lines[i].match(UPLOAD_PROGRESS_RE);
+    if (match) {
+      const percent = parseInt(match[1], 10);
+      lastProgressUpdateMs = now;
+      updateJob(currentTransferJobId, { progress: percent / 100 }).catch((err) => {
+        console.debug('[takeout] Failed to update transfer-job progress:', err);
+      });
+      return;
+    }
+  }
+}
+
+/** Mark the current transfer job as COMPLETED or FAILED. */
+function finalizeTransferJob(success: boolean, errorMessage?: string): void {
+  if (!currentTransferJobId) return;
+
+  const jobId = currentTransferJobId;
+  currentTransferJobId = null;
+
+  updateJob(jobId, {
+    status: (success ? 'COMPLETED' : 'FAILED') as 'COMPLETED' | 'FAILED',
+    progress: success ? 1 : undefined,
+    errorMessage: success ? null : (errorMessage ?? 'Unknown error'),
+    completedAt: new Date(),
+  }).catch((err) => {
+    console.warn('[takeout] Failed to finalize transfer job:', err);
+  });
+}
+
 function appendOutput(chunk: string): void {
   const lines = chunk
     .split(/\r?\n/)
@@ -246,6 +424,9 @@ function appendOutput(chunk: string): void {
   if (RUN_STATUS.output.length > MAX_OUTPUT_LINES) {
     RUN_STATUS.output = RUN_STATUS.output.slice(RUN_STATUS.output.length - MAX_OUTPUT_LINES);
   }
+
+  // Throttled progress update for the transfer job
+  maybeUpdateTransferProgress(lines);
 }
 
 function parseScanProgress(): ScanProgress | undefined {
@@ -263,7 +444,8 @@ function parseScanProgress(): ScanProgress | undefined {
           percent: Math.min(100, Math.max(0, Number(parsed.percent ?? 0))),
           detail: parsed.detail ? String(parsed.detail) : undefined,
         };
-      } catch {
+      } catch (err) {
+        console.debug('[takeout] Ignored malformed scan progress line', err);
         // malformed line, skip
       }
     }
@@ -289,11 +471,45 @@ function snapshotStatus(): ActionStatus {
 }
 
 function isAction(value: string | undefined): value is TakeoutAction {
-  return value === 'scan'
-    || value === 'upload'
-    || value === 'verify'
-    || value === 'resume'
-    || value === 'start-services';
+  if (!value) {
+    return false;
+  }
+  return ALLOWED_ACTIONS.includes(value as TakeoutAction);
+}
+
+/**
+ * Read all destinationKey values from a manifest.jsonl file.
+ * Result is mtime+size cached so repeated polls are O(1) after the first read.
+ */
+async function readManifestKeys(manifestPath: string): Promise<Set<string>> {
+  try {
+    const stat = await fs.stat(manifestPath);
+    const cached = manifestKeysCache.get(manifestPath);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return cached.keys;
+    }
+
+    const raw = await fs.readFile(manifestPath, 'utf8');
+    const keys = new Set<string>();
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const entry = JSON.parse(trimmed) as { destinationKey?: string };
+        if (typeof entry.destinationKey === 'string') keys.add(entry.destinationKey);
+      } catch (err) {
+        console.debug('[takeout] Ignored malformed manifest line', err);
+      }
+    }
+
+    manifestKeysCache.set(manifestPath, { mtimeMs: stat.mtimeMs, size: stat.size, keys });
+    return keys;
+  } catch (err) {
+    console.debug('[takeout] Manifest not available, using cached keys if present', err);
+    // Manifest doesn't exist yet — return whatever is in cache, or empty
+    const cached = manifestKeysCache.get(manifestPath);
+    return cached?.keys ?? new Set();
+  }
 }
 
 async function readManifestCount(manifestPath: string, fallbackCount: number): Promise<number> {
@@ -311,7 +527,8 @@ async function readManifestCount(manifestPath: string, fallbackCount: number): P
       count,
     });
     return count;
-  } catch {
+  } catch (err) {
+    console.debug('[takeout] Falling back to cached manifest count', err);
     const cached = manifestCountCache.get(manifestPath);
     return cached?.count ?? fallbackCount;
   }
@@ -369,14 +586,15 @@ async function countManifestLinesStream(manifestPath: string, timeoutMs: number)
 
 async function readUploadState(statePath: string): Promise<UploadState> {
   try {
-    const raw = await fs.readFile(statePath, 'utf8');
+    const raw = (await fs.readFile(statePath, 'utf8')).replace(/^\uFEFF/, '');
     const parsed = JSON.parse(raw) as UploadState;
     if (!parsed || parsed.version !== 1 || typeof parsed.items !== 'object' || !parsed.items) {
       return createEmptyState();
     }
 
     return parsed;
-  } catch {
+  } catch (err) {
+    console.debug('[takeout] Upload state unavailable, returning empty state', err);
     return createEmptyState();
   }
 }

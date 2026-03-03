@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import { timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -45,12 +46,15 @@ import { registerCredentialsRoutes } from './routes/credentials.js';
 import { registerTransferRoutes } from './routes/transfers.js';
 import { registerProviderRoutes } from './routes/providers.js';
 import { registerCatalogRoutes } from './routes/catalog.js';
+import { registerCatalogAlbumRoutes } from './routes/catalog-albums.js';
 import { registerTakeoutRoutes } from './routes/takeout.js';
 import { registerGoogleAuthRoutes } from './routes/google-auth.js';
 import { registerCloudUsageRoutes } from './routes/cloud-usage.js';
 import { registerUploadRoutes } from './routes/uploads.js';
 import { getStoredTokens, setStoredTokens } from './routes/google-token-store.js';
 import type { ApiServices } from './types.js';
+import { loadEnv, type Env } from '../config/env.js';
+import { apiError } from './errors.js';
 
 export type CreateApiOptions = {
 	services?: ApiServices;
@@ -101,10 +105,7 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 			const headerToken = parseAuthToken(request.headers.authorization, request.headers['x-api-key'], queryToken);
 			if (!headerToken || !safeEqual(headerToken, apiAuthToken)) {
 				return reply.status(401).send({
-					error: {
-						code: 'UNAUTHORIZED',
-						message: 'Missing or invalid API token',
-					},
+					...apiError('UNAUTHORIZED', 'Missing or invalid API token'),
 					requestId: request.id,
 				});
 			}
@@ -114,14 +115,14 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	app.setErrorHandler((error, request, reply) => {
 		if (error instanceof ZodError) {
 			return reply.status(400).send({
-				error: {
-					code: 'VALIDATION_ERROR',
-					message: 'Request validation failed',
-					details: error.issues.map((issue) => ({
+				...apiError(
+					'VALIDATION_ERROR',
+					'Request validation failed',
+					error.issues.map((issue) => ({
 						path: issue.path.join('.'),
 						message: issue.message,
 					})),
-				},
+				),
 				requestId: request.id,
 			});
 		}
@@ -140,16 +141,23 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 		const errorMessage = error instanceof Error ? error.message : String(error);
 
 		return reply.status(statusCode).send({
-			error: {
-				code: statusCode >= 500 ? 'INTERNAL_ERROR' : 'REQUEST_ERROR',
-				message: statusCode >= 500 ? 'Internal server error' : errorMessage,
-			},
+			...apiError(
+				statusCode >= 500 ? 'INTERNAL_ERROR' : 'REQUEST_ERROR',
+				statusCode >= 500 ? 'Internal server error' : errorMessage,
+			),
 			requestId: request.id,
 		});
 	});
 
 	await app.register(cors, {
 		origin: buildCorsOriginHandler(options?.corsAllowedOrigins ?? []),
+		methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+		allowedHeaders: ['Content-Type', 'Authorization', 'X-Api-Token'],
+	});
+
+	await app.register(rateLimit, {
+		max: 500,
+		timeWindow: '1 minute',
 	});
 
 	if (options?.enableSwagger) {
@@ -172,10 +180,12 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	await registerTransferRoutes(app, runtime.services.jobs, runtime.services.queue);
 	await registerProviderRoutes(app, runtime.services.providers);
 	await registerCatalogRoutes(app, runtime.services.catalog);
+	await registerCatalogAlbumRoutes(app, runtime.services.catalog);
 	await registerCloudUsageRoutes(app, runtime.services.cloudUsage);
 	await registerUploadRoutes(app, runtime.services.uploads);
-	await registerTakeoutRoutes(app);
-	await registerGoogleAuthRoutes(app);
+	const env = loadEnv();
+	await registerTakeoutRoutes(app, env);
+	await registerGoogleAuthRoutes(app, env);
 
 	app.addHook('onClose', async () => {
 		await runtime.dispose?.();
@@ -185,6 +195,7 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 }
 
 async function createDefaultServices(): Promise<{ services: ApiServices; dispose: () => Promise<void> }> {
+	const env = loadEnv();
 	let redis: ReturnType<typeof createRedisConnection> | null = null;
 	let queue: ReturnType<typeof createTransferQueue> | null = null;
 	let deadLetterQueue: ReturnType<typeof createTransferDeadLetterQueue> | null = null;
@@ -212,7 +223,11 @@ async function createDefaultServices(): Promise<{ services: ApiServices; dispose
 	} catch (err) {
 		console.warn('[redis] Redis is not reachable – running without queue support:', (err as Error).message ?? err);
 		// Clean up partial connections
-		try { await redis?.disconnect(); } catch { /* ignore */ }
+		try {
+			await redis?.disconnect();
+		} catch (disconnectError) {
+			console.debug('[redis] Ignored disconnect cleanup error', disconnectError);
+		}
 		redis = null;
 		queue = null;
 		deadLetterQueue = null;
@@ -275,9 +290,9 @@ async function createDefaultServices(): Promise<{ services: ApiServices; dispose
 				? (input) => enqueueBulkTransfer(queue as any, input)
 				: async () => { throw new Error('Queue is unavailable – Redis is not connected'); },
 		},
-		catalog: createCatalogServiceFromEnv(),
-		cloudUsage: createCloudUsageServiceFromEnv(),
-		uploads: createUploadServiceFromEnv(),
+		catalog: createCatalogServiceFromEnv(env),
+		cloudUsage: createCloudUsageServiceFromEnv(env),
+		uploads: createUploadServiceFromEnv(env),
 	};
 
 	return {
@@ -497,12 +512,13 @@ async function transferPickedMediaItemToScaleway(
 	payload: TransferJobPayload,
 	mediaItemId: string,
 ): Promise<{ destinationKey: string; filename?: string; skipped: boolean }> {
-	const tokens = getStoredTokens();
+	const env = loadEnv();
+	const tokens = await getStoredTokens();
 	if (!tokens) {
 		throw new Error('Google session expired: not connected. Please reconnect and retry.');
 	}
 
-	const googleConfig = getGoogleOAuthConfigFromEnv();
+	const googleConfig = getGoogleOAuthConfigFromEnv(env);
 	const sourceConfig = payload.sourceConfig as Record<string, unknown> | undefined;
 	const sessionId = sourceConfig?.sessionId;
 	if (typeof sessionId !== 'string' || sessionId.trim().length === 0) {
@@ -515,7 +531,7 @@ async function transferPickedMediaItemToScaleway(
 	let activeTokens = tokens;
 	if (isTokenExpired(activeTokens)) {
 		activeTokens = await getValidAccessToken(oauthClient);
-		setStoredTokens(activeTokens);
+		await setStoredTokens(activeTokens);
 	}
 
 	const pickerClient = new GooglePhotosPickerClient(oauthClient, activeTokens);
@@ -529,7 +545,7 @@ async function transferPickedMediaItemToScaleway(
 		throw new Error(`Picked media item ${mediaItemId} is missing baseUrl.`);
 	}
 
-	const scaleway = createScalewayProvider(getScalewayConfigFromEnv());
+	const scaleway = createScalewayProvider(getScalewayConfigFromEnv(env));
 	const destinationKey = buildDestinationKey(
 		media.filename ?? `${mediaItemId}.bin`,
 		mediaItemId,
@@ -554,7 +570,7 @@ async function transferPickedMediaItemToScaleway(
 
 	if (response.status === 401 || response.status === 403) {
 		activeTokens = await getValidAccessToken(oauthClient);
-		setStoredTokens(activeTokens);
+		await setStoredTokens(activeTokens);
 		response = await fetchWithTimeout(downloadUrl, {
 			headers: { Authorization: `Bearer ${activeTokens.accessToken}` },
 		}, 60_000, `download media ${mediaItemId} (token refresh)`);
@@ -639,10 +655,10 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
 	}
 }
 
-function getGoogleOAuthConfigFromEnv(): { clientId: string; clientSecret: string; redirectUri: string } {
-	const clientId = process.env.GOOGLE_CLIENT_ID;
-	const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-	const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? 'http://localhost:5173/auth/google/callback';
+function getGoogleOAuthConfigFromEnv(env: Env): { clientId: string; clientSecret: string; redirectUri: string } {
+	const clientId = env.GOOGLE_CLIENT_ID;
+	const clientSecret = env.GOOGLE_CLIENT_SECRET;
+	const redirectUri = env.GOOGLE_REDIRECT_URI;
 
 	if (!clientId || !clientSecret) {
 		throw new Error('Missing GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET in environment.');
@@ -651,14 +667,14 @@ function getGoogleOAuthConfigFromEnv(): { clientId: string; clientSecret: string
 	return { clientId, clientSecret, redirectUri };
 }
 
-function getScalewayConfigFromEnv() {
+function getScalewayConfigFromEnv(env: Env) {
 	return validateScalewayConfig({
 		provider: 'scaleway',
-		region: process.env.SCW_REGION,
-		bucket: process.env.SCW_BUCKET,
-		accessKey: process.env.SCW_ACCESS_KEY,
-		secretKey: process.env.SCW_SECRET_KEY,
-		prefix: process.env.SCW_PREFIX,
+		region: env.SCW_REGION,
+		bucket: env.SCW_BUCKET,
+		accessKey: env.SCW_ACCESS_KEY,
+		secretKey: env.SCW_SECRET_KEY,
+		prefix: env.SCW_PREFIX,
 	});
 }
 
@@ -719,12 +735,12 @@ function extractApiTokenFromUrl(url: string): string | undefined {
 	return value && value.length > 0 ? value : undefined;
 }
 
-function createCatalogServiceFromEnv(): ScalewayCatalogService | undefined {
-	const region = process.env.SCW_REGION;
-	const bucket = process.env.SCW_BUCKET;
-	const accessKey = process.env.SCW_ACCESS_KEY;
-	const secretKey = process.env.SCW_SECRET_KEY;
-	const prefix = process.env.SCW_PREFIX;
+function createCatalogServiceFromEnv(env: Env): ScalewayCatalogService | undefined {
+	const region = env.SCW_REGION;
+	const bucket = env.SCW_BUCKET;
+	const accessKey = env.SCW_ACCESS_KEY;
+	const secretKey = env.SCW_SECRET_KEY;
+	const prefix = env.SCW_PREFIX;
 
 	if (!region || !bucket || !accessKey || !secretKey) {
 		return undefined;
@@ -739,12 +755,12 @@ function createCatalogServiceFromEnv(): ScalewayCatalogService | undefined {
 	});
 }
 
-function createCloudUsageServiceFromEnv() {
-	const region = process.env.SCW_REGION;
-	const bucket = process.env.SCW_BUCKET;
-	const accessKey = process.env.SCW_ACCESS_KEY;
-	const secretKey = process.env.SCW_SECRET_KEY;
-	const prefix = process.env.SCW_PREFIX;
+function createCloudUsageServiceFromEnv(env: Env) {
+	const region = env.SCW_REGION;
+	const bucket = env.SCW_BUCKET;
+	const accessKey = env.SCW_ACCESS_KEY;
+	const secretKey = env.SCW_SECRET_KEY;
+	const prefix = env.SCW_PREFIX;
 
 	if (!region || !bucket || !accessKey || !secretKey) {
 		return undefined;
@@ -810,12 +826,12 @@ function createCloudUsageServiceFromEnv() {
 	};
 }
 
-function createUploadServiceFromEnv() {
-	const region = process.env.SCW_REGION;
-	const bucket = process.env.SCW_BUCKET;
-	const accessKey = process.env.SCW_ACCESS_KEY;
-	const secretKey = process.env.SCW_SECRET_KEY;
-	const prefix = process.env.SCW_PREFIX;
+function createUploadServiceFromEnv(env: Env) {
+	const region = env.SCW_REGION;
+	const bucket = env.SCW_BUCKET;
+	const accessKey = env.SCW_ACCESS_KEY;
+	const secretKey = env.SCW_SECRET_KEY;
+	const prefix = env.SCW_PREFIX;
 
 	if (!region || !bucket || !accessKey || !secretKey) {
 		return undefined;

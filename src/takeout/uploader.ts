@@ -134,7 +134,8 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
   let preloadedExistingKeys = new Set<string>();
   try {
     preloadedExistingKeys = await preloadDestinationIndex(options.provider, entries);
-  } catch {
+  } catch (err) {
+    console.debug('[uploader] Failed to preload destination index, continuing without preload', err);
     preloadedExistingKeys = new Set<string>();
   }
   const confirmedExistingKeys = new Set<string>(preloadedExistingKeys);
@@ -228,7 +229,8 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
         confirmedExistingKeys,
         existenceCache,
       );
-    } catch {
+    } catch (err) {
+      console.debug('[uploader] Failed object existence check, treating as missing', err);
       destinationExists = false;
     }
 
@@ -452,14 +454,15 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
 
 export async function loadUploadState(statePath: string): Promise<UploadState> {
   try {
-    const raw = await fs.readFile(statePath, 'utf8');
+    const raw = (await fs.readFile(statePath, 'utf8')).replace(/^\uFEFF/, '');
     const parsed = JSON.parse(raw) as UploadState;
     if (parsed.version !== 1 || typeof parsed.items !== 'object' || !parsed.items) {
       return createEmptyState();
     }
 
     return parsed;
-  } catch {
+  } catch (err) {
+    console.debug('[uploader] Failed to load upload state, using empty state', err);
     return createEmptyState();
   }
 }
@@ -544,7 +547,7 @@ export function collectDatePrefixes(entries: Array<{ destinationKey: string }>):
   const prefixes = new Set<string>();
 
   for (const entry of entries) {
-    const match = /^(\d{4}\/\d{2}\/\d{2})\//.exec(entry.destinationKey);
+    const match = /^((?:transfers\/)?\d{4}\/\d{2}\/\d{2})\//.exec(entry.destinationKey);
     if (match?.[1]) {
       prefixes.add(`${match[1]}/`);
     }

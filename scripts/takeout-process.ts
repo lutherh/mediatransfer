@@ -112,6 +112,7 @@ console.log('│  Google Takeout → Scaleway Incremental Mode  │');
 console.log('└─────────────────────────────────────────────┘');
 console.log('');
 console.log('This processes archives one at a time to minimize disk usage.');
+console.log('Archive delete/move cleanup is applied only when an archive uploads with 0 failed items.');
 console.log(`  Input dir: ${config.inputDir}`);
 console.log(`  Work dir: ${config.workDir}`);
 console.log(`  Dry run: ${dryRun}`);

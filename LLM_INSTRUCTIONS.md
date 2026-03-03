@@ -60,6 +60,8 @@ Refer to `TECH_STACK.md` for full details.
 - Use descriptive `describe`/`it` blocks that read like specifications
 - Mock external services (cloud SDKs, database) — do not make real API calls in tests
 - Include both happy-path and error-path tests
+- always run lint - `npm run lint`
+- always run tests
 
 ---
 

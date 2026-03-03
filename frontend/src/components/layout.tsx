@@ -37,7 +37,7 @@ export function Layout() {
               <NavLink
                 key={item.to}
                 to={item.to}
-                end={item.end}
+                end={'end' in item ? item.end : undefined}
                 className={({ isActive }) =>
                   isActive ? 'font-semibold text-slate-900' : 'text-slate-600'
                 }
@@ -78,7 +78,7 @@ export function Layout() {
                 <NavLink
                   key={item.to}
                   to={item.to}
-                  end={item.end}
+                  end={'end' in item ? item.end : undefined}
                   className={({ isActive }) =>
                     `block rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
                       isActive

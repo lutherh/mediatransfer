@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import {
   createOAuth2Client,
   exchangeCode,
@@ -14,13 +15,24 @@ import {
   setStoredTokens,
   clearStoredTokens,
 } from './google-token-store.js';
+import type { Env } from '../../config/env.js';
+import { apiError } from '../errors.js';
 
 export { getStoredTokens, clearStoredTokens };
 
-function getGoogleConfig() {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI ?? 'http://localhost:5173/auth/google/callback';
+const pickerSessionParamsSchema = z.object({
+  id: z.string().min(1),
+});
+
+const pickerItemsQuerySchema = z.object({
+  pageToken: z.string().min(1).optional(),
+  pageSize: z.string().optional(),
+});
+
+function getGoogleConfig(env: Env) {
+  const clientId = env.GOOGLE_CLIENT_ID;
+  const clientSecret = env.GOOGLE_CLIENT_SECRET;
+  const redirectUri = env.GOOGLE_REDIRECT_URI;
 
   if (!clientId || !clientSecret) {
     return null;
@@ -29,18 +41,18 @@ function getGoogleConfig() {
   return { clientId, clientSecret, redirectUri };
 }
 
-export async function registerGoogleAuthRoutes(app: FastifyInstance): Promise<void> {
+export async function registerGoogleAuthRoutes(app: FastifyInstance, env: Env): Promise<void> {
   /**
    * GET /auth/google/status
    * Returns whether the user is connected to Google.
    */
   app.get('/auth/google/status', async () => {
-    const config = getGoogleConfig();
+    const config = getGoogleConfig(env);
     if (!config) {
       return { configured: false, connected: false, message: 'Google OAuth2 credentials not configured in environment' };
     }
 
-    const tokens = getStoredTokens();
+    const tokens = await getStoredTokens();
     if (!tokens) {
       return { configured: true, connected: false };
     }
@@ -58,9 +70,9 @@ export async function registerGoogleAuthRoutes(app: FastifyInstance): Promise<vo
    * Returns the OAuth2 authorization URL for the user to visit.
    */
   app.get('/auth/google/url', async (_req, reply) => {
-    const config = getGoogleConfig();
+    const config = getGoogleConfig(env);
     if (!config) {
-      return reply.code(500).send({ error: 'Google OAuth2 credentials not configured' });
+      return reply.code(500).send(apiError('GOOGLE_CONFIG_MISSING', 'Google OAuth2 credentials not configured'));
     }
 
     const client = createOAuth2Client(config);
@@ -76,25 +88,25 @@ export async function registerGoogleAuthRoutes(app: FastifyInstance): Promise<vo
    * Body: { code: string }
    */
   app.post('/auth/google/callback', async (req, reply) => {
-    const config = getGoogleConfig();
+    const config = getGoogleConfig(env);
     if (!config) {
-      return reply.code(500).send({ error: 'Google OAuth2 credentials not configured' });
+      return reply.code(500).send(apiError('GOOGLE_CONFIG_MISSING', 'Google OAuth2 credentials not configured'));
     }
 
     const body = req.body as { code?: string } | undefined;
     const code = body?.code;
     if (!code) {
-      return reply.code(400).send({ error: 'Missing authorization code' });
+      return reply.code(400).send(apiError('MISSING_CODE', 'Missing authorization code'));
     }
 
     const client = createOAuth2Client(config);
     try {
       const tokens = await exchangeCode(client, code);
-      setStoredTokens(tokens);
+      await setStoredTokens(tokens);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       app.log.error({ err }, 'Google OAuth code exchange failed');
-      return reply.code(502).send({ error: `Google token exchange failed: ${message}` });
+      return reply.code(502).send(apiError('GOOGLE_TOKEN_EXCHANGE_FAILED', `Google token exchange failed: ${message}`));
     }
 
     return { connected: true };
@@ -105,7 +117,7 @@ export async function registerGoogleAuthRoutes(app: FastifyInstance): Promise<vo
    * Clears stored tokens.
    */
   app.post('/auth/google/disconnect', async () => {
-    clearStoredTokens();
+    await clearStoredTokens();
     return { connected: false };
   });
 
@@ -116,9 +128,9 @@ export async function registerGoogleAuthRoutes(app: FastifyInstance): Promise<vo
    * Creates a new Google Photos Picker session. Returns the picker URI.
    */
   app.post('/picker/session', async (_req, reply) => {
-    const pickerClient = createPickerClient();
+    const pickerClient = await createPickerClient(env);
     if (!pickerClient) {
-      return reply.code(400).send({ error: 'Not connected to Google. Please authenticate first.' });
+      return reply.code(400).send(apiError('GOOGLE_NOT_CONNECTED', 'Not connected to Google. Please authenticate first.'));
     }
 
     const session = await pickerClient.createSession();
@@ -133,11 +145,11 @@ export async function registerGoogleAuthRoutes(app: FastifyInstance): Promise<vo
    * Polls a Picker session to check if the user has finished selecting.
    */
   app.get('/picker/session/:id', async (req, reply) => {
-    const sessionId = (req.params as { id: string }).id;
+    const { id: sessionId } = pickerSessionParamsSchema.parse(req.params);
 
-    const pickerClient = createPickerClient();
+    const pickerClient = await createPickerClient(env);
     if (!pickerClient) {
-      return reply.code(400).send({ error: 'Not connected to Google.' });
+      return reply.code(400).send(apiError('GOOGLE_NOT_CONNECTED', 'Not connected to Google.'));
     }
 
     const session = await pickerClient.getSession(sessionId);
@@ -152,15 +164,15 @@ export async function registerGoogleAuthRoutes(app: FastifyInstance): Promise<vo
    * Lists all media items from a completed Picker session.
    */
   app.get('/picker/session/:id/items', async (req, reply) => {
-    const sessionId = (req.params as { id: string }).id;
-    const query = req.query as { pageToken?: string; pageSize?: string };
+    const { id: sessionId } = pickerSessionParamsSchema.parse(req.params);
+    const query = pickerItemsQuerySchema.parse(req.query);
 
-    const pickerClient = createPickerClient();
+    const pickerClient = await createPickerClient(env);
     if (!pickerClient) {
-      return reply.code(400).send({ error: 'Not connected to Google.' });
+      return reply.code(400).send(apiError('GOOGLE_NOT_CONNECTED', 'Not connected to Google.'));
     }
 
-    const pageSize = query.pageSize ? parseInt(query.pageSize, 10) : 100;
+    const pageSize = Math.min(Math.max(parseInt(query.pageSize ?? '', 10) || 100, 1), 100);
     const result = await pickerClient.listPickedMediaItems(sessionId, query.pageToken, pageSize);
 
     return {
@@ -174,11 +186,11 @@ export async function registerGoogleAuthRoutes(app: FastifyInstance): Promise<vo
    * Deletes a Picker session.
    */
   app.delete('/picker/session/:id', async (req, reply) => {
-    const sessionId = (req.params as { id: string }).id;
+    const { id: sessionId } = pickerSessionParamsSchema.parse(req.params);
 
-    const pickerClient = createPickerClient();
+    const pickerClient = await createPickerClient(env);
     if (!pickerClient) {
-      return reply.code(400).send({ error: 'Not connected to Google.' });
+      return reply.code(400).send(apiError('GOOGLE_NOT_CONNECTED', 'Not connected to Google.'));
     }
 
     await pickerClient.deleteSession(sessionId);
@@ -186,9 +198,9 @@ export async function registerGoogleAuthRoutes(app: FastifyInstance): Promise<vo
   });
 }
 
-function createPickerClient(): GooglePhotosPickerClient | null {
-  const config = getGoogleConfig();
-  const tokens = getStoredTokens();
+async function createPickerClient(env: Env): Promise<GooglePhotosPickerClient | null> {
+  const config = getGoogleConfig(env);
+  const tokens = await getStoredTokens();
   if (!config || !tokens) {
     return null;
   }

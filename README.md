@@ -37,7 +37,8 @@ Copy `.env.example` → `.env`. Required values:
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google Cloud Console → OAuth |
 | `GOOGLE_REDIRECT_URI` | `http://localhost:5173/auth/google/callback` |
 
-Defaults are fine for `DATABASE_URL`, `REDIS_URL`, `ENCRYPTION_SECRET`, and other values.
+Defaults are fine for `DATABASE_URL`, `REDIS_URL`, and most other values.
+Set `ENCRYPTION_SECRET` to a real secret (at least 16 chars, not the placeholder).
 
 ## Transfer flows
 
@@ -62,6 +63,19 @@ Or use the UI at `/takeout`: **Scan** → **Upload** → **Verify**.
 For large archives:
 ```bash
 npm run takeout:process -- --concurrency 2 --progress-interval-sec 2
+```
+
+For low disk usage (auto-clean local files after each successfully uploaded archive):
+```bash
+npm run takeout:process -- --move-archive
+# or permanently delete archives after successful upload:
+npm run takeout:process -- --delete-archive
+```
+
+If you used `takeout:scan`/`takeout:upload` and want to reclaim disk safely afterward:
+```bash
+npm run takeout:cleanup -- --apply --move-archives
+# or: npm run takeout:cleanup -- --apply --delete-archives
 ```
 
 ### API batch (app-created media only)

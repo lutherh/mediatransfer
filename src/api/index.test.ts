@@ -1,8 +1,14 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Readable } from 'node:stream';
 import { TransferStatus } from '../generated/prisma/client.js';
 import { createApiServer } from './index.js';
 import type { ApiServices } from './types.js';
+import { clearEnvCache } from '../config/env.js';
+
+beforeEach(() => {
+  process.env.ENCRYPTION_SECRET = 'unit-test-encryption-secret-123';
+  clearEnvCache();
+});
 
 function createServices(): ApiServices {
   return {

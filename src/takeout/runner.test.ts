@@ -92,6 +92,51 @@ describe('takeout/runner', () => {
     });
   });
 
+  it('recovers when previous scan was interrupted after extraction', async () => {
+    await withTempDir(async (dir) => {
+      const inputDir = path.join(dir, 'input');
+      const workDir = path.join(dir, 'work');
+      await fs.mkdir(inputDir, { recursive: true });
+      await fs.writeFile(path.join(inputDir, 'takeout-1.zip'), 'archive');
+
+      const config = withDefaults({
+        inputDir,
+        workDir,
+        statePath: path.join(dir, 'state.json'),
+      });
+
+      // Simulate a previous interrupted scan: extraction completed and was
+      // checkpointed but the pipeline crashed before normalize/manifest/clear.
+      const scanStatePath = path.join(workDir, 'scan-state.json');
+      await fs.mkdir(workDir, { recursive: true });
+      await fs.writeFile(scanStatePath, JSON.stringify({
+        version: 1,
+        extractedArchives: ['takeout-1.zip'],
+        lastUpdatedAt: new Date().toISOString(),
+      }));
+
+      // Also write a stale manifest from a prior batch (different content)
+      await persistManifestJsonl([], path.join(workDir, 'manifest.jsonl'));
+
+      // Put extracted content in workDir as if extraction already happened
+      const mediaDir = path.join(workDir, 'Takeout', 'Google Photos', 'Album1');
+      await fs.mkdir(mediaDir, { recursive: true });
+      await fs.writeFile(path.join(mediaDir, 'IMG_1.jpg'), 'x');
+      await fs.writeFile(path.join(mediaDir, 'IMG_2.jpg'), 'y');
+
+      // The extractor should NOT be called (archives already extracted)
+      let extractorCalled = false;
+      const result = await runTakeoutScan(config, async () => {
+        extractorCalled = true;
+      });
+
+      expect(extractorCalled).toBe(false);
+      expect(result.entryCount).toBe(2);
+      // Scan-state should be cleared after full pipeline completes
+      await expect(fs.access(scanStatePath)).rejects.toThrow();
+    });
+  });
+
   it('runs upload then resume and skips already uploaded entries', async () => {
     await withTempDir(async (dir) => {
       const provider = new MockProvider();

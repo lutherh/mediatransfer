@@ -1,6 +1,6 @@
 import type { BulkTransferResult } from '../jobs/bulk-transfer.js';
 import type { TransferJob, TransferStatus, CloudCredential, TransferLog, MediaItem } from '../generated/prisma/client.js';
-import type { CatalogItem, CatalogObject, CatalogStats, DeleteResult, AlbumsManifest } from '../catalog/scaleway-catalog.js';
+import type { CatalogItem, CatalogObject, CatalogStats, DeleteResult, AlbumsManifest, DuplicateGroup, DeduplicateResult } from '../catalog/scaleway-catalog.js';
 import type { Readable } from 'node:stream';
 import type { CreateMediaItemInput, ListMediaItemsFilter } from '../db/media-items.js';
 
@@ -64,7 +64,10 @@ export type CatalogService = {
   listPage(input?: { max?: number; token?: string; prefix?: string }): Promise<{ items: CatalogItem[]; nextToken?: string }>;
   listAll(prefix?: string): Promise<CatalogItem[]>;
   getObject(encodedKey: string): Promise<CatalogObject>;
+  getObjectBuffer(encodedKey: string, maxBytes?: number): Promise<{ buffer: Buffer; contentType?: string; contentLength?: number }>;
   getStats(): Promise<CatalogStats>;
+  findDuplicates(): Promise<DuplicateGroup[]>;
+  deduplicateObjects(input?: { dryRun?: boolean }): Promise<DeduplicateResult>;
   deleteObjects(encodedKeys: string[]): Promise<DeleteResult>;
   moveObject(encodedKey: string, newDatePrefix: string): Promise<{ from: string; to: string }>;
   getAlbums(): Promise<AlbumsManifest>;

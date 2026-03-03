@@ -102,6 +102,16 @@ vi.mock('@/lib/api', () => ({
   pollPickerSession: vi.fn(),
   fetchPickedItems: vi.fn(),
   deletePickerSession: vi.fn(),
+  fetchCatalogStats: vi.fn(async () => ({
+    totalFiles: 42,
+    totalBytes: 1_073_741_824,
+    imageCount: 40,
+    videoCount: 2,
+    oldestDate: '2022-01-01',
+    newestDate: '2026-02-31',
+  })),
+  fetchCatalogItems: vi.fn(async () => ({ items: [], nextToken: undefined })),
+  catalogMediaUrl: vi.fn((encodedKey: string) => `/catalog/media/${encodedKey}`),
 }));
 
 function renderRoute(path: string) {
@@ -154,8 +164,8 @@ describe('frontend pages', () => {
 
   it('renders takeout progress page', async () => {
     renderRoute('/takeout');
-    expect(await screen.findByRole('heading', { name: 'Takeout Transfer Progress' })).toBeInTheDocument();
-    expect(await screen.findByText('Overall progress')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Google Takeout' })).toBeInTheDocument();
+    expect(await screen.findByText(/migrate your google photos library/i)).toBeInTheDocument();
   });
 
   it('renders transfer detail page', async () => {
@@ -174,7 +184,7 @@ describe('frontend pages', () => {
   it('renders catalog page', async () => {
     renderRoute('/catalog');
     expect(await screen.findByRole('heading', { name: 'Catalog' })).toBeInTheDocument();
-    expect(await screen.findByTitle('Scaleway Catalog Browser')).toBeInTheDocument();
+    expect(await screen.findByText(/browse media stored in scaleway/i)).toBeInTheDocument();
   });
 
   it('shows navigation links', async () => {
@@ -187,7 +197,7 @@ describe('frontend pages', () => {
     expect(screen.getByRole('link', { name: 'Costs' })).toBeInTheDocument();
   });
 
-  it('shows stale stats warning when last scan failed but data exists', async () => {
+  it('shows error state when last scan failed', async () => {
     const api = await import('@/lib/api');
     vi.mocked(api.fetchTakeoutActionStatus).mockResolvedValueOnce({
       running: false,
@@ -198,6 +208,7 @@ describe('frontend pages', () => {
     });
 
     renderRoute('/takeout');
-    expect(await screen.findByText(/last scan failed.*stats below are from a previous/i)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /retry scan/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /continue with upload anyway/i })).toBeInTheDocument();
   });
 });
