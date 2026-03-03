@@ -15,7 +15,8 @@ import {
 
 type PageState =
   | 'running'         // a job is actively running
-  | 'error'           // last job failed
+  | 'verify-failed'   // verify found files missing from the cloud → needs upload
+  | 'error'           // last job failed (non-verify)
   | 'archives-found'  // archives sitting in input/, no manifest yet
   | 'watching'        // no archives, no manifest — waiting for user to drop files
   | 'upload-ready'    // manifest exists, still have pending/failed uploads
@@ -85,10 +86,18 @@ export function TakeoutProgressPage() {
   const busy = isActionRunning || actionMutation.isPending;
   const run  = (action: TakeoutAction) => actionMutation.mutate(action);
 
+  // Parsed verify output
+  const verifyMissingCount = getVerifyMissingCount(lastOutput);
+  const verifyPresentCount = getVerifyPresentCount(lastOutput);
+
   // Page state machine
   let pageState: PageState;
   if (isActionRunning) {
     pageState = 'running';
+  } else if (lastActionFailed && actionStatus?.action === 'verify') {
+    // Verify finishing with missing files is not a scary crash — it just means
+    // some files still need uploading. Give a dedicated, friendly page state.
+    pageState = 'verify-failed';
   } else if (lastActionFailed) {
     pageState = 'error';
   } else if (archivesInInput > 0 && !hasManifest) {
@@ -191,7 +200,48 @@ export function TakeoutProgressPage() {
         </Card>
       )}
 
-      {/* Error: last action failed */}
+      {/* Verify failed: files missing from cloud — friendly, actionable card */}
+      {pageState === 'verify-failed' && (
+        <Card className="border-orange-200 bg-orange-50 space-y-4">
+          <div className="flex items-start gap-4">
+            <span className="text-3xl mt-0.5 shrink-0" aria-hidden>📡</span>
+            <div className="space-y-1.5 min-w-0">
+              <p className="font-semibold text-slate-900">
+                {verifyMissingCount > 0
+                  ? `${verifyMissingCount.toLocaleString()} files still need to be uploaded`
+                  : 'Some files are missing from the cloud'}
+              </p>
+              <p className="text-sm text-slate-700">
+                {verifyPresentCount > 0 && (
+                  <>
+                    <span className="font-medium text-green-700">{verifyPresentCount.toLocaleString()} files are safely in the cloud.</span>{' '}
+                  </>
+                )}
+                The rest haven't been sent yet — this usually happens when an upload was
+                interrupted. Just re-run the upload and the missing files will be sent automatically.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" disabled={busy} onClick={() => run('upload')}>
+              Upload missing files
+            </Button>
+            <Button
+              className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+              type="button"
+              disabled={busy}
+              onClick={() => run('verify')}
+            >
+              Check again
+            </Button>
+          </div>
+          <p className="text-xs text-orange-700 border-t border-orange-200 pt-3">
+            After uploading, tap <strong>Check again</strong> to confirm all your files are safely stored in the cloud.
+          </p>
+        </Card>
+      )}
+
+      {/* Error: last action failed (non-verify) */}
       {pageState === 'error' && (
         <Alert variant="error" className="space-y-3">
           <div className="flex items-center gap-2">
@@ -221,32 +271,42 @@ export function TakeoutProgressPage() {
             )}
           </div>
 
-          {/* When a cleanup failed due to missing state records, offer the --force variant */}
+          {/* When cleanup failed because some file records are missing, explain in plain English */}
           {isCleanupAction(actionStatus?.action) && isMissingStateError(lastOutput) && (
             <div className="rounded-lg border border-orange-300 bg-orange-50 p-3 space-y-2 text-xs">
-              <p className="font-semibold text-orange-900">Missing upload records detected</p>
+              <p className="font-semibold text-orange-900">A few files don't have an upload record yet</p>
               <p className="text-orange-800">
-                Some manifest entries have no upload record — this usually means the manifest was
-                re-scanned after upload, causing key mismatches. If your archives are confirmed
-                complete in <code className="rounded bg-orange-100 px-1">archive-state.json</code>,
-                you can force cleanup. Only archives marked <em>completed</em> will be touched.
+                The app found some files in the list that haven't been uploaded yet (or whose upload
+                record doesn't match). The safest fix is to <strong>run Upload first</strong>, then
+                come back to clean up.
+              </p>
+              <p className="text-orange-800">
+                If you're confident everything was uploaded correctly and just want to free up disk space now, you can skip the check below.
               </p>
               <div className="flex flex-wrap gap-2 pt-1">
                 <Button
                   className="border border-orange-400 bg-white text-orange-900 hover:bg-orange-100 disabled:opacity-40 text-xs py-1"
                   type="button"
                   disabled={busy}
-                  onClick={() => run('cleanup-force-move')}
+                  onClick={() => run('upload')}
                 >
-                  Force move archives
+                  Upload first (recommended)
                 </Button>
                 <Button
-                  className="border border-red-400 bg-white text-red-800 hover:bg-red-50 disabled:opacity-40 text-xs py-1"
+                  className="border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-40 text-xs py-1"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => run('cleanup-force-move')}
+                >
+                  Skip check &amp; move archives
+                </Button>
+                <Button
+                  className="border border-red-300 bg-white text-red-700 hover:bg-red-50 disabled:opacity-40 text-xs py-1"
                   type="button"
                   disabled={busy}
                   onClick={() => run('cleanup-force-delete')}
                 >
-                  Force delete archives
+                  Skip check &amp; delete archives
                 </Button>
               </div>
             </div>
@@ -644,6 +704,22 @@ function formatDateTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'N/A';
   return date.toLocaleString();
+}
+
+function getVerifyMissingCount(output: string[]): number {
+  for (const line of output) {
+    const m = line.match(/Missing:\s*(\d+)/i);
+    if (m) return parseInt(m[1], 10);
+  }
+  return 0;
+}
+
+function getVerifyPresentCount(output: string[]): number {
+  for (const line of output) {
+    const m = line.match(/Present:\s*(\d+)/i);
+    if (m) return parseInt(m[1], 10);
+  }
+  return 0;
 }
 
 function getActionFailureReason(output: string[]): string | undefined {
