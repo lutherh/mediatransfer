@@ -253,6 +253,8 @@ async function containsMediaFiles(rootDir: string): Promise<boolean> {
   return false;
 }
 
+export { containsMediaFiles };
+
 /**
  * Detect multi-part archive naming patterns like `-001.tgz`, `-002.zip`, etc.
  * Returns the part numbers found, or empty if no pattern detected.
