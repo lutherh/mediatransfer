@@ -24,7 +24,9 @@ type TakeoutAction =
   | 'resume'
   | 'start-services'
   | 'cleanup-move'
-  | 'cleanup-delete';
+  | 'cleanup-delete'
+  | 'cleanup-force-move'
+  | 'cleanup-force-delete';
 
 type ScanProgress = {
   phase: string;
@@ -78,6 +80,17 @@ export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void>
     const pending = Math.max(total - processed, 0);
     const progress = total > 0 ? Math.min(processed / total, 1) : 0;
 
+    // Count archive files waiting in the input directory
+    let archivesInInput = 0;
+    try {
+      const inputEntries = await fs.readdir(inputDir, { withFileTypes: true });
+      archivesInInput = inputEntries.filter(
+        (e) => e.isFile() && /\.(zip|tar|tgz|tar\.gz)$/i.test(e.name),
+      ).length;
+    } catch {
+      // input dir may not exist yet
+    }
+
     return {
       paths: {
         inputDir,
@@ -97,6 +110,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void>
       stateUpdatedAt: state.updatedAt,
       recentFailures: summary.recentFailures,
       isComplete: total > 0 && pending === 0 && summary.failed === 0,
+      archivesInInput,
     };
   });
 
@@ -117,6 +131,8 @@ export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void>
           'start-services',
           'cleanup-move',
           'cleanup-delete',
+          'cleanup-force-move',
+          'cleanup-force-delete',
         ],
       });
     }
@@ -223,6 +239,8 @@ function resolveActionCommand(action: TakeoutAction): string {
     resume: 'takeout:resume',
     'cleanup-move': 'takeout:cleanup -- --apply --move-archives',
     'cleanup-delete': 'takeout:cleanup -- --apply --delete-archives',
+    'cleanup-force-move': 'takeout:cleanup -- --apply --move-archives --force',
+    'cleanup-force-delete': 'takeout:cleanup -- --apply --delete-archives --force',
   };
 
   return `npm run ${scriptByAction[action]}`;
@@ -312,7 +330,9 @@ function isAction(value: string | undefined): value is TakeoutAction {
     || value === 'resume'
     || value === 'start-services'
     || value === 'cleanup-move'
-    || value === 'cleanup-delete';
+    || value === 'cleanup-delete'
+    || value === 'cleanup-force-move'
+    || value === 'cleanup-force-delete';
 }
 
 async function readManifestCount(manifestPath: string, fallbackCount: number): Promise<number> {
@@ -388,7 +408,7 @@ async function countManifestLinesStream(manifestPath: string, timeoutMs: number)
 
 async function readUploadState(statePath: string): Promise<UploadState> {
   try {
-    const raw = await fs.readFile(statePath, 'utf8');
+    const raw = (await fs.readFile(statePath, 'utf8')).replace(/^\uFEFF/, '');
     const parsed = JSON.parse(raw) as UploadState;
     if (!parsed || parsed.version !== 1 || typeof parsed.items !== 'object' || !parsed.items) {
       return createEmptyState();

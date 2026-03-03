@@ -42,6 +42,7 @@ const apply = args.includes('--apply');
 const deleteArchives = args.includes('--delete-archives');
 const moveArchives = args.includes('--move-archives');
 const backfillState = args.includes('--backfill-state');
+const force = args.includes('--force'); // bypass missing-state check; still respects archive-state.json
 const moveTargetArg = readStringArg(args, '--move-dir');
 const moveTarget = moveTargetArg
   ? path.resolve(moveTargetArg)
@@ -106,10 +107,36 @@ if (failed > 0) {
 }
 
 if (missing > 0) {
-  console.error(`❌ Cannot clean up safely: ${missing} manifest entries have no upload record.`);
-  console.error('   This means upload state is incomplete (or new data exists) — cleanup is aborted to prevent data loss.');
-  console.error('   Re-run upload/verify until state is complete, then retry cleanup.');
-  process.exit(1);
+  // Collect a sample of missing keys to help diagnose the cause
+  const missingKeys: string[] = [];
+  for (const entry of manifest) {
+    if (!stateItems[entry.destinationKey]) {
+      missingKeys.push(entry.destinationKey);
+      if (missingKeys.length >= 5) break;
+    }
+  }
+
+  if (!force) {
+    console.error(`❌ Cannot clean up safely: ${missing} manifest entries have no upload record.`);
+    console.error('   This means upload state is incomplete or the manifest was rebuilt after upload.');
+    console.error('');
+    console.error('   Sample missing keys:');
+    for (const key of missingKeys) {
+      console.error(`     · ${key}`);
+    }
+    console.error('');
+    console.error('   Options:');
+    console.error('   1. Re-run upload so every manifest entry has a state record, then retry.');
+    console.error('   2. If archives are confirmed complete in archive-state.json and state keys');
+    console.error('      are just mismatched (e.g. manifest was re-scanned), override with:');
+    console.error('        takeout:cleanup -- --apply --move-archives --force');
+    console.error('   Note: --force still only touches archives marked completed in archive-state.json.');
+    process.exit(1);
+  }
+
+  console.warn(`⚠️  Missing state records: ${missing} — continuing because --force was passed.`);
+  console.warn('   Archive safety guard (archive-state.json) is still active.');
+  console.warn('');
 }
 
 // ─── 2. Measure disk usage ─────────────────────────────────────────────────
