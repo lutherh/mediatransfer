@@ -759,3 +759,65 @@ export async function fetchDuplicates(apiToken?: string): Promise<DuplicatesResu
   return response.json();
 }
 
+/** Progress event emitted by the SSE duplicate scan endpoint. */
+export type DupScanProgress =
+  | { phase: 'started'; totalFiles: number | null }
+  | { phase: 'listing'; listed: number; totalFiles: number | null }
+  | { phase: 'done'; groups: DuplicateGroup[]; totalDuplicates: number; bytesFreed: number }
+  | { phase: 'error'; message: string };
+
+/**
+ * Stream the duplicate scan via SSE, calling `onProgress` for each event.
+ * Returns the final DuplicatesResult when complete.
+ * The caller can abort by using an AbortController.
+ */
+export function scanDuplicatesStream(
+  onProgress: (event: DupScanProgress) => void,
+  apiToken?: string,
+  signal?: AbortSignal,
+): Promise<DuplicatesResult> {
+  return new Promise((resolve, reject) => {
+    const url = new URL('/catalog/api/duplicates/scan', API_BASE_URL);
+    if (apiToken) url.searchParams.set('apiToken', apiToken);
+
+    fetch(url.toString(), { signal })
+      .then(async (response) => {
+        if (!response.ok || !response.body) {
+          const raw = await response.text();
+          reject(new Error(parseApiErrorMessage(raw) ?? 'Scan request failed'));
+          return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          // Parse SSE frames: "data: {...}\n\n"
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop() ?? '';
+
+          for (const chunk of lines) {
+            const dataLine = chunk.split('\n').find((l) => l.startsWith('data: '));
+            if (!dataLine) continue;
+            try {
+              const event = JSON.parse(dataLine.slice(6)) as DupScanProgress;
+              onProgress(event);
+              if (event.phase === 'done') {
+                resolve({ groups: event.groups, totalDuplicates: event.totalDuplicates, bytesFreed: event.bytesFreed });
+              } else if (event.phase === 'error') {
+                reject(new Error(event.message));
+              }
+            } catch { /* skip malformed */ }
+          }
+        }
+      })
+      .catch(reject);
+  });
+}
+

@@ -106,7 +106,7 @@ export type CatalogService = {
   getAlbums(): Promise<AlbumsManifest>;
   saveAlbums(manifest: AlbumsManifest): Promise<void>;
   /** Scan all objects and return groups of duplicates (same size + ETag). */
-  findDuplicates(): Promise<DuplicateGroup[]>;
+  findDuplicates(onProgress?: (listed: number) => void): Promise<DuplicateGroup[]>;
   /** Find and remove duplicates. Pass dryRun=true to preview without deleting. */
   deduplicateObjects(options?: { dryRun?: boolean }): Promise<DeduplicateResult>;
 };
@@ -481,7 +481,7 @@ export class ScalewayCatalogService implements CatalogService {
     );
   }
 
-  async findDuplicates(): Promise<DuplicateGroup[]> {
+  async findDuplicates(onProgress?: (listed: number) => void): Promise<DuplicateGroup[]> {
     // Phase 1: list all objects, capturing size + ETag
     const objects: { key: string; size: number; etag: string }[] = [];
     let continuationToken: string | undefined;
@@ -510,6 +510,7 @@ export class ScalewayCatalogService implements CatalogService {
       }
 
       continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+      onProgress?.(objects.length);
     } while (continuationToken);
 
     // Phase 2: group by (size, etag) — identical content fingerprint
