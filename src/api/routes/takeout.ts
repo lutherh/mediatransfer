@@ -62,6 +62,12 @@ const manifestCountCache = new Map<string, {
   size: number;
   count: number;
 }>();
+// Cache for manifest destination keys (invalidated when manifest file changes)
+const manifestKeysCache = new Map<string, {
+  mtimeMs: number;
+  size: number;
+  keys: Set<string>;
+}>();
 
 export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void> {
   app.get('/takeout/status', async () => {
@@ -70,12 +76,21 @@ export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void>
     const statePath = path.resolve(process.env.TRANSFER_STATE_PATH ?? './data/takeout/state.json');
     const manifestPath = path.join(workDir, 'manifest.jsonl');
 
-    const state = await readUploadState(statePath);
-    const fallbackTotal = Object.keys(state.items).length;
-    const manifestCount = await readManifestCount(manifestPath, fallbackTotal);
+    const [state, manifestKeys] = await Promise.all([
+      readUploadState(statePath),
+      readManifestKeys(manifestPath),
+    ]);
 
-    const summary = summarizeState(state.items);
-    const total = manifestCount;
+    // Count only state entries that correspond to current manifest keys.
+    // This avoids inflated counts from orphaned keys left over by previous runs.
+    const manifestItems: Record<string, UploadStateItem> = {};
+    for (const key of manifestKeys) {
+      const item = state.items[key];
+      if (item) manifestItems[key] = item;
+    }
+
+    const summary = summarizeState(manifestItems);
+    const total = manifestKeys.size;
     const processed = summary.uploaded + summary.skipped + summary.failed;
     const pending = Math.max(total - processed, 0);
     const progress = total > 0 ? Math.min(processed / total, 1) : 0;
@@ -333,6 +348,38 @@ function isAction(value: string | undefined): value is TakeoutAction {
     || value === 'cleanup-delete'
     || value === 'cleanup-force-move'
     || value === 'cleanup-force-delete';
+}
+
+/**
+ * Read all destinationKey values from a manifest.jsonl file.
+ * Result is mtime+size cached so repeated polls are O(1) after the first read.
+ */
+async function readManifestKeys(manifestPath: string): Promise<Set<string>> {
+  try {
+    const stat = await fs.stat(manifestPath);
+    const cached = manifestKeysCache.get(manifestPath);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return cached.keys;
+    }
+
+    const raw = await fs.readFile(manifestPath, 'utf8');
+    const keys = new Set<string>();
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const entry = JSON.parse(trimmed) as { destinationKey?: string };
+        if (typeof entry.destinationKey === 'string') keys.add(entry.destinationKey);
+      } catch { /* skip malformed lines */ }
+    }
+
+    manifestKeysCache.set(manifestPath, { mtimeMs: stat.mtimeMs, size: stat.size, keys });
+    return keys;
+  } catch {
+    // Manifest doesn't exist yet — return whatever is in cache, or empty
+    const cached = manifestKeysCache.get(manifestPath);
+    return cached?.keys ?? new Set();
+  }
 }
 
 async function readManifestCount(manifestPath: string, fallbackCount: number): Promise<number> {
