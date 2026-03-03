@@ -224,7 +224,11 @@ async function exists(filePath: string): Promise<boolean> {
     await fs.access(filePath);
     return true;
   } catch (err) {
-    console.debug('[unpack] Path not accessible', { filePath, err });
+    // ENOENT is the expected case — file simply doesn't exist yet.
+    // Only log genuinely unexpected access errors (permissions etc.).
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn('[unpack] Path not accessible', { filePath, err });
+    }
     return false;
   }
 }

@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
+import os from 'node:os';
 import { createReadStream } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import type { Env } from '../../config/env.js';
@@ -185,6 +186,7 @@ function runAction(action: TakeoutAction): void {
     const child = spawn(current.command, current.args, {
       cwd: projectRoot,
       env: process.env,
+      shell: os.platform() === 'win32',
     });
 
     currentProcess = child;
