@@ -179,7 +179,7 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	await registerCredentialsRoutes(app, runtime.services.credentials);
 	await registerTransferRoutes(app, runtime.services.jobs, runtime.services.queue);
 	await registerProviderRoutes(app, runtime.services.providers);
-	await registerCatalogRoutes(app, runtime.services.catalog);
+	await registerCatalogRoutes(app, runtime.services.catalog, options?.corsAllowedOrigins);
 	await registerCatalogAlbumRoutes(app, runtime.services.catalog);
 	await registerCloudUsageRoutes(app, runtime.services.cloudUsage);
 	await registerUploadRoutes(app, runtime.services.uploads);

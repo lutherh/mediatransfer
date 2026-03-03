@@ -36,6 +36,9 @@ export function ConnectGoogleStep({ onConnected }: ConnectGoogleStepProps) {
   // Listen for the OAuth callback success message from the popup
   const handleAuthMessage = useCallback(
     (event: MessageEvent) => {
+      // Security: only accept messages from our own origin to prevent
+      // cross-origin forgery of the auth-success message.
+      if (event.origin !== window.location.origin) return;
       if (event.data?.type === 'google-auth-success') {
         // The popup already exchanged the code; just refresh status.
         queryClient.invalidateQueries({ queryKey: ['google-auth-status'] });

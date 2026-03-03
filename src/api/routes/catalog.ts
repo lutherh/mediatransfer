@@ -60,6 +60,7 @@ const bulkMoveBodySchema = z.object({
 export async function registerCatalogRoutes(
   app: FastifyInstance,
   catalog: CatalogService | undefined,
+  corsAllowedOrigins?: string[],
 ): Promise<void> {
   app.get('/catalog', async (_req, reply) => {
     if (!catalog) {
@@ -79,13 +80,21 @@ export async function registerCatalogRoutes(
       return;
     }
 
-    const query = listQuerySchema.parse(req.query);
-    const page = await catalogService.listPage({
-      max: query.max,
-      token: query.token,
-      prefix: query.prefix,
-    });
-    return page;
+    try {
+      const query = listQuerySchema.parse(req.query);
+      const page = await catalogService.listPage({
+        max: query.max,
+        token: query.token,
+        prefix: query.prefix,
+      });
+      return page;
+    } catch (err) {
+      const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+      const status = isTimeout ? 503 : 500;
+      const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to list catalog items';
+      console.error('[catalog] /catalog/api/items error:', err);
+      return reply.status(status).send({ error: message });
+    }
   });
 
   app.get('/catalog/api/stats', async (_req, reply) => {
@@ -94,8 +103,16 @@ export async function registerCatalogRoutes(
       return;
     }
 
-    const stats = await catalogService.getStats();
-    return stats;
+    try {
+      const stats = await catalogService.getStats();
+      return stats;
+    } catch (err) {
+      const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+      const status = isTimeout ? 503 : 500;
+      const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to fetch catalog stats';
+      console.error('[catalog] /catalog/api/stats error:', err);
+      return reply.status(status).send({ error: message });
+    }
   });
 
   app.get('/catalog/api/items/all', async (req, reply) => {
@@ -188,15 +205,20 @@ export async function registerCatalogRoutes(
 
     dedupScanState = { status: 'scanning', listed: 0, totalFiles: totalFiles ?? null, startedAt: Date.now() };
 
-    // SSE uses reply.raw directly, so we must set CORS headers manually
-    const origin = req.headers.origin ?? '*';
+    // SSE uses reply.raw directly, so we must set CORS headers manually.
+    // Validate the origin against the configured allowlist (same as @fastify/cors).
+    const reqOrigin = req.headers.origin;
+    const allowedSet = new Set((corsAllowedOrigins ?? []).map(o => o.trim()).filter(Boolean));
+    const origin = reqOrigin && allowedSet.has(reqOrigin) ? reqOrigin : undefined;
+    const corsHeaders: Record<string, string> = origin
+      ? { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Credentials': 'true' }
+      : {};
     void reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
-      'Access-Control-Allow-Origin': origin,
-      'Access-Control-Allow-Credentials': 'true',
+      ...corsHeaders,
     });
 
     // Track whether the client is still connected
