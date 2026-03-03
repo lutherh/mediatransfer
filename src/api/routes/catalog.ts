@@ -1,9 +1,31 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { CatalogService } from '../../catalog/scaleway-catalog.js';
+import type { CatalogService, DuplicateGroup } from '../../catalog/scaleway-catalog.js';
 import { extractExifMetadata } from '../../utils/exif.js';
 import { apiError } from '../errors.js';
 import { buildCatalogHtml } from './catalog-html.js';
+
+// ── Server-side dedup scan state cache ─────────────────────────────────────
+// Keeps the latest scan result in memory so (a) we never run two scans at once,
+// (b) a dropped SSE connection can poll for the result, and (c) page navigation
+// doesn't lose the data.
+
+type DedupScanState =
+  | { status: 'idle' }
+  | { status: 'scanning'; listed: number; totalFiles: number | null; startedAt: number }
+  | {
+      status: 'done';
+      groups: DuplicateGroup[];
+      totalDuplicates: number;
+      bytesFreed: number;
+      completedAt: number;
+    }
+  | { status: 'error'; message: string; completedAt: number };
+
+let dedupScanState: DedupScanState = { status: 'idle' };
+
+/** TTL for cached results — after this the frontend should re-scan. */
+const SCAN_RESULT_TTL_MS = 30 * 60_000; // 30 minutes
 
 const listQuerySchema = z.object({
   max: z.coerce.number().int().min(1).max(200).optional(),
@@ -128,11 +150,31 @@ export async function registerCatalogRoutes(
     return results;
   });
 
-  // SSE endpoint for duplicate scanning with progress
+  // ── Polling endpoint — get scan status / cached results ────────────────
+  app.get('/catalog/api/duplicates/scan/status', async (_req, reply) => {
+    requireCatalog(catalog, reply);
+    // Expire stale results
+    if (
+      (dedupScanState.status === 'done' || dedupScanState.status === 'error') &&
+      Date.now() - dedupScanState.completedAt > SCAN_RESULT_TTL_MS
+    ) {
+      dedupScanState = { status: 'idle' };
+    }
+    return dedupScanState;
+  });
+
+  // ── SSE endpoint for duplicate scanning with progress ─────────────────
   app.get('/catalog/api/duplicates/scan', async (req, reply) => {
     const catalogService = requireCatalog(catalog, reply);
     if (!catalogService) {
       return;
+    }
+
+    // If a scan is already running, reject to prevent double-scanning.
+    if (dedupScanState.status === 'scanning') {
+      return reply.code(409).send(
+        apiError('SCAN_ALREADY_RUNNING', 'A duplicate scan is already in progress'),
+      );
     }
 
     // Get total count from stats for progress percentage
@@ -143,6 +185,8 @@ export async function registerCatalogRoutes(
     } catch {
       // Stats failed; progress will show count only (no percentage)
     }
+
+    dedupScanState = { status: 'scanning', listed: 0, totalFiles: totalFiles ?? null, startedAt: Date.now() };
 
     // SSE uses reply.raw directly, so we must set CORS headers manually
     const origin = req.headers.origin ?? '*';
@@ -155,20 +199,40 @@ export async function registerCatalogRoutes(
       'Access-Control-Allow-Credentials': 'true',
     });
 
+    // Track whether the client is still connected
+    let clientConnected = true;
+    req.raw.on('close', () => { clientConnected = false; });
+
     const sendEvent = (data: Record<string, unknown>) => {
-      reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+      if (!clientConnected) return;
+      try {
+        reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+      } catch {
+        clientConnected = false;
+      }
     };
+
+    // SSE keepalive every 15 s so proxies don't kill the connection
+    const keepalive = setInterval(() => {
+      if (!clientConnected) { clearInterval(keepalive); return; }
+      try { reply.raw.write(': keepalive\n\n'); } catch { clientConnected = false; }
+    }, 15_000);
 
     // Send initial event with total
     sendEvent({ phase: 'started', totalFiles: totalFiles ?? null });
 
     try {
       const groups = await catalogService.findDuplicates((listed) => {
+        if (dedupScanState.status === 'scanning') {
+          dedupScanState.listed = listed;
+        }
         sendEvent({ phase: 'listing', listed, totalFiles: totalFiles ?? null });
       });
 
       const totalDuplicates = groups.reduce((sum, g) => sum + g.duplicateKeys.length, 0);
       const bytesFreed = groups.reduce((sum, g) => sum + g.duplicateKeys.length * g.size, 0);
+
+      dedupScanState = { status: 'done', groups, totalDuplicates, bytesFreed, completedAt: Date.now() };
 
       sendEvent({
         phase: 'done',
@@ -177,9 +241,12 @@ export async function registerCatalogRoutes(
         bytesFreed,
       });
     } catch (err) {
-      sendEvent({ phase: 'error', message: err instanceof Error ? err.message : 'Scan failed' });
+      const message = err instanceof Error ? err.message : 'Scan failed';
+      dedupScanState = { status: 'error', message, completedAt: Date.now() };
+      sendEvent({ phase: 'error', message });
     }
 
+    clearInterval(keepalive);
     reply.raw.end();
   });
 

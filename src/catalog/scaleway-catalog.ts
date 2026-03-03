@@ -4,6 +4,7 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   ListObjectsV2Command,
+  type ListObjectsV2CommandOutput,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -485,19 +486,37 @@ export class ScalewayCatalogService implements CatalogService {
     // Phase 1: list all objects, capturing size + ETag
     const objects: { key: string; size: number; etag: string }[] = [];
     let continuationToken: string | undefined;
+    const MAX_PAGE_RETRIES = 3;
 
     do {
-      const result = await this.client.send(
-        new ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: this.prefix ? `${this.prefix}/` : undefined,
-          ContinuationToken: continuationToken,
-          MaxKeys: 1000,
-        }),
-        { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
-      );
+      let result: ListObjectsV2CommandOutput | undefined;
+      let lastError: unknown;
 
-      for (const obj of result.Contents ?? []) {
+      for (let attempt = 0; attempt < MAX_PAGE_RETRIES; attempt++) {
+        try {
+          result = await this.client.send(
+            new ListObjectsV2Command({
+              Bucket: this.bucket,
+              Prefix: this.prefix ? `${this.prefix}/` : undefined,
+              ContinuationToken: continuationToken,
+              MaxKeys: 1000,
+            }),
+            { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
+          );
+          lastError = undefined;
+          break;
+        } catch (err) {
+          lastError = err;
+          if (attempt < MAX_PAGE_RETRIES - 1) {
+            const delay = 1000 * (attempt + 1);
+            console.warn(`[catalog] S3 list page failed (attempt ${attempt + 1}/${MAX_PAGE_RETRIES}), retrying in ${delay}ms`, err);
+            await new Promise((r) => setTimeout(r, delay));
+          }
+        }
+      }
+      if (lastError) throw lastError;
+
+      for (const obj of result!.Contents ?? []) {
         if (!obj.Key || obj.Size === undefined || !obj.ETag) continue;
         const key = this.stripPrefix(obj.Key);
         const type = inferMediaType(key);
@@ -509,7 +528,7 @@ export class ScalewayCatalogService implements CatalogService {
         });
       }
 
-      continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+      continuationToken = result!.IsTruncated ? result!.NextContinuationToken : undefined;
       onProgress?.(objects.length);
     } while (continuationToken);
 
