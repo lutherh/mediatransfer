@@ -181,7 +181,11 @@ export function TakeoutProgressPage() {
           </div>
           {actionStatus?.action === 'scan' && actionStatus.scanProgress
             ? <ScanProgressBar progress={actionStatus.scanProgress} startedAt={actionStatus.startedAt} />
-            : <p className="text-xs text-slate-500">Job is running in the background. Stats refresh automatically.</p>
+            : (actionStatus?.action === 'upload' || actionStatus?.action === 'resume')
+              ? <p className="text-xs text-slate-500">Uploading your photos — when done, they'll be moved to <code className="rounded bg-slate-100 px-1">uploaded-archives/</code> automatically.</p>
+              : actionStatus?.action === 'cleanup-move'
+                ? <p className="text-xs text-slate-500">Upload finished! Moving archive files to <code className="rounded bg-slate-100 px-1">uploaded-archives/</code> to free up your input folder.</p>
+                : <p className="text-xs text-slate-500">Job is running in the background. Stats refresh automatically.</p>
           }
           {(actionStatus?.action === 'upload' || actionStatus?.action === 'resume') && hasManifest && (
             <div className="space-y-1">
@@ -375,6 +379,8 @@ export function TakeoutProgressPage() {
             </Button>
           </Card>
 
+          {/* Only show cleanup zone if archive files are still sitting in the input folder */}
+          {archivesInInput > 0 && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
             <div className="flex items-start gap-2">
               <span className="text-amber-500 text-base leading-none mt-0.5" aria-hidden>⚠</span>
@@ -404,6 +410,7 @@ export function TakeoutProgressPage() {
               />
             </div>
           </div>
+          )}
         </div>
       )}
 
