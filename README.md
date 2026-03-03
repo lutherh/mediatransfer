@@ -1,119 +1,206 @@
 # MediaTransfer
 
-Move Google Photos to Scaleway Object Storage. Three paths:
-- **Wizard** (`/`) — pick photos in the browser, transfer with one click
-- **Takeout** (`/takeout`) — bulk-migrate full library via Google Takeout archives
-- **API batch** — programmatic transfer with resumable checkpoints
+A tool that moves your Google Photos library to your own private cloud storage (Scaleway Object Storage). Runs entirely on your computer — your photos never pass through a third-party server.
 
-## Prerequisites
+---
 
-- Node.js 22+, Docker Desktop, Git
+## What can it do?
 
-## Quick start
+| Mode | Best for | How it works |
+|------|----------|--------------|
+| **Wizard** (web page) | Picking specific photos | Select photos in your browser, click transfer |
+| **Takeout** (web page or terminal) | Moving your **entire** library | Download your library from Google, then upload it all in one go |
+
+---
+
+## Before you start
+
+You need three things installed on your computer:
+
+1. **Node.js 22 or newer** — [Download here](https://nodejs.org/) (pick the LTS version)
+2. **Docker Desktop** — [Download here](https://www.docker.com/products/docker-desktop/) (used to run the database behind the scenes)
+3. **Git** — [Download here](https://git-scm.com/downloads)
+
+> **Not sure if you have them?** Open a terminal (PowerShell on Windows, Terminal on Mac) and type:
+> ```
+> node --version
+> docker --version
+> git --version
+> ```
+> Each should print a version number. If instead you see an error, install the missing tool from the links above.
+
+---
+
+## Step 1 — Get your cloud account keys
+
+You need credentials from two services. This is a one-time setup.
+
+### Scaleway (where your photos will be stored)
+
+1. Create a free account at [scaleway.com](https://www.scaleway.com/)
+2. In the Scaleway console, go to **Object Storage** → **Create a bucket**
+   - Pick a region (e.g. `fr-par`) and give it a name (e.g. `my-photos-backup`)
+3. Go to **IAM** → **API Keys** → **Create API Key**
+   - Save the **Access Key** and **Secret Key** — you will need them below
+
+### Google Cloud (to let the app read your Google Photos)
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com/)
+2. Create a new project (e.g. "Photos Backup")
+3. Go to **APIs & Services** → **Library** → search for **Google Photos Picker API** → **Enable** it
+4. Go to **APIs & Services** → **Credentials** → **Create Credentials** → **OAuth client ID**
+   - Application type: **Web application**
+   - Authorized redirect URI: `http://localhost:3000/auth/google/callback`
+5. Save the **Client ID** and **Client Secret**
+
+> **Tip:** You may also need to set up the OAuth consent screen (same section). Choose "External", fill in the app name, and add your own email as a test user.
+
+---
+
+## Step 2 — Download and configure
+
+Open a terminal and run:
 
 ```bash
-# 1. Configure
-cp .env.example .env   # fill in SCW_* and GOOGLE_* values
+git clone https://github.com/lutherh/mediatransfer.git
+cd mediatransfer
+```
 
-# 2. Setup (installs deps, starts Postgres + Redis, generates Prisma client)
+Create your configuration file:
+
+```bash
+cp .env.example .env
+```
+
+Now open the `.env` file in any text editor (Notepad, VS Code, etc.) and fill in the values you got in Step 1:
+
+| Line in `.env` | What to put there |
+|---|---|
+| `SCW_ACCESS_KEY=` | Your Scaleway Access Key |
+| `SCW_SECRET_KEY=` | Your Scaleway Secret Key |
+| `SCW_REGION=` | The region you chose (e.g. `fr-par`) |
+| `SCW_BUCKET=` | The bucket name you created (e.g. `my-photos-backup`) |
+| `GOOGLE_CLIENT_ID=` | Your Google OAuth Client ID |
+| `GOOGLE_CLIENT_SECRET=` | Your Google OAuth Client Secret |
+
+> **Leave everything else as-is.** The defaults work for local development. The setup script will auto-generate a secure encryption key for you.
+
+---
+
+## Step 3 — Install and run
+
+```bash
 npm run app:setup
+```
 
-# 3. Run
+This one-time command will:
+- Install all dependencies
+- Start the database (via Docker) 
+- Set up the database tables
+- Generate a secure encryption key
+
+Then start the app:
+
+```bash
 npm run app:dev
 ```
 
-Open `http://localhost:5173`. Backend runs on `:3000`.
+Open your browser to **http://localhost:5173** — that's it, the app is running!
 
-The dev script auto-starts Docker Desktop, frees blocked ports, and includes a watchdog that restarts services after sleep/hibernation.
+> **What `app:dev` does behind the scenes:** It starts Docker Desktop if needed, frees any blocked ports, launches the backend API on port 3000 and the frontend on port 5173, and includes a watchdog that auto-restarts everything if your computer goes to sleep.
 
-## Environment variables
+---
 
-Copy `.env.example` → `.env`. Required values:
+## How to use it
 
-| Variable | Notes |
+### Option A — Transfer specific photos (Wizard)
+
+1. Open **http://localhost:5173**
+2. Click **Connect Google Account** and sign in
+3. Pick the photos you want to transfer
+4. Click **Start Transfer** and wait for the progress bar to finish
+
+### Option B — Transfer your entire library (Takeout)
+
+This is the best option for a full backup. It works in two stages:
+
+#### Stage 1 — Download your library from Google
+
+1. Go to [takeout.google.com](https://takeout.google.com/)
+2. Deselect everything, then select only **Google Photos**
+3. Choose export format: **.zip** files, size **2 GB** (or the largest option available)
+4. Click **Create export** and wait for Google to prepare it (can take hours to days)
+5. Download all the `.zip` files into the `mediatransfer/data/takeout/input/` folder
+
+#### Stage 2 — Upload to your cloud storage
+
+Open **http://localhost:5173/takeout** in your browser:
+
+1. Click **Scan** — the app will find and organize all your photos from the archives
+2. Click **Upload** — the app will upload everything to your Scaleway bucket
+3. Click **Verify** — confirms all files arrived safely
+
+> **Don't worry about interruptions.** If your upload gets interrupted (internet drops, computer sleeps, etc.), just click **Upload** again — it will pick up exactly where it left off. Nothing gets uploaded twice.
+
+**Prefer the command line?** You can also do it with terminal commands:
+```bash
+npm run takeout:scan       # find and organize photos
+npm run takeout:upload     # upload to cloud
+npm run takeout:verify     # confirm everything landed
+npm run takeout:resume     # resume if interrupted
+```
+
+---
+
+## Browsing your uploaded photos
+
+Once photos are uploaded, go to **http://localhost:5173/catalog** to:
+
+- Browse all your uploaded media in a grid view, grouped by date
+- Click any photo to preview it full-size
+- Find and remove duplicate files (Dedup tab)
+- Organize photos into albums
+
+---
+
+## All pages
+
+| Address | What it does |
 |---|---|
-| `SCW_ACCESS_KEY`, `SCW_SECRET_KEY` | Scaleway IAM → API Keys |
-| `SCW_REGION`, `SCW_BUCKET` | Scaleway Object Storage |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google Cloud Console → OAuth |
-| `GOOGLE_REDIRECT_URI` | `http://localhost:5173/auth/google/callback` |
+| `http://localhost:5173` | Photo Transfer wizard (select & transfer) |
+| `http://localhost:5173/takeout` | Takeout migration (full library) |
+| `http://localhost:5173/transfers` | View all transfer jobs + cloud storage usage |
+| `http://localhost:5173/catalog` | Browse & manage your uploaded photos |
 
-Defaults are fine for `DATABASE_URL`, `REDIS_URL`, and most other values.
-Set `ENCRYPTION_SECRET` to a real secret (at least 16 chars, not the placeholder).
+---
 
-## Transfer flows
+## Troubleshooting
 
-### Wizard (selective)
-1. Connect Google account
-2. Pick photos via Google Picker
-3. Review & start transfer
-4. Watch progress bar until done
-
-### Takeout (full library)
-Place `.zip`/`.tar`/`.tgz` archives in `data/takeout/input`, then:
-
-```bash
-npm run takeout:scan      # build manifest
-npm run takeout:upload    # upload to Scaleway
-npm run takeout:verify    # confirm all files landed
-npm run takeout:resume    # resume if interrupted
-```
-
-Or use the UI at `/takeout`: **Scan** → **Upload** → **Verify**.
-
-For large archives:
-```bash
-npm run takeout:process -- --concurrency 2 --progress-interval-sec 2
-```
-
-For low disk usage (auto-clean local files after each successfully uploaded archive):
-```bash
-npm run takeout:process -- --move-archive
-# or permanently delete archives after successful upload:
-npm run takeout:process -- --delete-archive
-```
-
-If you used `takeout:scan`/`takeout:upload` and want to reclaim disk safely afterward:
-```bash
-npm run takeout:cleanup -- --apply --move-archives
-# or: npm run takeout:cleanup -- --apply --delete-archives
-```
-
-### API batch (app-created media only)
-```bash
-npx tsx scripts/test-google-connection.ts                          # one-time OAuth
-npm run transfer:google-batch:scaleway -- --batch-items 100 --batch-gb 2  # run/resume
-```
-
-> API batch does **not** access your full Google Photos library. Use Takeout for that.
-
-## Pages
-
-| Route | Description |
+| Problem | Solution |
 |---|---|
-| `/` | Photo Transfer wizard |
-| `/takeout` | Takeout migration progress |
-| `/transfers` | Transfer jobs list + cloud usage |
-| `/transfers/:id` | Transfer detail |
-| `/catalog` | Browse uploaded media (Scaleway) |
+| **"Docker is not running"** | Open Docker Desktop manually, wait until it says "Running", then try again |
+| **Port 3000 or 5173 already in use** | The dev script auto-frees ports — if it fails, close other apps using those ports |
+| **Google sign-in doesn't work** | Make sure your redirect URI in Google Cloud Console exactly matches `http://localhost:3000/auth/google/callback` |
+| **Upload seems stuck** | Check your internet connection. Restart with `npm run app:dev` — it will resume from where it stopped |
+| **"ENCRYPTION_SECRET must be set"** | Run `npm run app:setup` again — it generates one automatically |
 
-## Catalog browser
+---
 
-View transferred files at `http://localhost:3000/catalog`. Requires `SCW_*` env vars.
-Infinite-scroll grid, date grouping, click to preview, prefix filtering.
+## Stopping the app
 
-## Security
+Press `Ctrl+C` in the terminal where `npm run app:dev` is running. To also stop the database:
 
-- `API_AUTH_TOKEN` required in production (all routes except `/health`)
-- CORS restricted to `CORS_ALLOWED_ORIGINS`
-- Docker ports bound to `127.0.0.1`
-- Credentials redacted from logs
+```bash
+docker compose down
+```
 
-## Dev commands
+To start everything again later, just run `npm run app:dev`.
 
-| Command | Purpose |
-|---|---|
-| `npm run app:dev` | Start everything (backend + frontend + services) |
-| `npm run app:setup` | One-time setup |
-| `npm run lint` | Type check |
-| `npm run test` | Backend tests |
-| `cd frontend && npx vitest run` | Frontend tests |
+---
+
+## Security notes
+
+- All your data stays on your computer and your own Scaleway bucket — nothing goes through third-party servers
+- Cloud credentials are encrypted at rest (AES-256)
+- Docker ports are only accessible from your machine (bound to `127.0.0.1`)
+- The `.env` file with your secrets is excluded from Git (won't be uploaded if you push the code)
