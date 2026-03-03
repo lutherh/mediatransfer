@@ -47,7 +47,7 @@ export async function buildManifest(
         const capturedAtDate = await deriveCapturedDate(sourcePath, sidecarPath, stat.mtime);
         const capturedAt = capturedAtDate.toISOString();
         const datePath = toDatePath(capturedAtDate);
-        const destinationKey = `${datePath}/${sanitizeRelativePath(relativePath)}`;
+        const destinationKey = `transfers/${datePath}/${sanitizeRelativePath(relativePath)}`;
 
         return {
           sourcePath,

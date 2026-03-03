@@ -338,7 +338,7 @@ function buildDestinationKey(item: GoogleApiPendingItem): string {
   const month = String(dateValue.getUTCMonth() + 1).padStart(2, '0');
   const day = String(dateValue.getUTCDate()).padStart(2, '0');
   const safeName = sanitizeFileName(item.filename);
-  return `${year}/${month}/${day}/${item.id}-${safeName}`;
+  return `transfers/${year}/${month}/${day}/${item.id}-${safeName}`;
 }
 
 function sanitizeFileName(name: string): string {
