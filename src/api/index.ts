@@ -151,6 +151,8 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 
 	await app.register(cors, {
 		origin: buildCorsOriginHandler(options?.corsAllowedOrigins ?? []),
+		methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+		allowedHeaders: ['Content-Type', 'Authorization', 'X-Api-Token'],
 	});
 
 	await app.register(rateLimit, {

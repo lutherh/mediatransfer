@@ -602,3 +602,160 @@ export async function fetchCatalogItems(opts: {
   return response.json();
 }
 
+export async function deleteCatalogItems(encodedKeys: string[], apiToken?: string): Promise<void> {
+  const url = new URL('/catalog/api/items', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString(), {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ encodedKeys }),
+  });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to delete items');
+  }
+}
+
+export async function moveCatalogItem(
+  encodedKey: string,
+  newDatePrefix: string,
+  apiToken?: string,
+): Promise<{ from: string; to: string }> {
+  const url = new URL('/catalog/api/items/move', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ encodedKey, newDatePrefix }),
+  });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to move item');
+  }
+  return response.json();
+}
+
+export type ExifData = {
+  capturedAt: string | null;
+  width: number | null;
+  height: number | null;
+  make: string | null;
+  model: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  raw: Record<string, unknown> | null;
+};
+
+export async function fetchCatalogExif(encodedKey: string, apiToken?: string): Promise<ExifData> {
+  const url = new URL(`/catalog/api/exif/${encodedKey}`, API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch EXIF');
+  }
+  return response.json();
+}
+
+export type Album = {
+  id: string;
+  name: string;
+  keys: string[];
+  coverKey?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AlbumsManifest = { albums: Album[] };
+
+export async function fetchAlbums(apiToken?: string): Promise<AlbumsManifest> {
+  const url = new URL('/catalog/api/albums', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch albums');
+  }
+  return response.json();
+}
+
+export async function createAlbum(
+  name: string,
+  apiToken?: string,
+): Promise<{ id: string; name: string }> {
+  const url = new URL('/catalog/api/albums', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to create album');
+  }
+  return response.json();
+}
+
+export async function updateAlbum(
+  albumId: string,
+  updates: { name?: string; addKeys?: string[]; removeKeys?: string[]; coverKey?: string },
+  apiToken?: string,
+): Promise<Album> {
+  const url = new URL(`/catalog/api/albums/${albumId}`, API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to update album');
+  }
+  return response.json();
+}
+
+export async function deleteAlbum(albumId: string, apiToken?: string): Promise<void> {
+  const url = new URL(`/catalog/api/albums/${albumId}`, API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString(), { method: 'DELETE' });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to delete album');
+  }
+}
+
+// ── Deduplication ──────────────────────────────────────────────────────────
+
+export type DuplicateGroup = {
+  fingerprint: string;
+  size: number;
+  /** Raw S3 key of the copy to keep. */
+  keepKey: string;
+  /** Raw S3 keys that are safe to delete. */
+  duplicateKeys: string[];
+};
+
+export type DuplicatesResult = {
+  groups: DuplicateGroup[];
+  totalDuplicates: number;
+  bytesFreed: number;
+};
+
+/** Encode a raw S3 key to the base64url format the backend uses for :encodedKey params. */
+export function encodeS3Key(key: string): string {
+  return btoa(key).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+export async function fetchDuplicates(apiToken?: string): Promise<DuplicatesResult> {
+  const url = new URL('/catalog/api/duplicates', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch duplicates');
+  }
+  return response.json();
+}
+
