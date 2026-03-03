@@ -36,8 +36,10 @@ export async function registerCredentialsRoutes(
     }));
   });
 
+  const idParamSchema = z.object({ id: z.string().min(1) });
+
   app.delete('/credentials/:id', async (req, reply) => {
-    const id = (req.params as { id: string }).id;
+    const { id } = idParamSchema.parse(req.params);
     await service.delete(id);
     return reply.code(204).send();
   });

@@ -10,6 +10,7 @@ import {
   type CatalogStats,
 } from '@/lib/api';
 import { Card } from '@/components/ui/card';
+import { DateScroller } from '@/components/date-scroller';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -339,6 +340,7 @@ export function CatalogPage() {
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [confirmDelete, setConfirmDelete] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const selectionMode = selected.size > 0;
 
@@ -380,7 +382,10 @@ export function CatalogPage() {
       if (!map.has(item.sectionDate)) map.set(item.sectionDate, []);
       map.get(item.sectionDate)!.push(item);
     }
-    return [...map.entries()];
+    // Newest dates first; within each section, newest items first
+    return [...map.entries()]
+      .sort(([a], [b]) => b.localeCompare(a))
+      .map(([date, items]) => [date, items.sort((a, b) => b.capturedAt.localeCompare(a.capturedAt))] as [string, CatalogItem[]]);
   }, [allItems]);
 
   // Infinite scroll
@@ -559,7 +564,7 @@ export function CatalogPage() {
           const sectionOffset = runningOffset;
           runningOffset += items.length;
           return (
-            <div key={date}>
+            <div key={date} ref={(el) => { if (el) sectionRefs.current.set(date, el); else sectionRefs.current.delete(date); }}>
               <SectionHeader
                 date={date}
                 items={items}
@@ -591,6 +596,9 @@ export function CatalogPage() {
           <p className="text-xs text-slate-500">Loading more…</p>
         )}
       </div>
+
+      {/* Date scroller */}
+      <DateScroller sections={sections} sectionRefs={sectionRefs} />
 
       {/* Lightbox */}
       {lightboxIndex !== null && allItems.length > 0 && (

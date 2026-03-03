@@ -127,6 +127,34 @@ const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'avi', 'm4v', '3gp', 'mkv', 'web
 
 const S3_REQUEST_TIMEOUT_MS = 30_000;
 const STATS_CACHE_TTL_MS = 5 * 60_000;
+const MAX_PAGE_RETRIES = 3;
+
+/** Retry wrapper for S3 ListObjectsV2 — retries transient / timeout errors with linear backoff. */
+async function s3ListWithRetry(
+  client: S3Client,
+  params: ConstructorParameters<typeof ListObjectsV2Command>[0],
+): Promise<ListObjectsV2CommandOutput> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < MAX_PAGE_RETRIES; attempt++) {
+    try {
+      return await client.send(
+        new ListObjectsV2Command(params),
+        { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
+      );
+    } catch (err) {
+      lastError = err;
+      if (attempt < MAX_PAGE_RETRIES - 1) {
+        const delay = 1000 * (attempt + 1);
+        console.warn(
+          `[catalog] S3 list page failed (attempt ${attempt + 1}/${MAX_PAGE_RETRIES}), retrying in ${delay}ms`,
+          err,
+        );
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+  throw lastError;
+}
 
 export class ScalewayCatalogService implements CatalogService {
   private readonly client: S3Client;
@@ -160,15 +188,12 @@ export class ScalewayCatalogService implements CatalogService {
 
     while (items.length < max && hasMore) {
       const listMax = Math.min(1000, Math.max(max, 200));
-      const result = await this.client.send(
-        new ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: prefix || undefined,
-          ContinuationToken: continuationToken,
-          MaxKeys: listMax,
-        }),
-        { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
-      );
+      const result = await s3ListWithRetry(this.client, {
+        Bucket: this.bucket,
+        Prefix: prefix || undefined,
+        ContinuationToken: continuationToken,
+        MaxKeys: listMax,
+      });
 
       const mediaItems = (result.Contents ?? [])
         .filter((item) => Boolean(item.Key && item.Size !== undefined && item.LastModified))
@@ -290,15 +315,12 @@ export class ScalewayCatalogService implements CatalogService {
     let continuationToken: string | undefined;
 
     do {
-      const result = await this.client.send(
-        new ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: this.prefix ? `${this.prefix}/` : undefined,
-          ContinuationToken: continuationToken,
-          MaxKeys: 1000,
-        }),
-        { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
-      );
+      const result = await s3ListWithRetry(this.client, {
+        Bucket: this.bucket,
+        Prefix: this.prefix ? `${this.prefix}/` : undefined,
+        ContinuationToken: continuationToken,
+        MaxKeys: 1000,
+      });
 
       for (const obj of result.Contents ?? []) {
         if (!obj.Key || obj.Size === undefined) continue;
@@ -337,15 +359,12 @@ export class ScalewayCatalogService implements CatalogService {
     let continuationToken: string | undefined;
 
     do {
-      const result = await this.client.send(
-        new ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: this.fullPrefix(prefix),
-          ContinuationToken: continuationToken,
-          MaxKeys: 1000,
-        }),
-        { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
-      );
+      const result = await s3ListWithRetry(this.client, {
+        Bucket: this.bucket,
+        Prefix: this.fullPrefix(prefix),
+        ContinuationToken: continuationToken,
+        MaxKeys: 1000,
+      });
 
       const mediaItems = (result.Contents ?? [])
         .filter((item) => Boolean(item.Key && item.Size !== undefined && item.LastModified))
@@ -486,37 +505,15 @@ export class ScalewayCatalogService implements CatalogService {
     // Phase 1: list all objects, capturing size + ETag
     const objects: { key: string; size: number; etag: string }[] = [];
     let continuationToken: string | undefined;
-    const MAX_PAGE_RETRIES = 3;
-
     do {
-      let result: ListObjectsV2CommandOutput | undefined;
-      let lastError: unknown;
+      const result = await s3ListWithRetry(this.client, {
+        Bucket: this.bucket,
+        Prefix: this.prefix ? `${this.prefix}/` : undefined,
+        ContinuationToken: continuationToken,
+        MaxKeys: 1000,
+      });
 
-      for (let attempt = 0; attempt < MAX_PAGE_RETRIES; attempt++) {
-        try {
-          result = await this.client.send(
-            new ListObjectsV2Command({
-              Bucket: this.bucket,
-              Prefix: this.prefix ? `${this.prefix}/` : undefined,
-              ContinuationToken: continuationToken,
-              MaxKeys: 1000,
-            }),
-            { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
-          );
-          lastError = undefined;
-          break;
-        } catch (err) {
-          lastError = err;
-          if (attempt < MAX_PAGE_RETRIES - 1) {
-            const delay = 1000 * (attempt + 1);
-            console.warn(`[catalog] S3 list page failed (attempt ${attempt + 1}/${MAX_PAGE_RETRIES}), retrying in ${delay}ms`, err);
-            await new Promise((r) => setTimeout(r, delay));
-          }
-        }
-      }
-      if (lastError) throw lastError;
-
-      for (const obj of result!.Contents ?? []) {
+      for (const obj of result.Contents ?? []) {
         if (!obj.Key || obj.Size === undefined || !obj.ETag) continue;
         const key = this.stripPrefix(obj.Key);
         const type = inferMediaType(key);
