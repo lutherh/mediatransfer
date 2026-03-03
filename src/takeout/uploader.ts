@@ -476,7 +476,31 @@ export async function persistUploadState(
   await fs.mkdir(dir, { recursive: true });
   const tmpPath = `${statePath}.tmp`;
   await fs.writeFile(tmpPath, JSON.stringify(state, null, 2), 'utf8');
-  await fs.rename(tmpPath, statePath);
+
+  // On Windows the target file can be momentarily locked by antivirus or
+  // indexing services, causing EPERM on rename.  Retry a few times with a
+  // short back-off before giving up.
+  const MAX_RENAME_RETRIES = 5;
+  for (let attempt = 0; attempt < MAX_RENAME_RETRIES; attempt++) {
+    try {
+      await fs.rename(tmpPath, statePath);
+      return;
+    } catch (err: unknown) {
+      const isRetryable =
+        err instanceof Error &&
+        'code' in err &&
+        ((err as NodeJS.ErrnoException).code === 'EPERM' ||
+          (err as NodeJS.ErrnoException).code === 'EACCES');
+      if (!isRetryable || attempt === MAX_RENAME_RETRIES - 1) {
+        throw err;
+      }
+      const delayMs = 200 * (attempt + 1);
+      console.warn(
+        `[uploader] rename EPERM/EACCES, retrying in ${delayMs}ms (attempt ${attempt + 1}/${MAX_RENAME_RETRIES})`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
 }
 
 function createEmptyState(): UploadState {
