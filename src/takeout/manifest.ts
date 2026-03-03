@@ -47,7 +47,7 @@ export async function buildManifest(
         const capturedAtDate = await deriveCapturedDate(sourcePath, sidecarPath, stat.mtime);
         const capturedAt = capturedAtDate.toISOString();
         const datePath = toDatePath(capturedAtDate);
-        const destinationKey = `${datePath}/${sanitizeRelativePath(relativePath)}`;
+        const destinationKey = `transfers/${datePath}/${sanitizeRelativePath(relativePath)}`;
 
         return {
           sourcePath,
@@ -195,7 +195,8 @@ async function readSidecarDate(sidecarPath: string): Promise<Date | undefined> {
       const date = new Date(candidate);
       if (!Number.isNaN(date.getTime())) return date;
     }
-  } catch {
+  } catch (err) {
+    console.debug('[manifest] Failed to parse sidecar metadata', err);
     // ignore malformed sidecar and fall back to file metadata
   }
 
@@ -234,7 +235,12 @@ async function exists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
     return true;
-  } catch {
+  } catch (err) {
+    // ENOENT is the expected/normal case — sidecar file simply doesn't exist.
+    // Only log genuinely unexpected errors (permission denied, etc.).
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn('[manifest] Path not accessible', { filePath, err });
+    }
     return false;
   }
 }

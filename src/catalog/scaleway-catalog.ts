@@ -50,6 +50,28 @@ export type DeleteResult = {
   failed: { key: string; error: string }[];
 };
 
+export type DuplicateGroup = {
+  /** The (size, etag) fingerprint shared by all items in this group. */
+  fingerprint: string;
+  /** Number of bytes each item occupies. */
+  size: number;
+  /** The key chosen to keep (best date-path structure). */
+  keepKey: string;
+  /** Keys that are duplicates and safe to remove. */
+  duplicateKeys: string[];
+};
+
+export type DeduplicateResult = {
+  /** Groups that were detected as duplicates. */
+  groups: DuplicateGroup[];
+  /** Total duplicate files removed (or to be removed in dry-run). */
+  totalDuplicates: number;
+  /** Total bytes freed (or to be freed in dry-run). */
+  bytesFreed: number;
+  /** Deletion results (only present when dryRun=false). */
+  deleteResult?: DeleteResult;
+};
+
 export type MoveResult = {
   moved: { from: string; to: string }[];
   failed: { key: string; error: string }[];
@@ -76,11 +98,17 @@ export type CatalogService = {
   }): Promise<CatalogPage>;
   listAll(prefix?: string): Promise<CatalogItem[]>;
   getObject(encodedKey: string): Promise<CatalogObject>;
+  /** Fetch up to `maxBytes` of an object as a Buffer (for EXIF parsing etc.). */
+  getObjectBuffer(encodedKey: string, maxBytes?: number): Promise<{ buffer: Buffer; contentType?: string; contentLength?: number }>;
   getStats(): Promise<CatalogStats>;
   deleteObjects(encodedKeys: string[]): Promise<DeleteResult>;
   moveObject(encodedKey: string, newDatePrefix: string): Promise<{ from: string; to: string }>;
   getAlbums(): Promise<AlbumsManifest>;
   saveAlbums(manifest: AlbumsManifest): Promise<void>;
+  /** Scan all objects and return groups of duplicates (same size + ETag). */
+  findDuplicates(onProgress?: (listed: number) => void): Promise<DuplicateGroup[]>;
+  /** Find and remove duplicates. Pass dryRun=true to preview without deleting. */
+  deduplicateObjects(options?: { dryRun?: boolean }): Promise<DeduplicateResult>;
 };
 
 export type ScalewayCatalogConfig = {
@@ -207,6 +235,42 @@ export class ScalewayCatalogService implements CatalogService {
       contentType: response.ContentType ?? inferContentType(decodedKey),
       etag: response.ETag,
       lastModified: response.LastModified?.toISOString(),
+      contentLength: response.ContentLength,
+    };
+  }
+
+  async getObjectBuffer(
+    encodedKey: string,
+    maxBytes = 65536,
+  ): Promise<{ buffer: Buffer; contentType?: string; contentLength?: number }> {
+    const decodedKey = decodeKey(encodedKey);
+    const fullKey = this.withPrefix(decodedKey);
+    const response = await this.client.send(
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: fullKey,
+        Range: `bytes=0-${maxBytes - 1}`,
+      }),
+      { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
+    );
+
+    if (!response.Body) {
+      throw new Error(`Object has empty body: ${decodedKey}`);
+    }
+
+    const stream =
+      response.Body instanceof Readable
+        ? response.Body
+        : Readable.fromWeb(response.Body as ReadableStream<Uint8Array>);
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+
+    return {
+      buffer: Buffer.concat(chunks),
+      contentType: response.ContentType ?? inferContentType(decodedKey),
       contentLength: response.ContentLength,
     };
   }
@@ -417,6 +481,62 @@ export class ScalewayCatalogService implements CatalogService {
     );
   }
 
+  async findDuplicates(onProgress?: (listed: number) => void): Promise<DuplicateGroup[]> {
+    // Phase 1: list all objects, capturing size + ETag
+    const objects: { key: string; size: number; etag: string }[] = [];
+    let continuationToken: string | undefined;
+
+    do {
+      const result = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: this.prefix ? `${this.prefix}/` : undefined,
+          ContinuationToken: continuationToken,
+          MaxKeys: 1000,
+        }),
+        { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
+      );
+
+      for (const obj of result.Contents ?? []) {
+        if (!obj.Key || obj.Size === undefined || !obj.ETag) continue;
+        const key = this.stripPrefix(obj.Key);
+        const type = inferMediaType(key);
+        if (type !== 'image' && type !== 'video') continue;
+        objects.push({
+          key,
+          size: Number(obj.Size),
+          etag: normalizeEtag(obj.ETag),
+        });
+      }
+
+      continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+      onProgress?.(objects.length);
+    } while (continuationToken);
+
+    // Phase 2: group by (size, etag) — identical content fingerprint
+    return buildDuplicateGroups(objects);
+  }
+
+  async deduplicateObjects(options?: { dryRun?: boolean }): Promise<DeduplicateResult> {
+    const dryRun = options?.dryRun ?? true;
+    const groups = await this.findDuplicates();
+
+    const totalDuplicates = groups.reduce((sum, g) => sum + g.duplicateKeys.length, 0);
+    const bytesFreed = groups.reduce((sum, g) => sum + g.duplicateKeys.length * g.size, 0);
+
+    if (dryRun || totalDuplicates === 0) {
+      return { groups, totalDuplicates, bytesFreed };
+    }
+
+    // Collect all duplicate keys to delete
+    const encodedKeysToDelete = groups.flatMap((g) =>
+      g.duplicateKeys.map((k) => encodeKey(k)),
+    );
+
+    const deleteResult = await this.deleteObjects(encodedKeysToDelete);
+    return { groups, totalDuplicates, bytesFreed, deleteResult };
+  }
+
   private fullPrefix(extra?: string): string {
     if (this.prefix && extra) {
       return `${this.prefix}/${extra}`;
@@ -447,7 +567,8 @@ export function encodeKey(key: string): string {
 export function decodeKey(encodedKey: string): string {
   try {
     return Buffer.from(encodedKey, 'base64url').toString('utf8');
-  } catch {
+  } catch (err) {
+    console.debug('[catalog] Invalid encoded media key', { encodedKey, err });
     throw new Error('Invalid media key encoding');
   }
 }
@@ -607,4 +728,81 @@ async function streamToString(body: unknown): Promise<string> {
     return (body as any).transformToString('utf-8');
   }
   return String(body);
+}
+
+// ── ETag normalization ──────────────────────────────────────────
+
+function normalizeEtag(etag: string | undefined): string {
+  if (!etag) return '';
+  return etag.replace(/"/g, '').trim();
+}
+
+// ── Duplicate detection ─────────────────────────────────────────
+
+/**
+ * Score a key for "keep" priority.  Higher = better candidate to keep.
+ *
+ * Prefers:
+ *  1. Keys with a proper YYYY/MM/DD date path   (+10)
+ *  2. Keys that are shorter (less nesting noise) (+5 minus depth penalty)
+ *  3. Deterministic tiebreak via lexicographic order
+ */
+export function scoreKeyForKeep(key: string): number {
+  let score = 0;
+  // Proper date path like 2020/03/15/
+  if (/^((?:19|20)\d{2})\/(\d{2})\/(\d{2})\//.test(key)) {
+    score += 10;
+  }
+  // Penalise deep nesting
+  const depth = (key.match(/\//g) ?? []).length;
+  score -= depth;
+  return score;
+}
+
+/**
+ * Given a flat list of objects (key, size, etag), group by (size, etag)
+ * and return only groups with more than one item — i.e. duplicates.
+ * Within each group, pick the best key to keep and mark the rest as duplicates.
+ */
+export function buildDuplicateGroups(
+  objects: { key: string; size: number; etag: string }[],
+): DuplicateGroup[] {
+  const map = new Map<string, { key: string; size: number }[]>();
+
+  for (const obj of objects) {
+    const fp = `${obj.size}:${obj.etag}`;
+    const list = map.get(fp);
+    if (list) {
+      list.push({ key: obj.key, size: obj.size });
+    } else {
+      map.set(fp, [{ key: obj.key, size: obj.size }]);
+    }
+  }
+
+  const groups: DuplicateGroup[] = [];
+
+  for (const [fingerprint, items] of map) {
+    if (items.length < 2) continue;
+
+    // Sort: highest score first, then lexicographic for determinism
+    items.sort((a, b) => {
+      const scoreDiff = scoreKeyForKeep(b.key) - scoreKeyForKeep(a.key);
+      if (scoreDiff !== 0) return scoreDiff;
+      return a.key.localeCompare(b.key);
+    });
+
+    const keepKey = items[0]!.key;
+    const duplicateKeys = items.slice(1).map((i) => i.key);
+
+    groups.push({
+      fingerprint,
+      size: items[0]!.size,
+      keepKey,
+      duplicateKeys,
+    });
+  }
+
+  // Sort groups by bytes wasted descending for easy prioritisation
+  groups.sort((a, b) => b.duplicateKeys.length * b.size - a.duplicateKeys.length * a.size);
+  return groups;
 }

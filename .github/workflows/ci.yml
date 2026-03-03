@@ -30,6 +30,9 @@ jobs:
 
       - name: Test
         run: npm run test
+        env:
+          DATABASE_URL: postgresql://user:pass@localhost:5432/mediatransfer_test
+          ENCRYPTION_SECRET: ci-test-encryption-secret-key
 
       - name: Build
         run: npm run build

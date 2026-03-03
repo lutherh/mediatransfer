@@ -23,7 +23,7 @@ const envSchema = z.object({
       return trimmed && trimmed.length > 0 ? trimmed : undefined;
     })
     .pipe(z.string().min(16).optional()),
-  CORS_ALLOWED_ORIGINS: z.string().default('http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173'),
+  CORS_ALLOWED_ORIGINS: z.string().default('http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://localhost:5174'),
 
   // PostgreSQL
   DATABASE_URL: z.string().url({ message: 'DATABASE_URL must be a valid URL' }),
@@ -36,7 +36,10 @@ const envSchema = z.object({
   // Encryption
   ENCRYPTION_SECRET: z.string().min(16, {
     message: 'ENCRYPTION_SECRET must be at least 16 characters',
-  }),
+  }).refine(
+    (val) => !['change-me-to-a-random-secret', 'change-me'].includes(val.toLowerCase()),
+    { message: 'ENCRYPTION_SECRET is still set to the default placeholder. Generate a real secret.' },
+  ),
 
   // Scaleway Object Storage (optional — only needed when using Scaleway provider)
   SCW_ACCESS_KEY: z.string().min(1).optional(),

@@ -103,9 +103,20 @@ export type TakeoutStatus = {
     attempts: number;
   }>;
   isComplete: boolean;
+  /** Number of .zip / .tgz / .tar archive files currently sitting in the input folder */
+  archivesInInput: number;
 };
 
-export type TakeoutAction = 'scan' | 'upload' | 'verify' | 'resume' | 'start-services';
+export type TakeoutAction =
+  | 'scan'
+  | 'upload'
+  | 'verify'
+  | 'resume'
+  | 'start-services'
+  | 'cleanup-move'
+  | 'cleanup-delete'
+  | 'cleanup-force-move'
+  | 'cleanup-force-delete';
 
 export type ScanProgress = {
   phase: string;
@@ -526,5 +537,287 @@ export async function fetchUploadStats(): Promise<UploadStats> {
     throw new Error('Failed to fetch upload stats');
   }
   return response.json();
+}
+
+// ── Catalog ────────────────────────────────────────────────────────────────
+
+export type CatalogItem = {
+  key: string;
+  encodedKey: string;
+  size: number;
+  lastModified: string;
+  capturedAt: string;
+  mediaType: 'image' | 'video' | 'other';
+  sectionDate: string;
+};
+
+export type CatalogPage = {
+  items: CatalogItem[];
+  nextToken?: string;
+};
+
+export type CatalogStats = {
+  totalFiles: number;
+  totalBytes: number;
+  imageCount: number;
+  videoCount: number;
+  oldestDate: string | null;
+  newestDate: string | null;
+};
+
+/** Returns the URL for streaming a catalog media object. */
+export function catalogMediaUrl(encodedKey: string, apiToken?: string): string {
+  const url = new URL(`/catalog/media/${encodedKey}`, API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  return url.toString();
+}
+
+export async function fetchCatalogStats(apiToken?: string): Promise<CatalogStats> {
+  const url = new URL('/catalog/api/stats', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch catalog stats');
+  }
+  return response.json();
+}
+
+export async function fetchCatalogItems(opts: {
+  token?: string;
+  prefix?: string;
+  max?: number;
+  apiToken?: string;
+}): Promise<CatalogPage> {
+  const url = new URL('/catalog/api/items', API_BASE_URL);
+  if (opts.token) url.searchParams.set('token', opts.token);
+  if (opts.prefix) url.searchParams.set('prefix', opts.prefix);
+  if (opts.max !== undefined) url.searchParams.set('max', String(opts.max));
+  if (opts.apiToken) url.searchParams.set('apiToken', opts.apiToken);
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch catalog items');
+  }
+  return response.json();
+}
+
+export async function deleteCatalogItems(encodedKeys: string[], apiToken?: string): Promise<void> {
+  const url = new URL('/catalog/api/items', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString(), {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ encodedKeys }),
+  });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to delete items');
+  }
+}
+
+export async function moveCatalogItem(
+  encodedKey: string,
+  newDatePrefix: string,
+  apiToken?: string,
+): Promise<{ from: string; to: string }> {
+  const url = new URL('/catalog/api/items/move', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ encodedKey, newDatePrefix }),
+  });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to move item');
+  }
+  return response.json();
+}
+
+export type ExifData = {
+  capturedAt: string | null;
+  width: number | null;
+  height: number | null;
+  make: string | null;
+  model: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  raw: Record<string, unknown> | null;
+};
+
+export async function fetchCatalogExif(encodedKey: string, apiToken?: string): Promise<ExifData> {
+  const url = new URL(`/catalog/api/exif/${encodedKey}`, API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch EXIF');
+  }
+  return response.json();
+}
+
+export type Album = {
+  id: string;
+  name: string;
+  keys: string[];
+  coverKey?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AlbumsManifest = { albums: Album[] };
+
+export async function fetchAlbums(apiToken?: string): Promise<AlbumsManifest> {
+  const url = new URL('/catalog/api/albums', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch albums');
+  }
+  return response.json();
+}
+
+export async function createAlbum(
+  name: string,
+  apiToken?: string,
+): Promise<{ id: string; name: string }> {
+  const url = new URL('/catalog/api/albums', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to create album');
+  }
+  return response.json();
+}
+
+export async function updateAlbum(
+  albumId: string,
+  updates: { name?: string; addKeys?: string[]; removeKeys?: string[]; coverKey?: string },
+  apiToken?: string,
+): Promise<Album> {
+  const url = new URL(`/catalog/api/albums/${albumId}`, API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to update album');
+  }
+  return response.json();
+}
+
+export async function deleteAlbum(albumId: string, apiToken?: string): Promise<void> {
+  const url = new URL(`/catalog/api/albums/${albumId}`, API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString(), { method: 'DELETE' });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to delete album');
+  }
+}
+
+// ── Deduplication ──────────────────────────────────────────────────────────
+
+export type DuplicateGroup = {
+  fingerprint: string;
+  size: number;
+  /** Raw S3 key of the copy to keep. */
+  keepKey: string;
+  /** Raw S3 keys that are safe to delete. */
+  duplicateKeys: string[];
+};
+
+export type DuplicatesResult = {
+  groups: DuplicateGroup[];
+  totalDuplicates: number;
+  bytesFreed: number;
+};
+
+/** Encode a raw S3 key to the base64url format the backend uses for :encodedKey params. */
+export function encodeS3Key(key: string): string {
+  return btoa(key).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+export async function fetchDuplicates(apiToken?: string): Promise<DuplicatesResult> {
+  const url = new URL('/catalog/api/duplicates', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch duplicates');
+  }
+  return response.json();
+}
+
+/** Progress event emitted by the SSE duplicate scan endpoint. */
+export type DupScanProgress =
+  | { phase: 'started'; totalFiles: number | null }
+  | { phase: 'listing'; listed: number; totalFiles: number | null }
+  | { phase: 'done'; groups: DuplicateGroup[]; totalDuplicates: number; bytesFreed: number }
+  | { phase: 'error'; message: string };
+
+/**
+ * Stream the duplicate scan via SSE, calling `onProgress` for each event.
+ * Returns the final DuplicatesResult when complete.
+ * The caller can abort by using an AbortController.
+ */
+export function scanDuplicatesStream(
+  onProgress: (event: DupScanProgress) => void,
+  apiToken?: string,
+  signal?: AbortSignal,
+): Promise<DuplicatesResult> {
+  return new Promise((resolve, reject) => {
+    const url = new URL('/catalog/api/duplicates/scan', API_BASE_URL);
+    if (apiToken) url.searchParams.set('apiToken', apiToken);
+
+    fetch(url.toString(), { signal })
+      .then(async (response) => {
+        if (!response.ok || !response.body) {
+          const raw = await response.text();
+          reject(new Error(parseApiErrorMessage(raw) ?? 'Scan request failed'));
+          return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          // Parse SSE frames: "data: {...}\n\n"
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop() ?? '';
+
+          for (const chunk of lines) {
+            const dataLine = chunk.split('\n').find((l) => l.startsWith('data: '));
+            if (!dataLine) continue;
+            try {
+              const event = JSON.parse(dataLine.slice(6)) as DupScanProgress;
+              onProgress(event);
+              if (event.phase === 'done') {
+                resolve({ groups: event.groups, totalDuplicates: event.totalDuplicates, bytesFreed: event.bytesFreed });
+              } else if (event.phase === 'error') {
+                reject(new Error(event.message));
+              }
+            } catch { /* skip malformed */ }
+          }
+        }
+      })
+      .catch(reject);
+  });
 }
 

@@ -97,3 +97,12 @@ model MediaItem {
   @@map("media_items")
 }
 
+model AppSetting {
+  key       String   @id
+  value     String               /// AES-256-GCM encrypted JSON when sensitive
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_settings")
+}
+

@@ -58,13 +58,14 @@ export function createEmptyArchiveState(): ArchiveState {
 
 export async function loadArchiveState(statePath: string): Promise<ArchiveState> {
   try {
-    const raw = await fs.readFile(statePath, 'utf8');
+    const raw = (await fs.readFile(statePath, 'utf8')).replace(/^\uFEFF/, '');
     const parsed = JSON.parse(raw) as ArchiveState;
     if (parsed.version !== 1 || typeof parsed.archives !== 'object') {
       return createEmptyArchiveState();
     }
     return parsed;
-  } catch {
+  } catch (err) {
+    console.debug('[incremental] Failed to load archive state, using empty state', err);
     return createEmptyArchiveState();
   }
 }
@@ -182,6 +183,8 @@ export async function runTakeoutIncremental(
 
       // 2. Find Google Photos roots
       const roots = await findGooglePhotosRoots(extractDir);
+      let archiveSummary: UploadSummary | undefined;
+
       if (roots.length === 0) {
         // If no Google Photos folder, try treating the extraction root as media root
         // (handles edge case of non-standard Takeout formatting)
@@ -198,7 +201,7 @@ export async function runTakeoutIncremental(
           continue;
         }
         // Process entries from the root
-        const archiveSummary = await processArchiveEntries(
+        archiveSummary = await processArchiveEntries(
           entries,
           archiveName,
           config,
@@ -220,7 +223,7 @@ export async function runTakeoutIncremental(
           allEntries.push(...entries);
         }
 
-        const archiveSummary = await processArchiveEntries(
+        archiveSummary = await processArchiveEntries(
           allEntries,
           archiveName,
           config,
@@ -236,15 +239,17 @@ export async function runTakeoutIncremental(
         }
       }
 
+      const archiveUploadSucceeded = (archiveSummary?.failed ?? 0) === 0;
+
       // 7. Clean up extracted files
-      if (options.deleteExtractedAfterUpload !== false) {
+      if (!options.dryRun && options.deleteExtractedAfterUpload !== false && archiveUploadSucceeded) {
         await cleanupDir(extractDir);
       }
 
       // Optionally delete the source archive to free download space
-      if (options.deleteArchiveAfterUpload) {
+      if (!options.dryRun && archiveUploadSucceeded && options.deleteArchiveAfterUpload) {
         await fs.unlink(archivePath);
-      } else if (options.moveArchiveAfterUpload && !options.dryRun) {
+      } else if (!options.dryRun && archiveUploadSucceeded && options.moveArchiveAfterUpload) {
         const completedArchiveDir = options.completedArchiveDir ?? path.join(config.inputDir, 'uploaded-archives');
         await moveArchiveToCompletedDir(archivePath, completedArchiveDir);
       }
@@ -384,7 +389,8 @@ async function appendManifestJsonl(
 async function cleanupDir(dirPath: string): Promise<void> {
   try {
     await fs.rm(dirPath, { recursive: true, force: true });
-  } catch {
+  } catch (err) {
+    console.debug('[incremental] Best-effort cleanup failed', { dirPath, err });
     // best-effort cleanup
   }
 }
@@ -416,7 +422,8 @@ async function getUniqueDestinationPath(directory: string, fileName: string): Pr
   try {
     const dirEntries = await fs.readdir(directory);
     existingNames = new Set(dirEntries);
-  } catch {
+  } catch (err) {
+    console.debug('[incremental] Destination directory not readable, using base file name', { directory, err });
     // Directory doesn't exist yet — no collisions possible
     return path.join(directory, fileName);
   }
