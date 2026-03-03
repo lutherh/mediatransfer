@@ -375,28 +375,28 @@ describe('takeout/uploader', () => {
     const provider = new MockProvider();
 
     // Simulate objects in two different date directories
-    provider.objects.add('2025/12/13/Album/IMG_1.jpg');
-    provider.objects.add('2025/12/13/Album/IMG_2.jpg');
-    provider.objects.add('2026/01/05/Trip/IMG_3.jpg');
-    provider.objects.add('2026/01/05/Trip/IMG_4.jpg');
-    provider.objects.add('2026/02/20/Other/IMG_5.jpg');
+    provider.objects.add('transfers/2025/12/13/Album/IMG_1.jpg');
+    provider.objects.add('transfers/2025/12/13/Album/IMG_2.jpg');
+    provider.objects.add('transfers/2026/01/05/Trip/IMG_3.jpg');
+    provider.objects.add('transfers/2026/01/05/Trip/IMG_4.jpg');
+    provider.objects.add('transfers/2026/02/20/Other/IMG_5.jpg');
 
     const entries = [
-      { destinationKey: '2025/12/13/Album/IMG_1.jpg' },
-      { destinationKey: '2025/12/13/Album/IMG_2.jpg' },
-      { destinationKey: '2026/01/05/Trip/IMG_3.jpg' },
-      { destinationKey: '2026/01/05/Trip/IMG_4.jpg' },
-      { destinationKey: '2026/02/20/Other/IMG_5.jpg' },
+      { destinationKey: 'transfers/2025/12/13/Album/IMG_1.jpg' },
+      { destinationKey: 'transfers/2025/12/13/Album/IMG_2.jpg' },
+      { destinationKey: 'transfers/2026/01/05/Trip/IMG_3.jpg' },
+      { destinationKey: 'transfers/2026/01/05/Trip/IMG_4.jpg' },
+      { destinationKey: 'transfers/2026/02/20/Other/IMG_5.jpg' },
     ];
 
     const prefixes = collectDatePrefixes(entries);
-    expect(prefixes).toEqual(['2025/12/13/', '2026/01/05/', '2026/02/20/']);
+    expect(prefixes).toEqual(['transfers/2025/12/13/', 'transfers/2026/01/05/', 'transfers/2026/02/20/']);
 
     const index = await preloadDestinationIndex(provider, entries as ManifestEntry[]);
     expect(index.size).toBe(5);
-    expect(index.has('2025/12/13/Album/IMG_1.jpg')).toBe(true);
-    expect(index.has('2026/01/05/Trip/IMG_3.jpg')).toBe(true);
-    expect(index.has('2026/02/20/Other/IMG_5.jpg')).toBe(true);
+    expect(index.has('transfers/2025/12/13/Album/IMG_1.jpg')).toBe(true);
+    expect(index.has('transfers/2026/01/05/Trip/IMG_3.jpg')).toBe(true);
+    expect(index.has('transfers/2026/02/20/Other/IMG_5.jpg')).toBe(true);
   });
 
   it('does not retry ENOENT errors (missing source file)', async () => {
@@ -412,7 +412,7 @@ describe('takeout/uploader', () => {
         mtimeMs: Date.now(),
         capturedAt: new Date('2025-12-13T00:00:00Z').toISOString(),
         datePath: '2025/12/13',
-        destinationKey: '2025/12/13/nonexistent/IMG_dup1.jpg',
+        destinationKey: 'transfers/2025/12/13/nonexistent/IMG_dup1.jpg',
       };
 
       let retryCount = 0;

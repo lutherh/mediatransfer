@@ -49,7 +49,7 @@ describe('takeout/manifest', () => {
 
       const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
       expect(entry.datePath).toBe('2025/12/13');
-      expect(entry.destinationKey).toContain('2025/12/13/');
+      expect(entry.destinationKey).toContain('transfers/2025/12/13/');
       expect(entry.sidecarPath).toBe(`${mediaPath}.json`);
     });
   });
