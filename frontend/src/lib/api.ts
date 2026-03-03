@@ -103,6 +103,8 @@ export type TakeoutStatus = {
     attempts: number;
   }>;
   isComplete: boolean;
+  /** Number of .zip / .tgz / .tar archive files currently sitting in the input folder */
+  archivesInInput: number;
 };
 
 export type TakeoutAction =
@@ -112,7 +114,9 @@ export type TakeoutAction =
   | 'resume'
   | 'start-services'
   | 'cleanup-move'
-  | 'cleanup-delete';
+  | 'cleanup-delete'
+  | 'cleanup-force-move'
+  | 'cleanup-force-delete';
 
 export type ScanProgress = {
   phase: string;

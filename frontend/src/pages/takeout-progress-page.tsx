@@ -1,10 +1,8 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+﻿import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState, type ReactElement } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Alert } from '@/components/ui/alert';
-import { ProgressBar } from '@/components/ui/progress-bar';
-import { Stepper } from '@/components/ui/stepper';
 import {
   fetchTakeoutActionStatus,
   fetchTakeoutStatus,
@@ -13,16 +11,17 @@ import {
   type ScanProgress,
 } from '@/lib/api';
 
-// ─── Workflow step definitions ─────────────────────────────────────────────
+// ─── Page states ──────────────────────────────────────────────────────────────
 
-const WORKFLOW_STEPS = [
-  { label: 'Scan',    description: 'Index archives' },
-  { label: 'Upload',  description: 'Send to cloud'  },
-  { label: 'Verify',  description: 'Confirm files'  },
-  { label: 'Cleanup', description: 'Reclaim disk'   },
-];
+type PageState =
+  | 'running'         // a job is actively running
+  | 'error'           // last job failed
+  | 'archives-found'  // archives sitting in input/, no manifest yet
+  | 'watching'        // no archives, no manifest — waiting for user to drop files
+  | 'upload-ready'    // manifest exists, still have pending/failed uploads
+  | 'done';           // all uploaded — show verify + cleanup
 
-// ─── Page ──────────────────────────────────────────────────────────────────
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function TakeoutProgressPage() {
   const queryClient = useQueryClient();
@@ -34,10 +33,7 @@ export function TakeoutProgressPage() {
     refetchInterval: 3000,
   });
 
-  const {
-    data: actionStatus,
-    isLoading: isLoadingActionStatus,
-  } = useQuery({
+  const { data: actionStatus, isLoading: isLoadingActionStatus } = useQuery({
     queryKey: ['takeout-action-status'],
     queryFn: fetchTakeoutActionStatus,
     refetchInterval: 1500,
@@ -57,7 +53,7 @@ export function TakeoutProgressPage() {
     return (
       <div className="flex items-center gap-3 py-12 text-slate-500 text-sm">
         <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
-        Loading…
+        Loading...
       </div>
     );
   }
@@ -73,43 +69,46 @@ export function TakeoutProgressPage() {
     );
   }
 
-  // ─── Derived state ──────────────────────────────────────────────────────
-
-  const isActionRunning = Boolean(actionStatus?.running);
-  const lastOutput = actionStatus?.output ?? [];
-  const hasManifest = data.counts.total > 0;
-  const allUploaded = hasManifest && data.counts.pending === 0 && data.counts.failed === 0;
-  const hasFailed = data.counts.failed > 0;
-  const isCleanupAction = actionStatus?.action === 'cleanup-move' || actionStatus?.action === 'cleanup-delete';
-  const cleanupRunning = isActionRunning && isCleanupAction;
-  const cleanupSucceeded = !isActionRunning && isCleanupAction && actionStatus?.success === true;
-  const mutationErrorMessage = actionMutation.error instanceof Error
+  // Derived state
+  const isActionRunning  = Boolean(actionStatus?.running);
+  const lastOutput       = actionStatus?.output ?? [];
+  const hasManifest      = data.counts.total > 0;
+  const allUploaded      = hasManifest && data.counts.pending === 0 && data.counts.failed === 0;
+  const hasFailed        = data.counts.failed > 0;
+  const lastActionFailed = !isActionRunning && actionStatus?.success === false;
+  const archivesInInput  = data.archivesInInput ?? 0;
+  const mutationError    = actionMutation.error instanceof Error
     ? actionMutation.error.message
     : 'Failed to start action.';
-  const actionFailureReason = getActionFailureReason(actionStatus?.output ?? []);
-  const lastScanFailed = !isActionRunning && actionStatus?.action === 'scan' && actionStatus?.success === false;
-  const staleStats = lastScanFailed && hasManifest;
-  const lastActionFailed = !isActionRunning && actionStatus?.success === false;
+  const failureReason    = getActionFailureReason(lastOutput);
 
-  // Stepper: 0=Scan, 1=Upload, 2=Verify, 3=Cleanup
-  const currentStep = !hasManifest
-    ? 0
-    : !allUploaded
-      ? 1
-      : (cleanupRunning || cleanupSucceeded)
-        ? 3
-        : 2;
+  const busy = isActionRunning || actionMutation.isPending;
+  const run  = (action: TakeoutAction) => actionMutation.mutate(action);
 
-  const run = (action: TakeoutAction) => actionMutation.mutate(action);
+  // Page state machine
+  let pageState: PageState;
+  if (isActionRunning) {
+    pageState = 'running';
+  } else if (lastActionFailed) {
+    pageState = 'error';
+  } else if (archivesInInput > 0 && !hasManifest) {
+    pageState = 'archives-found';
+  } else if (!hasManifest) {
+    pageState = 'watching';
+  } else if (!allUploaded) {
+    pageState = 'upload-ready';
+  } else {
+    pageState = 'done';
+  }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
 
-      {/* ── Header ───────────────────────────────────────────────────────── */}
+      {/* Header */}
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-xl sm:text-2xl font-semibold text-slate-900">Google Takeout</h1>
-          <p className="text-sm text-slate-500 mt-0.5">Migrate your full Google Photos library to Scaleway</p>
+          <p className="text-sm text-slate-500 mt-0.5">Migrate your Google Photos library to Scaleway</p>
         </div>
         {!isLoadingActionStatus && (
           <StatusBadge
@@ -120,157 +119,249 @@ export function TakeoutProgressPage() {
         )}
       </div>
 
-      {/* ── Overall progress ─────────────────────────────────────────────── */}
-      <Card className={staleStats ? 'opacity-60 space-y-4' : 'space-y-4'}>
-        <ProgressBar value={data.progress} label="Uploaded to cloud" />
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
+      {/* Mutation error */}
+      {actionMutation.isError && (
+        <Alert variant="error" className="text-xs">{mutationError}</Alert>
+      )}
+
+      {/* Watching: no archives, no manifest */}
+      {pageState === 'watching' && (
+        <Card className="flex items-start gap-4 py-5">
+          <span className="text-3xl mt-0.5 shrink-0" aria-hidden>👁</span>
+          <div className="space-y-1 min-w-0">
+            <p className="font-semibold text-slate-900">Watching for archives</p>
+            <p className="text-sm text-slate-500">
+              Drop <code className="rounded bg-slate-100 px-1">.zip</code> or{' '}
+              <code className="rounded bg-slate-100 px-1">.tgz</code> Takeout archives into the
+              input folder. This page will detect them automatically every few seconds.
+            </p>
+            <p className="text-xs font-mono text-slate-400 pt-1 break-all">{data.paths.inputDir}</p>
+          </div>
+        </Card>
+      )}
+
+      {/* Archives found: prompt to scan */}
+      {pageState === 'archives-found' && (
+        <Card className="border-blue-200 bg-blue-50 space-y-3">
+          <div className="flex items-start gap-4">
+            <span className="text-3xl mt-0.5 shrink-0" aria-hidden>📦</span>
+            <div className="space-y-1 min-w-0">
+              <p className="font-semibold text-slate-900">
+                {archivesInInput} archive{archivesInInput !== 1 ? 's' : ''} detected
+              </p>
+              <p className="text-sm text-slate-600">
+                New files are ready in the input folder. Scan them to build the
+                manifest and prepare for upload.
+              </p>
+            </div>
+          </div>
+          <Button type="button" disabled={busy} onClick={() => run('scan')}>
+            Scan now
+          </Button>
+        </Card>
+      )}
+
+      {/* Running: show progress */}
+      {pageState === 'running' && (
+        <Card className="space-y-3">
+          <div className="flex items-center gap-2.5">
+            <span className="h-3 w-3 rounded-full bg-blue-500 animate-pulse shrink-0" />
+            <p className="font-semibold text-slate-900">
+              {describeAction(actionStatus?.action)} running...
+            </p>
+          </div>
+          {actionStatus?.action === 'scan' && actionStatus.scanProgress
+            ? <ScanProgressBar progress={actionStatus.scanProgress} startedAt={actionStatus.startedAt} />
+            : <p className="text-xs text-slate-500">Job is running in the background. Stats refresh automatically.</p>
+          }
+          {(actionStatus?.action === 'upload' || actionStatus?.action === 'resume') && hasManifest && (
+            <div className="space-y-1">
+              <div className="h-2 w-full rounded-full bg-slate-200 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-blue-600 transition-all duration-700 ease-out"
+                  style={{ width: `${Math.round(data.progress * 100)}%` }}
+                />
+              </div>
+              <p className="text-xs text-slate-500 tabular-nums">
+                {data.counts.uploaded.toLocaleString()} / {data.counts.total.toLocaleString()} files
+                {' '}· {Math.round(data.progress * 100)}%
+              </p>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* Error: last action failed */}
+      {pageState === 'error' && (
+        <Alert variant="error" className="space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-base" aria-hidden>✗</span>
+            <p className="font-semibold text-sm">{describeAction(actionStatus?.action)} failed</p>
+          </div>
+          {failureReason && (
+            <pre className="text-xs font-mono whitespace-pre-wrap break-all bg-red-50 rounded p-2 border border-red-200">
+              {failureReason}
+            </pre>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {actionStatus?.action && !isForceCleanupAction(actionStatus.action) && (
+              <Button type="button" disabled={busy} onClick={() => run(actionStatus.action!)}>
+                Retry {describeAction(actionStatus.action)}
+              </Button>
+            )}
+            {actionStatus?.action === 'scan' && hasManifest && (
+              <Button
+                className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                type="button"
+                disabled={busy}
+                onClick={() => run('upload')}
+              >
+                Continue with upload anyway
+              </Button>
+            )}
+          </div>
+
+          {/* When a cleanup failed due to missing state records, offer the --force variant */}
+          {isCleanupAction(actionStatus?.action) && isMissingStateError(lastOutput) && (
+            <div className="rounded-lg border border-orange-300 bg-orange-50 p-3 space-y-2 text-xs">
+              <p className="font-semibold text-orange-900">Missing upload records detected</p>
+              <p className="text-orange-800">
+                Some manifest entries have no upload record — this usually means the manifest was
+                re-scanned after upload, causing key mismatches. If your archives are confirmed
+                complete in <code className="rounded bg-orange-100 px-1">archive-state.json</code>,
+                you can force cleanup. Only archives marked <em>completed</em> will be touched.
+              </p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Button
+                  className="border border-orange-400 bg-white text-orange-900 hover:bg-orange-100 disabled:opacity-40 text-xs py-1"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => run('cleanup-force-move')}
+                >
+                  Force move archives
+                </Button>
+                <Button
+                  className="border border-red-400 bg-white text-red-800 hover:bg-red-50 disabled:opacity-40 text-xs py-1"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => run('cleanup-force-delete')}
+                >
+                  Force delete archives
+                </Button>
+              </div>
+            </div>
+          )}
+        </Alert>
+      )}
+
+      {/* Upload ready: manifest exists, pending files */}
+      {pageState === 'upload-ready' && (
+        <Card className="space-y-3">
+          <div className="flex items-start gap-4">
+            <span className="text-3xl mt-0.5 shrink-0" aria-hidden>⬆️</span>
+            <div className="space-y-1 min-w-0">
+              <p className="font-semibold text-slate-900">Ready to upload</p>
+              <p className="text-sm text-slate-500">
+                {data.counts.pending.toLocaleString()} file{data.counts.pending !== 1 ? 's' : ''} pending
+                {hasFailed ? ` · ${data.counts.failed.toLocaleString()} previously failed` : ''}.
+              </p>
+              {archivesInInput > 0 && (
+                <p className="text-xs text-slate-400">
+                  {archivesInInput} archive{archivesInInput !== 1 ? 's' : ''} still in input
+                  folder — re-scan after adding more archives.
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" disabled={busy} onClick={() => run('upload')}>
+              Start upload
+            </Button>
+            {hasFailed && (
+              <Button
+                className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                type="button"
+                disabled={busy}
+                onClick={() => run('resume')}
+              >
+                Resume (skip failed)
+              </Button>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {/* Done: all uploaded — verify + cleanup */}
+      {pageState === 'done' && (
+        <div className="space-y-3">
+          <Card className="border-green-200 bg-green-50 space-y-3">
+            <div className="flex items-start gap-4">
+              <span className="text-3xl mt-0.5 shrink-0" aria-hidden>✅</span>
+              <div className="space-y-1 min-w-0">
+                <p className="font-semibold text-slate-900">All files uploaded</p>
+                <p className="text-sm text-slate-600">
+                  {data.counts.uploaded.toLocaleString()} uploaded
+                  {data.counts.skipped > 0 ? ` · ${data.counts.skipped.toLocaleString()} skipped` : ''}.
+                </p>
+              </div>
+            </div>
+            <Button
+              className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+              type="button"
+              disabled={busy}
+              onClick={() => run('verify')}
+            >
+              Verify in cloud
+            </Button>
+          </Card>
+
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
+            <div className="flex items-start gap-2">
+              <span className="text-amber-500 text-base leading-none mt-0.5" aria-hidden>⚠</span>
+              <div>
+                <p className="text-sm font-semibold text-amber-900">Reclaim disk space</p>
+                <p className="text-xs text-amber-700 mt-0.5">
+                  Only archives confirmed as completed are touched. Run after verifying.
+                </p>
+              </div>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <CleanupOption
+                action="cleanup-move"
+                label="Move archives (recommended)"
+                description="Deletes extracted work files · moves .zip / .tgz to uploaded-archives/"
+                variant="safe"
+                disabled={busy}
+                onRun={run}
+              />
+              <CleanupOption
+                action="cleanup-delete"
+                label="Delete archives"
+                description="Deletes extracted work files · permanently removes .zip / .tgz from disk"
+                variant="destructive"
+                disabled={busy}
+                onRun={run}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stats row */}
+      {hasManifest && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 px-1">
           <StatChip label="Total"    value={data.counts.total}    />
           <StatChip label="Uploaded" value={data.counts.uploaded} color="green" />
           <StatChip label="Skipped"  value={data.counts.skipped}  />
           <StatChip label="Failed"   value={data.counts.failed}   color={hasFailed ? 'red' : 'slate'} />
         </div>
-        <p className="text-[11px] text-slate-400">Updated {formatDateTime(data.stateUpdatedAt)}</p>
-      </Card>
-
-      {staleStats && (
-        <Alert variant="warning">
-          ⚠ Stats above are from a previous scan — the last scan failed.
-          Fix the error and re-run Scan to refresh.
-        </Alert>
       )}
 
-      {/* ── Workflow stepper ─────────────────────────────────────────────── */}
-      <Stepper steps={WORKFLOW_STEPS} currentStep={currentStep} />
-
-      {/* ── Action panel ─────────────────────────────────────────────────── */}
-      <Card className="space-y-4">
-        {/* Contextual prompt */}
-        <div>
-          <p className="text-sm font-medium text-slate-900">
-            {currentStep === 0 && 'Next: scan your archive folder'}
-            {currentStep === 1 && 'Next: upload files to Scaleway'}
-            {currentStep === 2 && 'Next: verify files, then clean up'}
-            {currentStep === 3 && 'Cleanup in progress or completed'}
-          </p>
-          <p className="text-xs text-slate-500 mt-0.5">
-            {currentStep === 0 && <>Drop <span className="font-mono">.zip / .tar / .tgz</span> files into <span className="font-mono break-all">{data.paths.inputDir}</span>, then run Scan.</>}
-            {currentStep === 1 && <>{data.counts.pending.toLocaleString()} file{data.counts.pending !== 1 ? 's' : ''} pending upload{hasFailed ? ` · ${data.counts.failed} failed` : ''}.</>}
-            {currentStep === 2 && 'All files are uploaded. Verify confirms they landed in the cloud; Cleanup reclaims local disk space.'}
-            {currentStep === 3 && (cleanupRunning
-              ? 'Cleanup is running. Local extracted files and archives are being processed.'
-              : 'Cleanup completed. Local extracted files were reclaimed according to your selected mode.')}
-          </p>
-        </div>
-
-        {/* Primary action for current step */}
-        <div className="flex flex-wrap gap-2">
-          {currentStep === 0 && (
-            <PrimaryButton action="scan" isRunning={isActionRunning} isPending={actionMutation.isPending} onRun={run}>
-              Scan Archives
-            </PrimaryButton>
-          )}
-          {currentStep === 1 && (
-            <>
-              <PrimaryButton action="upload" isRunning={isActionRunning} isPending={actionMutation.isPending} onRun={run}>
-                Upload
-              </PrimaryButton>
-              <SecondaryButton action="resume" isRunning={isActionRunning} isPending={actionMutation.isPending} onRun={run}>
-                Resume
-              </SecondaryButton>
-            </>
-          )}
-          {currentStep === 2 && (
-            <PrimaryButton action="verify" isRunning={isActionRunning} isPending={actionMutation.isPending} onRun={run}>
-              Verify
-            </PrimaryButton>
-          )}
-          {currentStep === 3 && (
-            <SecondaryButton action="verify" isRunning={isActionRunning} isPending={actionMutation.isPending} onRun={run}>
-              Re-run Verify
-            </SecondaryButton>
-          )}
-        </div>
-
-        {/* Scan progress */}
-        {isActionRunning && actionStatus?.action === 'scan' && actionStatus?.scanProgress ? (
-          <ScanProgressBar progress={actionStatus.scanProgress} startedAt={actionStatus.startedAt} />
-        ) : null}
-
-        {/* Errors */}
-        {actionMutation.isError ? (
-          <Alert variant="error" className="text-xs">{mutationErrorMessage}</Alert>
-        ) : null}
-        {lastActionFailed && actionFailureReason ? (
-          <Alert variant="error" className="text-xs font-mono whitespace-pre-wrap break-all">
-            {actionFailureReason}
-          </Alert>
-        ) : null}
-
-        {/* All other actions (secondary) */}
-        <details>
-          <summary className="cursor-pointer select-none text-xs text-slate-400 hover:text-slate-600 pt-1">
-            All actions
-          </summary>
-          <div className="flex flex-wrap gap-2 mt-3">
-            <SecondaryButton action="start-services" isRunning={isActionRunning} isPending={actionMutation.isPending} onRun={run}>
-              Start Services
-            </SecondaryButton>
-            <SecondaryButton action="scan" isRunning={isActionRunning} isPending={actionMutation.isPending} onRun={run}>
-              Scan
-            </SecondaryButton>
-            <SecondaryButton action="upload" isRunning={isActionRunning} isPending={actionMutation.isPending} disabled={!hasManifest} onRun={run}>
-              Upload
-            </SecondaryButton>
-            <SecondaryButton action="verify" isRunning={isActionRunning} isPending={actionMutation.isPending} disabled={!hasManifest} onRun={run}>
-              Verify
-            </SecondaryButton>
-            <SecondaryButton action="resume" isRunning={isActionRunning} isPending={actionMutation.isPending} disabled={!hasManifest} onRun={run}>
-              Resume
-            </SecondaryButton>
-          </div>
-        </details>
-      </Card>
-
-      {/* ── Cleanup ──────────────────────────────────────────────────────── */}
-      <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
-        <div className="flex items-start gap-2">
-          <span className="text-amber-500 text-base leading-none mt-0.5" aria-hidden>⚠</span>
-          <div>
-            <p className="text-sm font-semibold text-amber-900">Reclaim disk space</p>
-            <p className="text-xs text-amber-700 mt-0.5">
-              Only files confirmed uploaded or skipped are removed — failed items are never touched.
-              Run after a successful Upload + Verify.
-            </p>
-          </div>
-        </div>
-        <div className="grid sm:grid-cols-2 gap-3">
-          <CleanupOption
-            action="cleanup-move"
-            label="Move archives (recommended)"
-            description="Deletes extracted work files · moves .zip / .tgz to uploaded-archives/"
-            variant="safe"
-            disabled={!hasManifest || isActionRunning || actionMutation.isPending}
-            onRun={run}
-          />
-          <CleanupOption
-            action="cleanup-delete"
-            label="Delete archives"
-            description="Deletes extracted work files · permanently removes .zip / .tgz from disk"
-            variant="destructive"
-            disabled={!hasManifest || isActionRunning || actionMutation.isPending}
-            onRun={run}
-          />
-        </div>
-        {!hasManifest && (
-          <p className="text-xs text-amber-700">Run <strong>Scan</strong> first so cleanup can verify uploaded items.</p>
-        )}
-      </div>
-
-      {/* ── Failures ─────────────────────────────────────────────────────── */}
+      {/* Failed upload list */}
       {hasFailed && (
         <div className="space-y-2">
           <h2 className="text-sm font-semibold text-red-700">
-            Failed uploads ({data.counts.failed})
+            Failed uploads ({data.counts.failed.toLocaleString()})
           </h2>
           {data.recentFailures.map((failure) => (
             <Alert key={`${failure.key}-${failure.updatedAt}`} variant="error" className="space-y-1">
@@ -284,7 +375,7 @@ export function TakeoutProgressPage() {
         </div>
       )}
 
-      {/* ── Technical details (collapsed) ────────────────────────────────── */}
+      {/* Technical details */}
       <details
         open={detailsOpen}
         onToggle={(e) => setDetailsOpen((e.target as HTMLDetailsElement).open)}
@@ -295,10 +386,10 @@ export function TakeoutProgressPage() {
         <div className="mt-3 space-y-3">
           <Card className="space-y-2 text-xs">
             <p className="font-medium text-slate-700">File paths</p>
-            <PathRow label="Input" value={data.paths.inputDir} />
-            <PathRow label="Work"  value={data.paths.workDir} />
+            <PathRow label="Input"    value={data.paths.inputDir}     />
+            <PathRow label="Work"     value={data.paths.workDir}      />
             <PathRow label="Manifest" value={data.paths.manifestPath} />
-            <PathRow label="State" value={data.paths.statePath} />
+            <PathRow label="State"    value={data.paths.statePath}    />
           </Card>
           <Card className="space-y-2">
             <p className="text-xs font-medium text-slate-700">Command output</p>
@@ -316,7 +407,7 @@ export function TakeoutProgressPage() {
   );
 }
 
-// ─── Status badge ──────────────────────────────────────────────────────────
+// ─── Status badge ─────────────────────────────────────────────────────────────
 
 function StatusBadge({
   running,
@@ -331,7 +422,7 @@ function StatusBadge({
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-800 shrink-0">
         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
-        {mapActionLabel(action)}…
+        {mapActionLabel(action)}...
       </span>
     );
   }
@@ -356,7 +447,7 @@ function StatusBadge({
   );
 }
 
-// ─── Stat chip ─────────────────────────────────────────────────────────────
+// ─── Stat chip ────────────────────────────────────────────────────────────────
 
 function StatChip({
   label,
@@ -382,62 +473,7 @@ function StatChip({
   );
 }
 
-// ─── Action buttons ────────────────────────────────────────────────────────
-
-function PrimaryButton({
-  action,
-  isRunning,
-  isPending,
-  disabled,
-  onRun,
-  children,
-}: {
-  action: TakeoutAction;
-  isRunning: boolean;
-  isPending: boolean;
-  disabled?: boolean;
-  onRun: (action: TakeoutAction) => void;
-  children: string;
-}): ReactElement {
-  return (
-    <Button
-      type="button"
-      disabled={disabled || isRunning || isPending}
-      onClick={() => onRun(action)}
-    >
-      {children}
-    </Button>
-  );
-}
-
-function SecondaryButton({
-  action,
-  isRunning,
-  isPending,
-  disabled,
-  onRun,
-  children,
-}: {
-  action: TakeoutAction;
-  isRunning: boolean;
-  isPending: boolean;
-  disabled?: boolean;
-  onRun: (action: TakeoutAction) => void;
-  children: string;
-}): ReactElement {
-  return (
-    <Button
-      className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 active:bg-slate-100 disabled:opacity-40"
-      type="button"
-      disabled={disabled || isRunning || isPending}
-      onClick={() => onRun(action)}
-    >
-      {children}
-    </Button>
-  );
-}
-
-// ─── Cleanup option card ───────────────────────────────────────────────────
+// ─── Cleanup option card ──────────────────────────────────────────────────────
 
 function CleanupOption({
   action,
@@ -471,7 +507,7 @@ function CleanupOption({
   );
 }
 
-// ─── Path row ─────────────────────────────────────────────────────────────
+// ─── Path row ─────────────────────────────────────────────────────────────────
 
 function PathRow({ label, value }: { label: string; value: string }): ReactElement {
   return (
@@ -482,14 +518,14 @@ function PathRow({ label, value }: { label: string; value: string }): ReactEleme
   );
 }
 
-// ─── Scan progress bar ────────────────────────────────────────────────────
+// ─── Scan progress bar ────────────────────────────────────────────────────────
 
 const PHASE_LABELS: Record<string, string> = {
-  discover: 'Discovering archives',
-  extract:  'Extracting archives',
+  discover:  'Discovering archives',
+  extract:   'Extracting archives',
   normalize: 'Normalizing folders',
-  manifest: 'Building manifest',
-  done:     'Complete',
+  manifest:  'Building manifest',
+  done:      'Complete',
 };
 
 function formatEta(seconds: number): string {
@@ -510,48 +546,40 @@ function ScanProgressBar({
   startedAt?: string;
 }): ReactElement {
   const prevRef = useRef<{ percent: number; timestamp: number } | null>(null);
-  const etaRef = useRef<number | null>(null);
+  const etaRef  = useRef<number | null>(null);
 
-  const percent = progress.percent;
+  const percent    = progress.percent;
   const phaseLabel = PHASE_LABELS[progress.phase] ?? progress.phase;
 
-  // Compute ETA based on elapsed time and progress
   if (startedAt && percent > 0 && percent < 100) {
-    const elapsed = (Date.now() - new Date(startedAt).getTime()) / 1000;
+    const elapsed      = (Date.now() - new Date(startedAt).getTime()) / 1000;
     const etaFromStart = elapsed * ((100 - percent) / percent);
 
-    // Also compute rate-based ETA from last update for smoothing
     const prev = prevRef.current;
     let etaFromRate: number | null = null;
     if (prev && percent > prev.percent) {
-      const dt = (Date.now() - prev.timestamp) / 1000;
-      const dp = percent - prev.percent;
-      const rate = dp / dt; // percent per second
-      if (rate > 0) {
-        etaFromRate = (100 - percent) / rate;
-      }
+      const dt   = (Date.now() - prev.timestamp) / 1000;
+      const dp   = percent - prev.percent;
+      const rate = dp / dt;
+      if (rate > 0) etaFromRate = (100 - percent) / rate;
     }
 
-    // Blend: prefer rate-based when available, otherwise use elapsed-based
-    const eta = etaFromRate != null
+    etaRef.current = etaFromRate != null
       ? etaFromRate * 0.6 + etaFromStart * 0.4
       : etaFromStart;
-
-    etaRef.current = eta;
   } else if (percent >= 100) {
     etaRef.current = 0;
   }
 
-  // Track last known percent for rate calculation
   if (!prevRef.current || prevRef.current.percent !== percent) {
     prevRef.current = { percent, timestamp: Date.now() };
   }
 
   const detailText = progress.detail ?? '';
-  const etaText = etaRef.current != null && etaRef.current > 0 ? formatEta(etaRef.current) : '';
+  const etaText    = etaRef.current != null && etaRef.current > 0 ? formatEta(etaRef.current) : '';
 
   return (
-    <div className="space-y-1.5 mt-1">
+    <div className="space-y-1.5">
       <div className="flex items-center justify-between text-xs">
         <span className="text-slate-700 font-medium">
           {phaseLabel}{detailText ? `: ${detailText}` : ''}
@@ -569,19 +597,47 @@ function ScanProgressBar({
       {progress.total > 0 && progress.phase !== 'done' ? (
         <p className="text-[11px] text-slate-400 tabular-nums">
           {progress.current} / {progress.total}
-          {progress.phase === 'extract' ? ' archives' : progress.phase === 'manifest' ? ' files' : ''}
+          {progress.phase === 'extract'  ? ' archives' : ''}
+          {progress.phase === 'manifest' ? ' files'    : ''}
         </p>
       ) : null}
     </div>
   );
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function describeAction(action?: TakeoutAction): string {
+  if (!action) return 'Action';
+  return mapActionLabel(action);
+}
+
+function isCleanupAction(action?: TakeoutAction): boolean {
+  return action === 'cleanup-move' || action === 'cleanup-delete'
+    || action === 'cleanup-force-move' || action === 'cleanup-force-delete';
+}
+
+function isForceCleanupAction(action: TakeoutAction): boolean {
+  return action === 'cleanup-force-move' || action === 'cleanup-force-delete';
+}
+
+function isMissingStateError(output: string[]): boolean {
+  return output.some((line) => /manifest entries have no upload record/i.test(line));
+}
 
 function mapActionLabel(action: TakeoutAction): string {
-  if (action === 'cleanup-move')   return 'cleanup (move archives)';
-  if (action === 'cleanup-delete') return 'cleanup (delete archives)';
-  return action;
+  const labels: Record<TakeoutAction, string> = {
+    scan:                  'Scan',
+    upload:                'Upload',
+    verify:                'Verify',
+    resume:                'Resume',
+    'start-services':      'Start services',
+    'cleanup-move':        'Cleanup (move archives)',
+    'cleanup-delete':      'Cleanup (delete archives)',
+    'cleanup-force-move':  'Force cleanup (move archives)',
+    'cleanup-force-delete':'Force cleanup (delete archives)',
+  };
+  return labels[action] ?? action;
 }
 
 function formatDateTime(value: string): string {
@@ -591,50 +647,31 @@ function formatDateTime(value: string): string {
 }
 
 function getActionFailureReason(output: string[]): string | undefined {
-  if (!output.length) {
-    return undefined;
-  }
+  if (!output.length) return undefined;
 
-  // Look for the "❌ ... failed:" marker that starts a multi-line error block
   const failMarkerIndex = output.findIndex((line) => /❌.*failed:/i.test(line));
   if (failMarkerIndex >= 0) {
-    // Collect lines from the marker until the next blank line or "Action finished"
     const errorLines: string[] = [];
     for (let i = failMarkerIndex; i < output.length; i++) {
       const line = output[i].trim();
       if (/^Action finished with code/i.test(line)) break;
       if (line) errorLines.push(line);
     }
-    if (errorLines.length > 0) {
-      return errorLines.join('\n');
-    }
+    if (errorLines.length > 0) return errorLines.join('\n');
   }
 
-  // Fallback: find a single line with an error pattern
-  const patterns = [
-    /\berror\b/i,
-    /\bfailed\b/i,
-    /\bnot found\b/i,
-    /\bECONNREFUSED\b/i,
-    /\bEACCES\b/i,
-    /\bENOENT\b/i,
-    /\bCannot\b/i,
-  ];
-
+  const patterns = [/\berror\b/i, /\bfailed\b/i, /\bnot found\b/i, /\bECONNREFUSED\b/i, /\bEACCES\b/i, /\bENOENT\b/i, /\bCannot\b/i];
   const reversed = [...output].reverse();
+
   for (const line of reversed) {
     const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (/^\$\s/.test(trimmed)) continue;
-    if (/^Action finished with code/i.test(trimmed)) continue;
-    if (patterns.some((pattern) => pattern.test(trimmed))) return trimmed;
+    if (!trimmed || /^\$\s/.test(trimmed) || /^Action finished with code/i.test(trimmed)) continue;
+    if (patterns.some((p) => p.test(trimmed))) return trimmed;
   }
 
   for (const line of reversed) {
     const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (/^\$\s/.test(trimmed)) continue;
-    if (/^Action finished with code/i.test(trimmed)) continue;
+    if (!trimmed || /^\$\s/.test(trimmed) || /^Action finished with code/i.test(trimmed)) continue;
     return trimmed;
   }
 

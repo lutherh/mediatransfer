@@ -58,7 +58,7 @@ export function createEmptyArchiveState(): ArchiveState {
 
 export async function loadArchiveState(statePath: string): Promise<ArchiveState> {
   try {
-    const raw = await fs.readFile(statePath, 'utf8');
+    const raw = (await fs.readFile(statePath, 'utf8')).replace(/^\uFEFF/, '');
     const parsed = JSON.parse(raw) as ArchiveState;
     if (parsed.version !== 1 || typeof parsed.archives !== 'object') {
       return createEmptyArchiveState();

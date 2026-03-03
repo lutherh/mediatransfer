@@ -452,7 +452,7 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
 
 export async function loadUploadState(statePath: string): Promise<UploadState> {
   try {
-    const raw = await fs.readFile(statePath, 'utf8');
+    const raw = (await fs.readFile(statePath, 'utf8')).replace(/^\uFEFF/, '');
     const parsed = JSON.parse(raw) as UploadState;
     if (parsed.version !== 1 || typeof parsed.items !== 'object' || !parsed.items) {
       return createEmptyState();
