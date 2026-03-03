@@ -539,3 +539,66 @@ export async function fetchUploadStats(): Promise<UploadStats> {
   return response.json();
 }
 
+// ── Catalog ────────────────────────────────────────────────────────────────
+
+export type CatalogItem = {
+  key: string;
+  encodedKey: string;
+  size: number;
+  lastModified: string;
+  capturedAt: string;
+  mediaType: 'image' | 'video' | 'other';
+  sectionDate: string;
+};
+
+export type CatalogPage = {
+  items: CatalogItem[];
+  nextToken?: string;
+};
+
+export type CatalogStats = {
+  totalFiles: number;
+  totalBytes: number;
+  imageCount: number;
+  videoCount: number;
+  oldestDate: string | null;
+  newestDate: string | null;
+};
+
+/** Returns the URL for streaming a catalog media object. */
+export function catalogMediaUrl(encodedKey: string, apiToken?: string): string {
+  const url = new URL(`/catalog/media/${encodedKey}`, API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  return url.toString();
+}
+
+export async function fetchCatalogStats(apiToken?: string): Promise<CatalogStats> {
+  const url = new URL('/catalog/api/stats', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch catalog stats');
+  }
+  return response.json();
+}
+
+export async function fetchCatalogItems(opts: {
+  token?: string;
+  prefix?: string;
+  max?: number;
+  apiToken?: string;
+}): Promise<CatalogPage> {
+  const url = new URL('/catalog/api/items', API_BASE_URL);
+  if (opts.token) url.searchParams.set('token', opts.token);
+  if (opts.prefix) url.searchParams.set('prefix', opts.prefix);
+  if (opts.max !== undefined) url.searchParams.set('max', String(opts.max));
+  if (opts.apiToken) url.searchParams.set('apiToken', opts.apiToken);
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch catalog items');
+  }
+  return response.json();
+}
+

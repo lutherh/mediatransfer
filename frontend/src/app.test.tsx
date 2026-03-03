@@ -102,6 +102,16 @@ vi.mock('@/lib/api', () => ({
   pollPickerSession: vi.fn(),
   fetchPickedItems: vi.fn(),
   deletePickerSession: vi.fn(),
+  fetchCatalogStats: vi.fn(async () => ({
+    totalFiles: 42,
+    totalBytes: 1_073_741_824,
+    imageCount: 40,
+    videoCount: 2,
+    oldestDate: '2022-01-01',
+    newestDate: '2026-02-31',
+  })),
+  fetchCatalogItems: vi.fn(async () => ({ items: [], nextToken: undefined })),
+  catalogMediaUrl: vi.fn((encodedKey: string) => `/catalog/media/${encodedKey}`),
 }));
 
 function renderRoute(path: string) {
@@ -174,7 +184,7 @@ describe('frontend pages', () => {
   it('renders catalog page', async () => {
     renderRoute('/catalog');
     expect(await screen.findByRole('heading', { name: 'Catalog' })).toBeInTheDocument();
-    expect(await screen.findByTitle('Scaleway Catalog Browser')).toBeInTheDocument();
+    expect(await screen.findByText(/browse media stored in scaleway/i)).toBeInTheDocument();
   });
 
   it('shows navigation links', async () => {
