@@ -1,12 +1,14 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   catalogMediaUrl,
   deleteCatalogItems,
   encodeS3Key,
-  fetchDuplicates,
+  scanDuplicatesStream,
   type DuplicateGroup,
+  type DuplicatesResult,
+  type DupScanProgress,
 } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 
@@ -247,18 +249,59 @@ export function CatalogDedupPage() {
 
   const [filter, setFilter] = useState('');
   const [sortOrder, setSortOrder] = useState<SortOrder>('wasted-desc');
-  const [scanned, setScanned] = useState(false);
   const [confirming, setConfirming] = useState(false);
+
+  // Scan state
+  const [scanStatus, setScanStatus] = useState<'idle' | 'scanning' | 'done' | 'error'>('idle');
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [data, setData] = useState<DuplicatesResult | null>(null);
+  const [progress, setProgress] = useState<{ listed: number; totalFiles: number | null }>({ listed: 0, totalFiles: null });
+  const abortRef = useRef<AbortController | null>(null);
 
   // Local list of deleted raw keys (to hide groups optimistically)
   const [deletedKeys, setDeletedKeys] = useState<Set<string>>(() => new Set());
 
-  const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['catalog-duplicates', apiToken],
-    queryFn: () => fetchDuplicates(apiToken),
-    enabled: scanned,
-    staleTime: 0,
-  });
+  const startScan = useCallback(() => {
+    // Abort any in-flight scan
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setScanStatus('scanning');
+    setScanError(null);
+    setData(null);
+    setDeletedKeys(new Set());
+    setFilter('');
+    setProgress({ listed: 0, totalFiles: null });
+
+    scanDuplicatesStream(
+      (event: DupScanProgress) => {
+        if (event.phase === 'started' || event.phase === 'listing') {
+          setProgress({ listed: 'listed' in event ? event.listed : 0, totalFiles: event.totalFiles });
+        }
+      },
+      apiToken,
+      controller.signal,
+    )
+      .then((result) => {
+        setData(result);
+        setScanStatus('done');
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        setScanError(err instanceof Error ? err.message : 'Scan failed');
+        setScanStatus('error');
+      });
+  }, [apiToken]);
+
+  // Abort scan on unmount
+  useEffect(() => {
+    return () => abortRef.current?.abort();
+  }, []);
+
+  const isLoading = scanStatus === 'scanning';
+  const isError = scanStatus === 'error';
+  const scanned = scanStatus !== 'idle';
 
   const handleDeleted = useCallback((keys: string[]) => {
     setDeletedKeys((prev) => {
@@ -342,12 +385,7 @@ export function CatalogDedupPage() {
 
         <button
           type="button"
-          onClick={() => {
-            setScanned(true);
-            setDeletedKeys(new Set());
-            setFilter('');
-            if (scanned) void refetch();
-          }}
+          onClick={startScan}
           disabled={isLoading}
           className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
         >
@@ -365,9 +403,12 @@ export function CatalogDedupPage() {
               The scanner compares files by size and ETag to find exact duplicates.
               It selects the best-dated copy to keep and marks the rest for deletion.
             </p>
+            <p className="mt-2 text-xs text-slate-400">
+              The scan runs on the server — you can keep browsing other pages while it completes.
+            </p>
             <button
               type="button"
-              onClick={() => setScanned(true)}
+              onClick={startScan}
               className="mt-4 rounded-lg bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-700"
             >
               Start scan
@@ -376,14 +417,47 @@ export function CatalogDedupPage() {
         </Card>
       )}
 
-      {/* Loading */}
+      {/* Loading with progress */}
       {isLoading && (
         <Card>
-          <div className="flex flex-col items-center gap-2 py-8">
+          <div className="flex flex-col items-center gap-3 py-8">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent" />
-            <p className="text-sm text-slate-600">Scanning all objects…</p>
-            <p className="text-xs text-slate-400">This may take a moment for large buckets.</p>
+            <p className="text-sm font-medium text-slate-700">Scanning all objects…</p>
+
+            {/* Progress bar */}
+            <div className="w-full max-w-md px-4">
+              <div className="h-3 w-full overflow-hidden rounded-full bg-slate-200">
+                <div
+                  className="h-full rounded-full bg-blue-600 transition-all duration-300 ease-out"
+                  style={{
+                    width: progress.totalFiles && progress.totalFiles > 0
+                      ? `${Math.min(100, (progress.listed / progress.totalFiles) * 100)}%`
+                      : '100%',
+                    ...(!(progress.totalFiles && progress.totalFiles > 0) && {
+                      animation: 'indeterminate 1.5s ease-in-out infinite',
+                    }),
+                  }}
+                />
+              </div>
+              <p className="mt-1.5 text-center text-xs text-slate-500">
+                {progress.listed.toLocaleString()} objects scanned
+                {progress.totalFiles ? (
+                  <> of ~{progress.totalFiles.toLocaleString()} ({Math.round((progress.listed / progress.totalFiles) * 100)}%)</>
+                ) : null}
+              </p>
+            </div>
+
+            <p className="text-xs text-slate-400">
+              This runs server-side — you can navigate away and come back.
+            </p>
           </div>
+          <style>{`
+            @keyframes indeterminate {
+              0% { width: 30%; margin-left: 0%; }
+              50% { width: 50%; margin-left: 25%; }
+              100% { width: 30%; margin-left: 70%; }
+            }
+          `}</style>
         </Card>
       )}
 
@@ -391,8 +465,8 @@ export function CatalogDedupPage() {
       {isError && (
         <Card>
           <p className="text-sm text-red-600">
-            {error instanceof Error ? error.message : 'Scan failed'} —{' '}
-            <button type="button" className="underline" onClick={() => void refetch()}>
+            {scanError ?? 'Scan failed'} —{' '}
+            <button type="button" className="underline" onClick={startScan}>
               retry
             </button>
           </p>

@@ -128,6 +128,61 @@ export async function registerCatalogRoutes(
     return results;
   });
 
+  // SSE endpoint for duplicate scanning with progress
+  app.get('/catalog/api/duplicates/scan', async (req, reply) => {
+    const catalogService = requireCatalog(catalog, reply);
+    if (!catalogService) {
+      return;
+    }
+
+    // Get total count from stats for progress percentage
+    let totalFiles: number | undefined;
+    try {
+      const stats = await catalogService.getStats();
+      totalFiles = stats.totalFiles;
+    } catch {
+      // Stats failed; progress will show count only (no percentage)
+    }
+
+    // SSE uses reply.raw directly, so we must set CORS headers manually
+    const origin = req.headers.origin ?? '*';
+    void reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'Access-Control-Allow-Origin': origin,
+      'Access-Control-Allow-Credentials': 'true',
+    });
+
+    const sendEvent = (data: Record<string, unknown>) => {
+      reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    // Send initial event with total
+    sendEvent({ phase: 'started', totalFiles: totalFiles ?? null });
+
+    try {
+      const groups = await catalogService.findDuplicates((listed) => {
+        sendEvent({ phase: 'listing', listed, totalFiles: totalFiles ?? null });
+      });
+
+      const totalDuplicates = groups.reduce((sum, g) => sum + g.duplicateKeys.length, 0);
+      const bytesFreed = groups.reduce((sum, g) => sum + g.duplicateKeys.length * g.size, 0);
+
+      sendEvent({
+        phase: 'done',
+        groups,
+        totalDuplicates,
+        bytesFreed,
+      });
+    } catch (err) {
+      sendEvent({ phase: 'error', message: err instanceof Error ? err.message : 'Scan failed' });
+    }
+
+    reply.raw.end();
+  });
+
   app.get('/catalog/api/duplicates', async (_req, reply) => {
     const catalogService = requireCatalog(catalog, reply);
     if (!catalogService) {
