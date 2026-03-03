@@ -7,8 +7,11 @@
  *   2. Normalized files   (work/normalized/)
  *   3. Input archives     (input/*.tgz)  — only with --delete-archives
  *
- * Safety: will NOT delete any data unless the upload state confirms every manifest
- * entry is 'uploaded' or 'skipped' (never 'failed').
+ * Safety:
+ *   - will NOT delete any data unless upload state confirms every manifest entry
+ *     is 'uploaded' or 'skipped' (never 'failed' or missing).
+ *   - will ONLY move/delete input archives that are marked `completed` in
+ *     work/archive-state.json.
  *
  * Usage:
  *   npx tsx scripts/takeout-cleanup.ts                # dry-run (default)
@@ -103,9 +106,10 @@ if (failed > 0) {
 }
 
 if (missing > 0) {
-  console.warn(`⚠️  ${missing} manifest entries have no upload record.`);
-  console.warn('   These may be new files not yet uploaded. They will NOT be deleted.');
-  console.warn('');
+  console.error(`❌ Cannot clean up safely: ${missing} manifest entries have no upload record.`);
+  console.error('   This means upload state is incomplete (or new data exists) — cleanup is aborted to prevent data loss.');
+  console.error('   Re-run upload/verify until state is complete, then retry cleanup.');
+  process.exit(1);
 }
 
 // ─── 2. Measure disk usage ─────────────────────────────────────────────────
@@ -114,15 +118,30 @@ const extractedDir = path.join(config.workDir, 'Takeout');
 const normalizedDir = path.join(config.workDir, 'normalized');
 const tempExtractDir = path.join(config.workDir, 'temp-extract');
 
-const [extractedSize, normalizedSize, tempSize, inputArchives] = await Promise.all([
+const [extractedSize, normalizedSize, tempSize, inputArchives, archiveState] = await Promise.all([
   measureDirSize(extractedDir),
   measureDirSize(normalizedDir),
   measureDirSize(tempExtractDir),
   discoverTakeoutArchives(config.inputDir),
+  loadArchiveState(path.join(config.workDir, 'archive-state.json')),
 ]);
 
+const completedArchiveNames = new Set(
+  Object.entries(archiveState.archives)
+    .filter(([, item]) => item.status === 'completed')
+    .map(([name]) => name),
+);
+
+const eligibleInputArchives = inputArchives.filter((archivePath) =>
+  completedArchiveNames.has(path.basename(archivePath))
+);
+
+const protectedInputArchives = inputArchives.filter((archivePath) =>
+  !completedArchiveNames.has(path.basename(archivePath))
+);
+
 let inputSize = 0;
-for (const archivePath of inputArchives) {
+for (const archivePath of eligibleInputArchives) {
   try {
     const stat = await fs.stat(archivePath);
     inputSize += stat.size;
@@ -133,7 +152,11 @@ console.log('💾 Disk usage:');
 console.log(`   Extracted (Takeout/):    ${formatBytes(extractedSize)}${extractedSize === 0 ? ' (empty/absent)' : ''}`);
 console.log(`   Normalized:              ${formatBytes(normalizedSize)}${normalizedSize === 0 ? ' (empty/absent)' : ''}`);
 console.log(`   Temp-extract:            ${formatBytes(tempSize)}${tempSize === 0 ? ' (empty/absent)' : ''}`);
-console.log(`   Input archives (${inputArchives.length}):   ${formatBytes(inputSize)}${inputSize === 0 ? ' (empty/absent)' : ''}`);
+console.log(`   Input archives eligible (${eligibleInputArchives.length}/${inputArchives.length}):   ${formatBytes(inputSize)}${inputSize === 0 ? ' (empty/absent)' : ''}`);
+
+if (protectedInputArchives.length > 0) {
+  console.log(`   🔒 Protected (not completed): ${protectedInputArchives.length}`);
+}
 
 let willFree = extractedSize + normalizedSize + tempSize;
 if (deleteArchives || moveArchives) {
@@ -163,8 +186,8 @@ if (tempSize > 0) {
   actions.push({ type: 'remove-dir', path: tempExtractDir, label: 'work/temp-extract/', size: tempSize });
 }
 
-if (deleteArchives && inputArchives.length > 0) {
-  for (const archivePath of inputArchives) {
+if (deleteArchives && eligibleInputArchives.length > 0) {
+  for (const archivePath of eligibleInputArchives) {
     const stat = await fs.stat(archivePath).catch(() => null);
     actions.push({
       type: 'delete-file',
@@ -173,8 +196,8 @@ if (deleteArchives && inputArchives.length > 0) {
       size: stat?.size ?? 0,
     });
   }
-} else if (moveArchives && inputArchives.length > 0) {
-  for (const archivePath of inputArchives) {
+} else if (moveArchives && eligibleInputArchives.length > 0) {
+  for (const archivePath of eligibleInputArchives) {
     const stat = await fs.stat(archivePath).catch(() => null);
     actions.push({
       type: 'move-file',
@@ -187,6 +210,10 @@ if (deleteArchives && inputArchives.length > 0) {
 }
 
 if (actions.length === 0) {
+  if ((deleteArchives || moveArchives) && inputArchives.length > 0 && eligibleInputArchives.length === 0) {
+    console.log('✅ No archive cleanup actions planned.');
+    console.log('   Safety mode: no input archive is marked completed in archive-state.json.');
+  }
   console.log('✅ Nothing to clean up — disk is already clean.');
   process.exit(0);
 }
