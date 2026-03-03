@@ -151,7 +151,7 @@ export async function registerCatalogRoutes(
     return result;
   });
 
-  app.get('/catalog/media/:encodedKey', async (req, reply) => {
+  app.get('/catalog/media/:encodedKey', { config: { rateLimit: { max: 2000, timeWindow: '1 minute' } } }, async (req, reply) => {
     const catalogService = requireCatalog(catalog, reply);
     if (!catalogService) {
       return;
