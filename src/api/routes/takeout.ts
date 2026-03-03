@@ -48,7 +48,7 @@ type ActionStatus = {
 };
 
 const MAX_OUTPUT_LINES = 300;
-const ACTION_TIMEOUT_MS = 30 * 60 * 1000;
+const ACTION_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours — scan of many large archives can take >30 min
 const MANIFEST_COUNT_TIMEOUT_MS = 5000;
 const RUN_STATUS: ActionStatus = {
   running: false,
