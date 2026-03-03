@@ -226,19 +226,37 @@ function runAction(action: TakeoutAction): void {
   });
 
   child.on('close', (code) => {
-    RUN_STATUS.running = false;
+    const exitCode = typeof code === 'number' ? code : -1;
+    const success = exitCode === 0;
     RUN_STATUS.finishedAt = new Date().toISOString();
-    RUN_STATUS.exitCode = typeof code === 'number' ? code : -1;
-    RUN_STATUS.success = code === 0;
-    if (action === 'start-services' && RUN_STATUS.success === false) {
-      appendStartServicesFailureHints();
-    }
-    appendOutput(`Action finished with code ${RUN_STATUS.exitCode}`);
+    RUN_STATUS.exitCode = exitCode;
     currentProcess = null;
     if (currentTimeout) {
       clearTimeout(currentTimeout);
       currentTimeout = null;
     }
+
+    // After a successful upload or resume, automatically move completed archives
+    // out of the input folder so the user doesn't have to do it manually.
+    if (success && (action === 'upload' || action === 'resume')) {
+      appendOutput(`Action finished with code ${exitCode}`);
+      appendOutput('✅ Upload complete — moving completed archives to uploaded-archives/...');
+      RUN_STATUS.running = true;
+      RUN_STATUS.action = 'cleanup-move';
+      RUN_STATUS.startedAt = new Date().toISOString();
+      RUN_STATUS.finishedAt = undefined;
+      RUN_STATUS.exitCode = undefined;
+      RUN_STATUS.success = undefined;
+      runAction('cleanup-move');
+      return;
+    }
+
+    RUN_STATUS.running = false;
+    RUN_STATUS.success = success;
+    if (action === 'start-services' && !success) {
+      appendStartServicesFailureHints();
+    }
+    appendOutput(`Action finished with code ${exitCode}`);
   });
 }
 
