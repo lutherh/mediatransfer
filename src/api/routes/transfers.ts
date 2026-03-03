@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { TransferStatus } from '../../generated/prisma/client.js';
 import type { JobsService, QueueService } from '../types.js';
+import { apiError } from '../errors.js';
 
 const createTransferSchema = z.object({
   sourceProvider: z.string().min(1),
@@ -14,6 +15,19 @@ const createTransferSchema = z.object({
 
 const retryItemSchema = z.object({
   mediaItemId: z.string().min(1),
+});
+
+const listTransfersQuery = z.object({
+  status: z.nativeEnum(TransferStatus).optional(),
+  sourceProvider: z.string().min(1).optional(),
+  destProvider: z.string().min(1).optional(),
+});
+
+const idParamsSchema = z.object({
+  id: z.union([
+    z.string().uuid(),
+    z.string().regex(/^job-[A-Za-z0-9_-]+$/),
+  ]),
 });
 
 /**
@@ -38,7 +52,7 @@ async function tryEnqueue(
       errorMessage: `Failed to ${errorContext}: ${message}`,
     });
     reply.code(503).send({
-      error: 'Transfer queue is unavailable. Start services and try again.',
+      ...apiError('QUEUE_UNAVAILABLE', 'Transfer queue is unavailable. Start services and try again.'),
       jobId,
     });
     return null;
@@ -76,20 +90,16 @@ export async function registerTransferRoutes(
   });
 
   app.get('/transfers', async (req) => {
-    const query = req.query as {
-      status?: TransferStatus;
-      sourceProvider?: string;
-      destProvider?: string;
-    };
+    const query = listTransfersQuery.parse(req.query);
 
     return jobs.list(query);
   });
 
   app.get('/transfers/:id', async (req, reply) => {
-    const id = (req.params as { id: string }).id;
+    const { id } = idParamsSchema.parse(req.params);
     const job = await jobs.get(id);
     if (!job) {
-      return reply.code(404).send({ error: 'Transfer job not found' });
+      return reply.code(404).send(apiError('TRANSFER_NOT_FOUND', 'Transfer job not found'));
     }
 
     const logs = await jobs.listLogs(id);
@@ -97,10 +107,10 @@ export async function registerTransferRoutes(
   });
 
   app.get('/transfers/:id/logs', async (req, reply) => {
-    const id = (req.params as { id: string }).id;
+    const { id } = idParamsSchema.parse(req.params);
     const job = await jobs.get(id);
     if (!job) {
-      return reply.code(404).send({ error: 'Transfer job not found' });
+      return reply.code(404).send(apiError('TRANSFER_NOT_FOUND', 'Transfer job not found'));
     }
 
     const logs = await jobs.listLogs(id);
@@ -108,15 +118,15 @@ export async function registerTransferRoutes(
   });
 
   app.post('/transfers/:id/pause', async (req, reply) => {
-    const id = (req.params as { id: string }).id;
+    const { id } = idParamsSchema.parse(req.params);
     const job = await jobs.get(id);
     if (!job) {
-      return reply.code(404).send({ error: 'Transfer job not found' });
+      return reply.code(404).send(apiError('TRANSFER_NOT_FOUND', 'Transfer job not found'));
     }
 
     if (job.status !== TransferStatus.PENDING && job.status !== TransferStatus.IN_PROGRESS) {
       return reply.code(409).send({
-        error: `Transfer cannot be paused from status ${job.status}`,
+        ...apiError('TRANSFER_INVALID_STATUS', `Transfer cannot be paused from status ${job.status}`),
       });
     }
 
@@ -132,15 +142,15 @@ export async function registerTransferRoutes(
   });
 
   app.post('/transfers/:id/resume', async (req, reply) => {
-    const id = (req.params as { id: string }).id;
+    const { id } = idParamsSchema.parse(req.params);
     const job = await jobs.get(id);
     if (!job) {
-      return reply.code(404).send({ error: 'Transfer job not found' });
+      return reply.code(404).send(apiError('TRANSFER_NOT_FOUND', 'Transfer job not found'));
     }
 
     if (job.status !== TransferStatus.CANCELLED && job.status !== TransferStatus.FAILED) {
       return reply.code(409).send({
-        error: `Transfer can only be resumed from status ${TransferStatus.CANCELLED} or ${TransferStatus.FAILED}`,
+        ...apiError('TRANSFER_INVALID_STATUS', `Transfer can only be resumed from status ${TransferStatus.CANCELLED} or ${TransferStatus.FAILED}`),
       });
     }
 
@@ -194,11 +204,11 @@ export async function registerTransferRoutes(
   });
 
   app.post('/transfers/:id/retry-item', async (req, reply) => {
-    const id = (req.params as { id: string }).id;
+    const { id } = idParamsSchema.parse(req.params);
     const input = retryItemSchema.parse(req.body);
     const job = await jobs.get(id);
     if (!job) {
-      return reply.code(404).send({ error: 'Transfer job not found' });
+      return reply.code(404).send(apiError('TRANSFER_NOT_FOUND', 'Transfer job not found'));
     }
 
     if (
@@ -207,13 +217,13 @@ export async function registerTransferRoutes(
       job.status !== TransferStatus.IN_PROGRESS
     ) {
       return reply.code(409).send({
-        error: `Transfer item can only be retried when transfer is ${TransferStatus.CANCELLED}, ${TransferStatus.FAILED}, or ${TransferStatus.IN_PROGRESS}`,
+        ...apiError('TRANSFER_INVALID_STATUS', `Transfer item can only be retried when transfer is ${TransferStatus.CANCELLED}, ${TransferStatus.FAILED}, or ${TransferStatus.IN_PROGRESS}`),
       });
     }
 
     if (!job.keys.includes(input.mediaItemId)) {
       return reply.code(404).send({
-        error: `Item ${input.mediaItemId} is not part of transfer ${id}`,
+        ...apiError('TRANSFER_ITEM_NOT_FOUND', `Item ${input.mediaItemId} is not part of transfer ${id}`),
       });
     }
 
@@ -221,7 +231,7 @@ export async function registerTransferRoutes(
     const completedKeys = getCompletedMediaItemIds(logs);
     if (completedKeys.has(input.mediaItemId)) {
       return reply.code(409).send({
-        error: `Item ${input.mediaItemId} is already completed`,
+        ...apiError('TRANSFER_ITEM_COMPLETED', `Item ${input.mediaItemId} is already completed`),
       });
     }
 
@@ -229,7 +239,7 @@ export async function registerTransferRoutes(
     const latestStatus = latestStatusByItem.get(input.mediaItemId);
     if (latestStatus === 'IN_PROGRESS' || latestStatus === 'RETRYING') {
       return reply.code(409).send({
-        error: `Item ${input.mediaItemId} is already in progress`,
+        ...apiError('TRANSFER_ITEM_IN_PROGRESS', `Item ${input.mediaItemId} is already in progress`),
       });
     }
 
@@ -264,10 +274,10 @@ export async function registerTransferRoutes(
   });
 
   app.post('/transfers/:id/retry-all-items', async (req, reply) => {
-    const id = (req.params as { id: string }).id;
+    const { id } = idParamsSchema.parse(req.params);
     const job = await jobs.get(id);
     if (!job) {
-      return reply.code(404).send({ error: 'Transfer job not found' });
+      return reply.code(404).send(apiError('TRANSFER_NOT_FOUND', 'Transfer job not found'));
     }
 
     if (
@@ -276,7 +286,7 @@ export async function registerTransferRoutes(
       job.status !== TransferStatus.IN_PROGRESS
     ) {
       return reply.code(409).send({
-        error: `Transfer items can only be queued when transfer is ${TransferStatus.CANCELLED}, ${TransferStatus.FAILED}, or ${TransferStatus.IN_PROGRESS}`,
+        ...apiError('TRANSFER_INVALID_STATUS', `Transfer items can only be queued when transfer is ${TransferStatus.CANCELLED}, ${TransferStatus.FAILED}, or ${TransferStatus.IN_PROGRESS}`),
       });
     }
 
@@ -335,10 +345,10 @@ export async function registerTransferRoutes(
   });
 
   app.delete('/transfers/:id', async (req, reply) => {
-    const id = (req.params as { id: string }).id;
+    const { id } = idParamsSchema.parse(req.params);
     const job = await jobs.get(id);
     if (!job) {
-      return reply.code(404).send({ error: 'Transfer job not found' });
+      return reply.code(404).send(apiError('TRANSFER_NOT_FOUND', 'Transfer job not found'));
     }
 
     await jobs.update(id, { status: TransferStatus.CANCELLED, errorMessage: null });

@@ -1,9 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import multipart from '@fastify/multipart';
-import { Readable } from 'node:stream';
-import { sha256Buffer } from '../../utils/hash.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream, createWriteStream } from 'node:fs';
+import fs from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { extractExifMetadata, inferDateFromFilename } from '../../utils/exif.js';
 import type { UploadService } from '../types.js';
+import { apiError } from '../errors.js';
 
 /**
  * Max file size: 100 MB per file.
@@ -37,26 +42,36 @@ export async function registerUploadRoutes(
    *
    * Returns an array of upload results.
    */
-  app.post('/uploads', async (req, reply) => {
+  app.post('/uploads', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     if (!uploads) {
       return reply.code(503).send({
-        error: 'Upload service unavailable. Configure Scaleway storage credentials.',
+        ...apiError('UPLOAD_SERVICE_UNAVAILABLE', 'Upload service unavailable. Configure Scaleway storage credentials.'),
       });
     }
     const parts = req.files();
     const results: UploadResult[] = [];
 
     for await (const part of parts) {
+      let tempFilePath: string | null = null;
       try {
-        // Buffer the entire file for hashing + EXIF extraction
-        const buffer = await part.toBuffer();
-        const hash = sha256Buffer(buffer);
+        tempFilePath = path.join(tmpdir(), `mediatransfer-upload-${Date.now()}-${randomUUID()}`);
+        const hash = createHash('sha256');
+        let size = 0;
+
+        part.file.on('data', (chunk: Buffer) => {
+          hash.update(chunk);
+          size += chunk.length;
+        });
+        await pipeline(part.file, createWriteStream(tempFilePath));
+
+        const digest = hash.digest('hex');
         const filename = part.filename;
         const contentType = part.mimetype || 'application/octet-stream';
-        const size = buffer.length;
 
         // Check for duplicate by hash
-        const existing = await uploads.findByHash(hash);
+        const existing = await uploads.findByHash(digest);
         if (existing) {
           results.push({
             filename,
@@ -69,7 +84,11 @@ export async function registerUploadRoutes(
         }
 
         // Extract EXIF metadata
-        const exif = await extractExifMetadata(buffer);
+        const fileHandle = await fs.open(tempFilePath, 'r');
+        const exifBuffer = Buffer.allocUnsafe(64 * 1024);
+        const { bytesRead } = await fileHandle.read(exifBuffer, 0, exifBuffer.length, 0);
+        await fileHandle.close();
+        const exif = await extractExifMetadata(exifBuffer.subarray(0, bytesRead));
 
         // Determine capture date: EXIF > filename inference > null
         const capturedAt = exif.capturedAt ?? inferDateFromFilename(filename) ?? undefined;
@@ -79,18 +98,18 @@ export async function registerUploadRoutes(
           ? `${capturedAt.getUTCFullYear()}/${String(capturedAt.getUTCMonth() + 1).padStart(2, '0')}/${String(capturedAt.getUTCDate()).padStart(2, '0')}`
           : 'unknown-date';
         const sanitized = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const uniquePrefix = hash.slice(0, 8);
+        const uniquePrefix = digest.slice(0, 8);
         const s3Key = `${datePath}/${uniquePrefix}-${sanitized}`;
 
         // Upload to storage
-        const stream = Readable.from(buffer);
+        const stream = createReadStream(tempFilePath);
         await uploads.uploadToStorage(s3Key, stream, contentType);
 
         // Save media item record
         const mediaItem = await uploads.createMediaItem({
           filename,
           s3Key,
-          sha256: hash,
+          sha256: digest,
           size,
           contentType,
           width: exif.width,
@@ -114,12 +133,20 @@ export async function registerUploadRoutes(
           status: 'error',
           message,
         });
+      } finally {
+        if (tempFilePath) {
+          try {
+            await fs.unlink(tempFilePath);
+          } catch (err) {
+            app.log.debug({ err, tempFilePath }, 'Failed to cleanup upload temp file');
+          }
+        }
       }
     }
 
     if (results.length === 0) {
       return reply.code(400).send({
-        error: 'No files provided. Send files as multipart/form-data.',
+        ...apiError('NO_UPLOAD_FILES', 'No files provided. Send files as multipart/form-data.'),
       });
     }
 
@@ -146,7 +173,7 @@ export async function registerUploadRoutes(
   app.get('/uploads', async (req, reply) => {
     if (!uploads) {
       return reply.code(503).send({
-        error: 'Upload service unavailable. Configure Scaleway storage credentials.',
+        ...apiError('UPLOAD_SERVICE_UNAVAILABLE', 'Upload service unavailable. Configure Scaleway storage credentials.'),
       });
     }
 
@@ -180,7 +207,7 @@ export async function registerUploadRoutes(
   app.get('/uploads/stats', async (_req, reply) => {
     if (!uploads) {
       return reply.code(503).send({
-        error: 'Upload service unavailable. Configure Scaleway storage credentials.',
+        ...apiError('UPLOAD_SERVICE_UNAVAILABLE', 'Upload service unavailable. Configure Scaleway storage credentials.'),
       });
     }
 

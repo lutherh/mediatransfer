@@ -3,19 +3,9 @@ import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createReadStream } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
-
-type UploadStateItem = {
-  status: 'uploaded' | 'skipped' | 'failed';
-  attempts: number;
-  updatedAt: string;
-  error?: string;
-};
-
-type UploadState = {
-  version: 1;
-  updatedAt: string;
-  items: Record<string, UploadStateItem>;
-};
+import type { Env } from '../../config/env.js';
+import type { UploadState, UploadStateItem } from '../../takeout/uploader.js';
+import { apiError } from '../errors.js';
 
 type TakeoutAction =
   | 'scan'
@@ -47,6 +37,12 @@ type ActionStatus = {
   scanProgress?: ScanProgress;
 };
 
+type ActionCommand = {
+  command: string;
+  args: string[];
+  display: string;
+};
+
 const MAX_OUTPUT_LINES = 300;
 const ACTION_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours — scan of many large archives can take >30 min
 const MANIFEST_COUNT_TIMEOUT_MS = 5000;
@@ -69,11 +65,11 @@ const manifestKeysCache = new Map<string, {
   keys: Set<string>;
 }>();
 
-export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void> {
+export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Promise<void> {
   app.get('/takeout/status', async () => {
-    const inputDir = path.resolve(process.env.TAKEOUT_INPUT_DIR ?? './data/takeout/input');
-    const workDir = path.resolve(process.env.TAKEOUT_WORK_DIR ?? './data/takeout/work');
-    const statePath = path.resolve(process.env.TRANSFER_STATE_PATH ?? './data/takeout/state.json');
+    const inputDir = path.resolve(env.TAKEOUT_INPUT_DIR);
+    const workDir = path.resolve(env.TAKEOUT_WORK_DIR);
+    const statePath = path.resolve(env.TRANSFER_STATE_PATH);
     const manifestPath = path.join(workDir, 'manifest.jsonl');
 
     const [state, manifestKeys] = await Promise.all([
@@ -102,7 +98,8 @@ export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void>
       archivesInInput = inputEntries.filter(
         (e) => e.isFile() && /\.(zip|tar|tgz|tar\.gz)$/i.test(e.name),
       ).length;
-    } catch {
+    } catch (err) {
+      app.log.debug({ err, inputDir }, 'Unable to list takeout input directory');
       // input dir may not exist yet
     }
 
@@ -133,11 +130,13 @@ export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void>
     return snapshotStatus();
   });
 
-  app.post('/takeout/actions/:action', async (req, reply) => {
+  app.post('/takeout/actions/:action', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const action = (req.params as { action?: string }).action;
     if (!isAction(action)) {
       return reply.code(400).send({
-        error: `Unknown action: ${String(action)}`,
+        ...apiError('UNKNOWN_ACTION', `Unknown action: ${String(action)}`),
         allowedActions: [
           'scan',
           'upload',
@@ -154,7 +153,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void>
 
     if (RUN_STATUS.running) {
       return reply.code(409).send({
-        error: 'Another takeout action is already running',
+        ...apiError('ACTION_ALREADY_RUNNING', 'Another takeout action is already running'),
         status: snapshotStatus(),
       });
     }
@@ -170,7 +169,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void>
 
 function runAction(action: TakeoutAction): void {
   const projectRoot = path.resolve(process.cwd());
-  const command = resolveActionCommand(action);
+  const commands = resolveActionCommands(action);
 
   RUN_STATUS.running = true;
   RUN_STATUS.action = action;
@@ -180,89 +179,114 @@ function runAction(action: TakeoutAction): void {
   RUN_STATUS.success = undefined;
   RUN_STATUS.output = [];
 
-  const child = spawn(command, {
-    cwd: projectRoot,
-    env: process.env,
-    shell: true,
-  });
+  const runCommand = (index: number): void => {
+    const current = commands[index];
+    const child = spawn(current.command, current.args, {
+      cwd: projectRoot,
+      env: process.env,
+    });
 
-  currentProcess = child;
-  appendOutput(`$ ${command}`);
+    currentProcess = child;
+    appendOutput(`$ ${current.display}`);
 
-  currentTimeout = setTimeout(() => {
-    if (!RUN_STATUS.running) {
-      return;
-    }
-
-    appendOutput(`Action timed out after ${Math.round(ACTION_TIMEOUT_MS / 60000)} minutes.`);
-    child.kill();
-    RUN_STATUS.running = false;
-    RUN_STATUS.finishedAt = new Date().toISOString();
-    RUN_STATUS.exitCode = -1;
-    RUN_STATUS.success = false;
-    currentProcess = null;
-    currentTimeout = null;
-  }, ACTION_TIMEOUT_MS);
-
-  child.stdout.on('data', (chunk) => {
-    appendOutput(String(chunk));
-  });
-
-  child.stderr.on('data', (chunk) => {
-    appendOutput(String(chunk));
-  });
-
-  child.on('error', (error) => {
-    appendOutput(`Process error: ${error.message}`);
-    RUN_STATUS.running = false;
-    RUN_STATUS.finishedAt = new Date().toISOString();
-    RUN_STATUS.exitCode = -1;
-    RUN_STATUS.success = false;
-    currentProcess = null;
     if (currentTimeout) {
       clearTimeout(currentTimeout);
-      currentTimeout = null;
     }
-  });
+    currentTimeout = setTimeout(() => {
+      if (!RUN_STATUS.running) {
+        return;
+      }
 
-  child.on('close', (code) => {
-    const exitCode = typeof code === 'number' ? code : -1;
-    const success = exitCode === 0;
-    RUN_STATUS.finishedAt = new Date().toISOString();
-    RUN_STATUS.exitCode = exitCode;
-    currentProcess = null;
-    if (currentTimeout) {
-      clearTimeout(currentTimeout);
+      appendOutput(`Action timed out after ${Math.round(ACTION_TIMEOUT_MS / 60000)} minutes.`);
+      child.kill();
+      RUN_STATUS.running = false;
+      RUN_STATUS.finishedAt = new Date().toISOString();
+      RUN_STATUS.exitCode = -1;
+      RUN_STATUS.success = false;
+      currentProcess = null;
       currentTimeout = null;
-    }
+    }, ACTION_TIMEOUT_MS);
 
-    // After a successful upload or resume, automatically move completed archives
-    // out of the input folder so the user doesn't have to do it manually.
-    if (success && (action === 'upload' || action === 'resume')) {
+    child.stdout.on('data', (chunk) => {
+      appendOutput(String(chunk));
+    });
+
+    child.stderr.on('data', (chunk) => {
+      appendOutput(String(chunk));
+    });
+
+    child.on('error', (error) => {
+      appendOutput(`Process error: ${error.message}`);
+      RUN_STATUS.running = false;
+      RUN_STATUS.finishedAt = new Date().toISOString();
+      RUN_STATUS.exitCode = -1;
+      RUN_STATUS.success = false;
+      currentProcess = null;
+      if (currentTimeout) {
+        clearTimeout(currentTimeout);
+        currentTimeout = null;
+      }
+    });
+
+    child.on('close', (code) => {
+      const exitCode = typeof code === 'number' ? code : -1;
+      const success = exitCode === 0;
+      currentProcess = null;
+      if (currentTimeout) {
+        clearTimeout(currentTimeout);
+        currentTimeout = null;
+      }
+
+      if (!success && index + 1 < commands.length) {
+        appendOutput(`Action attempt failed with code ${exitCode}; trying fallback command.`);
+        runCommand(index + 1);
+        return;
+      }
+
+      RUN_STATUS.finishedAt = new Date().toISOString();
+      RUN_STATUS.exitCode = exitCode;
+
+      // After a successful upload or resume, automatically move completed archives
+      // out of the input folder so the user doesn't have to do it manually.
+      if (success && (action === 'upload' || action === 'resume')) {
+        appendOutput(`Action finished with code ${exitCode}`);
+        appendOutput('✅ Upload complete — moving completed archives to uploaded-archives/...');
+        RUN_STATUS.running = true;
+        RUN_STATUS.action = 'cleanup-move';
+        RUN_STATUS.startedAt = new Date().toISOString();
+        RUN_STATUS.finishedAt = undefined;
+        RUN_STATUS.exitCode = undefined;
+        RUN_STATUS.success = undefined;
+        runAction('cleanup-move');
+        return;
+      }
+
+      RUN_STATUS.running = false;
+      RUN_STATUS.success = success;
+      if (action === 'start-services' && !success) {
+        appendStartServicesFailureHints();
+      }
       appendOutput(`Action finished with code ${exitCode}`);
-      appendOutput('✅ Upload complete — moving completed archives to uploaded-archives/...');
-      RUN_STATUS.running = true;
-      RUN_STATUS.action = 'cleanup-move';
-      RUN_STATUS.startedAt = new Date().toISOString();
-      RUN_STATUS.finishedAt = undefined;
-      RUN_STATUS.exitCode = undefined;
-      RUN_STATUS.success = undefined;
-      runAction('cleanup-move');
-      return;
-    }
+    });
+  };
 
-    RUN_STATUS.running = false;
-    RUN_STATUS.success = success;
-    if (action === 'start-services' && !success) {
-      appendStartServicesFailureHints();
-    }
-    appendOutput(`Action finished with code ${exitCode}`);
-  });
+  runCommand(0);
 }
 
-function resolveActionCommand(action: TakeoutAction): string {
+function resolveActionCommands(action: TakeoutAction): ActionCommand[] {
   if (action === 'start-services') {
-    return 'docker compose up -d postgres redis || docker-compose up -d postgres redis';
+    return [
+      {
+        command: 'docker',
+        args: ['compose', 'up', '-d', 'postgres', 'redis'],
+        display: 'docker compose up -d postgres redis',
+      },
+      {
+        command: 'docker-compose',
+        args: ['up', '-d', 'postgres', 'redis'],
+        display: 'docker-compose up -d postgres redis',
+      },
+    ];
   }
 
   const scriptByAction: Record<Exclude<TakeoutAction, 'start-services'>, string> = {
@@ -276,7 +300,11 @@ function resolveActionCommand(action: TakeoutAction): string {
     'cleanup-force-delete': 'takeout:cleanup -- --apply --delete-archives --force --include-unscanned',
   };
 
-  return `npm run ${scriptByAction[action]}`;
+  return [{
+    command: 'npm',
+    args: ['run', ...scriptByAction[action].split(' ')],
+    display: `npm run ${scriptByAction[action]}`,
+  }];
 }
 
 function appendStartServicesFailureHints(): void {
@@ -331,7 +359,8 @@ function parseScanProgress(): ScanProgress | undefined {
           percent: Math.min(100, Math.max(0, Number(parsed.percent ?? 0))),
           detail: parsed.detail ? String(parsed.detail) : undefined,
         };
-      } catch {
+      } catch (err) {
+        console.debug('[takeout] Ignored malformed scan progress line', err);
         // malformed line, skip
       }
     }
@@ -388,12 +417,15 @@ async function readManifestKeys(manifestPath: string): Promise<Set<string>> {
       try {
         const entry = JSON.parse(trimmed) as { destinationKey?: string };
         if (typeof entry.destinationKey === 'string') keys.add(entry.destinationKey);
-      } catch { /* skip malformed lines */ }
+      } catch (err) {
+        console.debug('[takeout] Ignored malformed manifest line', err);
+      }
     }
 
     manifestKeysCache.set(manifestPath, { mtimeMs: stat.mtimeMs, size: stat.size, keys });
     return keys;
-  } catch {
+  } catch (err) {
+    console.debug('[takeout] Manifest not available, using cached keys if present', err);
     // Manifest doesn't exist yet — return whatever is in cache, or empty
     const cached = manifestKeysCache.get(manifestPath);
     return cached?.keys ?? new Set();
@@ -415,7 +447,8 @@ async function readManifestCount(manifestPath: string, fallbackCount: number): P
       count,
     });
     return count;
-  } catch {
+  } catch (err) {
+    console.debug('[takeout] Falling back to cached manifest count', err);
     const cached = manifestCountCache.get(manifestPath);
     return cached?.count ?? fallbackCount;
   }
@@ -480,7 +513,8 @@ async function readUploadState(statePath: string): Promise<UploadState> {
     }
 
     return parsed;
-  } catch {
+  } catch (err) {
+    console.debug('[takeout] Upload state unavailable, returning empty state', err);
     return createEmptyState();
   }
 }

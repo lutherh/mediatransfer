@@ -566,7 +566,8 @@ export function encodeKey(key: string): string {
 export function decodeKey(encodedKey: string): string {
   try {
     return Buffer.from(encodedKey, 'base64url').toString('utf8');
-  } catch {
+  } catch (err) {
+    console.debug('[catalog] Invalid encoded media key', { encodedKey, err });
     throw new Error('Invalid media key encoding');
   }
 }

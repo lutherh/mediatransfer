@@ -223,7 +223,8 @@ async function exists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
     return true;
-  } catch {
+  } catch (err) {
+    console.debug('[unpack] Path not accessible', { filePath, err });
     return false;
   }
 }
@@ -289,7 +290,8 @@ async function getTotalArchiveSize(archivePaths: string[]): Promise<number> {
     try {
       const stat = await fs.stat(p);
       total += stat.size;
-    } catch {
+    } catch (err) {
+      console.debug('[unpack] Failed to stat archive for size calculation', { archivePath: p, err });
       // skip if inaccessible
     }
   }
