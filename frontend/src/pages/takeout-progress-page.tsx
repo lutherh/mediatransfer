@@ -18,6 +18,7 @@ type PageState =
   | 'verify-failed'   // verify found files missing from the cloud → needs upload
   | 'error'           // last job failed (non-verify)
   | 'archives-found'  // archives sitting in input/, no manifest yet
+  | 'new-archives'    // new archives in input/ while current batch is fully uploaded
   | 'watching'        // no archives, no manifest — waiting for user to drop files
   | 'upload-ready'    // manifest exists, still have pending/failed uploads
   | 'done';           // all uploaded — show verify + cleanup
@@ -106,6 +107,10 @@ export function TakeoutProgressPage() {
     pageState = 'watching';
   } else if (!allUploaded) {
     pageState = 'upload-ready';
+  } else if (archivesInInput > 0) {
+    // Current batch is fully uploaded but there are new/unprocessed archives in input/.
+    // Prompt the user to scan + upload the new batch.
+    pageState = 'new-archives';
   } else {
     pageState = 'done';
   }
@@ -149,7 +154,7 @@ export function TakeoutProgressPage() {
         </Card>
       )}
 
-      {/* Archives found: prompt to scan */}
+      {/* Archives found: prompt to scan (first run, no manifest) */}
       {pageState === 'archives-found' && (
         <Card className="border-blue-200 bg-blue-50 space-y-3">
           <div className="flex items-start gap-4">
@@ -168,6 +173,37 @@ export function TakeoutProgressPage() {
             Scan now
           </Button>
         </Card>
+      )}
+
+      {/* New archives detected after current batch is fully uploaded */}
+      {pageState === 'new-archives' && (
+        <div className="space-y-3">
+          <Card className="border-green-200 bg-green-50 space-y-1 py-3">
+            <div className="flex items-center gap-2">
+              <span aria-hidden>✅</span>
+              <p className="text-sm font-medium text-green-800">
+                Previous batch done — {data.counts.uploaded.toLocaleString()} files safely in the cloud.
+              </p>
+            </div>
+          </Card>
+          <Card className="border-blue-200 bg-blue-50 space-y-3">
+            <div className="flex items-start gap-4">
+              <span className="text-3xl mt-0.5 shrink-0" aria-hidden>📦</span>
+              <div className="space-y-1 min-w-0">
+                <p className="font-semibold text-slate-900">
+                  {archivesInInput} new archive{archivesInInput !== 1 ? 's' : ''} ready to process
+                </p>
+                <p className="text-sm text-slate-600">
+                  These archives haven't been scanned yet. Scan them to find any new photos,
+                  then upload — duplicates already in the cloud will be skipped automatically.
+                </p>
+              </div>
+            </div>
+            <Button type="button" disabled={busy} onClick={() => run('scan')}>
+              Scan &amp; prepare new archives
+            </Button>
+          </Card>
+        </div>
       )}
 
       {/* Running: show progress */}
