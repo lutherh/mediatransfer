@@ -105,7 +105,14 @@ export type TakeoutStatus = {
   isComplete: boolean;
 };
 
-export type TakeoutAction = 'scan' | 'upload' | 'verify' | 'resume' | 'start-services';
+export type TakeoutAction =
+  | 'scan'
+  | 'upload'
+  | 'verify'
+  | 'resume'
+  | 'start-services'
+  | 'cleanup-move'
+  | 'cleanup-delete';
 
 export type ScanProgress = {
   phase: string;

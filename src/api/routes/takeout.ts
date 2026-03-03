@@ -17,7 +17,14 @@ type UploadState = {
   items: Record<string, UploadStateItem>;
 };
 
-type TakeoutAction = 'scan' | 'upload' | 'verify' | 'resume' | 'start-services';
+type TakeoutAction =
+  | 'scan'
+  | 'upload'
+  | 'verify'
+  | 'resume'
+  | 'start-services'
+  | 'cleanup-move'
+  | 'cleanup-delete';
 
 type ScanProgress = {
   phase: string;
@@ -102,7 +109,15 @@ export async function registerTakeoutRoutes(app: FastifyInstance): Promise<void>
     if (!isAction(action)) {
       return reply.code(400).send({
         error: `Unknown action: ${String(action)}`,
-        allowedActions: ['scan', 'upload', 'verify', 'resume', 'start-services'],
+        allowedActions: [
+          'scan',
+          'upload',
+          'verify',
+          'resume',
+          'start-services',
+          'cleanup-move',
+          'cleanup-delete',
+        ],
       });
     }
 
@@ -206,6 +221,8 @@ function resolveActionCommand(action: TakeoutAction): string {
     upload: 'takeout:upload',
     verify: 'takeout:verify',
     resume: 'takeout:resume',
+    'cleanup-move': 'takeout:cleanup -- --apply --move-archives',
+    'cleanup-delete': 'takeout:cleanup -- --apply --delete-archives',
   };
 
   return `npm run ${scriptByAction[action]}`;
@@ -293,7 +310,9 @@ function isAction(value: string | undefined): value is TakeoutAction {
     || value === 'upload'
     || value === 'verify'
     || value === 'resume'
-    || value === 'start-services';
+    || value === 'start-services'
+    || value === 'cleanup-move'
+    || value === 'cleanup-delete';
 }
 
 async function readManifestCount(manifestPath: string, fallbackCount: number): Promise<number> {
