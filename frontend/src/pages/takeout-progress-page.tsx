@@ -33,12 +33,16 @@ export function TakeoutProgressPage() {
     queryKey: ['takeout-status'],
     queryFn: fetchTakeoutStatus,
     refetchInterval: 3000,
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
   });
 
   const { data: actionStatus, isLoading: isLoadingActionStatus } = useQuery({
     queryKey: ['takeout-action-status'],
     queryFn: fetchTakeoutActionStatus,
     refetchInterval: 1500,
+    staleTime: 10_000,
+    gcTime: 5 * 60_000,
   });
 
   const actionMutation = useMutation({

@@ -236,7 +236,11 @@ async function exists(filePath: string): Promise<boolean> {
     await fs.access(filePath);
     return true;
   } catch (err) {
-    console.debug('[manifest] Path not accessible', { filePath, err });
+    // ENOENT is the expected/normal case — sidecar file simply doesn't exist.
+    // Only log genuinely unexpected errors (permission denied, etc.).
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn('[manifest] Path not accessible', { filePath, err });
+    }
     return false;
   }
 }
