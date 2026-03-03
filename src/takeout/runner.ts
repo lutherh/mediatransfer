@@ -4,6 +4,7 @@ import type { CloudProvider } from '../providers/types.js';
 import type { TakeoutConfig } from './config.js';
 import {
   buildManifest,
+  deduplicateManifest,
   loadManifestJsonl,
   persistManifestJsonl,
 } from './manifest.js';
@@ -123,10 +124,19 @@ export async function runTakeoutScan(
       config.inputDir, config.workDir, extractor,
     );
     onProgress?.({ phase: 'manifest', current: 0, total: 0, percent: 72, detail: 'Building manifest...' });
-    const entries = await buildManifest(mediaRoot, (processed, total) => {
-      const pct = 72 + Math.round((processed / Math.max(total, 1)) * 26);
+    const rawEntries = await buildManifest(mediaRoot, (processed, total) => {
+      const pct = 72 + Math.round((processed / Math.max(total, 1)) * 20);
       onProgress?.({ phase: 'manifest', current: processed, total, percent: pct, detail: `${processed}/${total} files` });
     });
+    onProgress?.({ phase: 'manifest', current: 0, total: 0, percent: 93, detail: 'Deduplicating manifest...' });
+    const dedup = await deduplicateManifest(rawEntries, (hashed, total) => {
+      const pct = 93 + Math.round((hashed / Math.max(total, 1)) * 5);
+      onProgress?.({ phase: 'manifest', current: hashed, total, percent: pct, detail: `Dedup: hashing ${hashed}/${total}` });
+    });
+    if (dedup.removedCount > 0) {
+      console.log(`[runner] Manifest dedup: removed ${dedup.removedCount} duplicate entries (${(dedup.removedBytes / 1e9).toFixed(2)} GB)`);
+    }
+    const entries = dedup.entries;
     await persistManifestJsonl(entries, manifestPath);
     onProgress?.({ phase: 'done', current: 1, total: 1, percent: 100, detail: 'Scan complete' });
     return { manifestPath, mediaRoot, archives, entryCount: entries.length };
@@ -205,11 +215,20 @@ export async function runTakeoutScan(
   // ── Phase 3: Build manifest ────────────────────────────────────────────────
   onProgress?.({ phase: 'manifest', current: 0, total: 0, percent: 73, detail: 'Building manifest...' });
 
-  const entries = await buildManifest(mediaRoot, (processed, total) => {
-    const pct = 73 + Math.round((processed / Math.max(total, 1)) * 25);
+  const rawEntries = await buildManifest(mediaRoot, (processed, total) => {
+    const pct = 73 + Math.round((processed / Math.max(total, 1)) * 18);
     onProgress?.({ phase: 'manifest', current: processed, total, percent: pct, detail: `${processed.toLocaleString()}/${total.toLocaleString()} files` });
   });
 
+  onProgress?.({ phase: 'manifest', current: 0, total: 0, percent: 92, detail: 'Deduplicating manifest...' });
+  const dedup = await deduplicateManifest(rawEntries, (hashed, total) => {
+    const pct = 92 + Math.round((hashed / Math.max(total, 1)) * 6);
+    onProgress?.({ phase: 'manifest', current: hashed, total, percent: pct, detail: `Dedup: hashing ${hashed.toLocaleString()}/${total.toLocaleString()}` });
+  });
+  if (dedup.removedCount > 0) {
+    console.log(`[runner] Manifest dedup: removed ${dedup.removedCount} duplicate entries (${(dedup.removedBytes / 1e9).toFixed(2)} GB)`);
+  }
+  const entries = dedup.entries;
   await persistManifestJsonl(entries, manifestPath);
 
   // Clear scan-state — the next batch of archives starts fresh

@@ -2,7 +2,14 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs/promises';
 import { describe, it, expect } from 'vitest';
-import { buildManifest, persistManifestJsonl } from './manifest.js';
+import {
+  buildManifest,
+  deduplicateManifest,
+  partialFileHash,
+  persistManifestJsonl,
+  scoreEntryForKeep,
+  type ManifestEntry,
+} from './manifest.js';
 
 async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mediatransfer-manifest-'));
@@ -141,6 +148,243 @@ describe('takeout/manifest', () => {
 
       const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
       expect(entry.datePath).toBe('2020/12/17');
+    });
+  });
+});
+
+// ── Deduplication tests ───────────────────────────────────────────────────────
+
+describe('scoreEntryForKeep', () => {
+  const base: ManifestEntry = {
+    sourcePath: '/tmp/a.jpg',
+    relativePath: 'a.jpg',
+    size: 100,
+    mtimeMs: 0,
+    capturedAt: '2024-01-01T00:00:00.000Z',
+    datePath: '2024/01/01',
+    destinationKey: 'transfers/2024/01/01/a.jpg',
+  };
+
+  it('prefers entries with a clean date path', () => {
+    const withDate = { ...base, destinationKey: 'transfers/2024/01/01/a.jpg' };
+    const withoutDate = { ...base, destinationKey: 'transfers/Album_Vacation/a.jpg' };
+    expect(scoreEntryForKeep(withDate)).toBeGreaterThan(scoreEntryForKeep(withoutDate));
+  });
+
+  it('penalises deep nesting', () => {
+    const shallow = { ...base, destinationKey: 'transfers/2024/01/01/a.jpg' };
+    const deep = { ...base, destinationKey: 'transfers/2024/01/01/sub/deep/a.jpg' };
+    expect(scoreEntryForKeep(shallow)).toBeGreaterThan(scoreEntryForKeep(deep));
+  });
+
+  it('penalises __dup files', () => {
+    const normal = { ...base, relativePath: 'Album/IMG_0057.MOV' };
+    const dup = { ...base, relativePath: 'Album/IMG_0057__dup1.MOV' };
+    expect(scoreEntryForKeep(normal)).toBeGreaterThan(scoreEntryForKeep(dup));
+  });
+});
+
+describe('partialFileHash', () => {
+  it('returns consistent hash for same content', async () => {
+    await withTempDir(async (dir) => {
+      const fileA = path.join(dir, 'a.jpg');
+      const fileB = path.join(dir, 'b.jpg');
+      const content = Buffer.alloc(128 * 1024, 'x'); // 128 KB
+      await fs.writeFile(fileA, content);
+      await fs.writeFile(fileB, content);
+
+      const hashA = await partialFileHash(fileA);
+      const hashB = await partialFileHash(fileB);
+      expect(hashA).toBe(hashB);
+      expect(hashA).toMatch(/^[0-9a-f]{64}$/);
+    });
+  });
+
+  it('returns different hashes for different content', async () => {
+    await withTempDir(async (dir) => {
+      const fileA = path.join(dir, 'a.jpg');
+      const fileB = path.join(dir, 'b.jpg');
+      await fs.writeFile(fileA, 'content-a');
+      await fs.writeFile(fileB, 'content-b');
+
+      const hashA = await partialFileHash(fileA);
+      const hashB = await partialFileHash(fileB);
+      expect(hashA).not.toBe(hashB);
+    });
+  });
+
+  it('hashes only the first 64KB for large files', async () => {
+    await withTempDir(async (dir) => {
+      const file = path.join(dir, 'big.mp4');
+      const buf = Buffer.alloc(256 * 1024, 0);
+      await fs.writeFile(file, buf);
+
+      // Same first 64KB means same hash even with different tail
+      const file2 = path.join(dir, 'big2.mp4');
+      const buf2 = Buffer.alloc(256 * 1024, 0);
+      buf2[128 * 1024] = 0xff; // differ past 64KB
+      await fs.writeFile(file2, buf2);
+
+      expect(await partialFileHash(file)).toBe(await partialFileHash(file2));
+    });
+  });
+});
+
+describe('deduplicateManifest', () => {
+  function entry(overrides: Partial<ManifestEntry> & { sourcePath: string }): ManifestEntry {
+    return {
+      relativePath: path.basename(overrides.sourcePath),
+      size: 100,
+      mtimeMs: 0,
+      capturedAt: '2024-01-01T00:00:00.000Z',
+      datePath: '2024/01/01',
+      destinationKey: `transfers/2024/01/01/${path.basename(overrides.sourcePath)}`,
+      ...overrides,
+    };
+  }
+
+  it('returns empty for empty input', async () => {
+    const result = await deduplicateManifest([]);
+    expect(result).toEqual({ entries: [], removedCount: 0, removedBytes: 0 });
+  });
+
+  it('keeps all entries when no duplicates exist', async () => {
+    await withTempDir(async (dir) => {
+      await fs.writeFile(path.join(dir, 'a.jpg'), 'content-a');
+      await fs.writeFile(path.join(dir, 'b.jpg'), 'different-content');
+
+      const entries = [
+        entry({ sourcePath: path.join(dir, 'a.jpg'), size: 9 }),
+        entry({ sourcePath: path.join(dir, 'b.jpg'), size: 17 }),
+      ];
+
+      const result = await deduplicateManifest(entries);
+      expect(result.entries).toHaveLength(2);
+      expect(result.removedCount).toBe(0);
+      expect(result.removedBytes).toBe(0);
+    });
+  });
+
+  it('removes duplicate entries with same content', async () => {
+    await withTempDir(async (dir) => {
+      const content = 'identical-photo-content';
+      // Simulate Google Takeout: same file in two album folders
+      const dir1 = path.join(dir, 'Photos from 2020');
+      const dir2 = path.join(dir, 'Vacation');
+      await fs.mkdir(dir1, { recursive: true });
+      await fs.mkdir(dir2, { recursive: true });
+      await fs.writeFile(path.join(dir1, 'IMG_001.jpg'), content);
+      await fs.writeFile(path.join(dir2, 'IMG_001.jpg'), content);
+
+      const entries = [
+        entry({
+          sourcePath: path.join(dir1, 'IMG_001.jpg'),
+          relativePath: 'Photos from 2020/IMG_001.jpg',
+          destinationKey: 'transfers/2020/05/15/Photos_from_2020/IMG_001.jpg',
+          size: content.length,
+        }),
+        entry({
+          sourcePath: path.join(dir2, 'IMG_001.jpg'),
+          relativePath: 'Vacation/IMG_001.jpg',
+          destinationKey: 'transfers/2020/05/15/Vacation/IMG_001.jpg',
+          size: content.length,
+        }),
+      ];
+
+      const result = await deduplicateManifest(entries);
+      expect(result.entries).toHaveLength(1);
+      expect(result.removedCount).toBe(1);
+      expect(result.removedBytes).toBe(content.length);
+    });
+  });
+
+  it('keeps entries with same size but different content', async () => {
+    await withTempDir(async (dir) => {
+      // Exactly same size but different content → different hash
+      await fs.writeFile(path.join(dir, 'a.jpg'), 'AAAAAAAAAA');
+      await fs.writeFile(path.join(dir, 'b.jpg'), 'BBBBBBBBBB');
+
+      const entries = [
+        entry({ sourcePath: path.join(dir, 'a.jpg'), size: 10 }),
+        entry({ sourcePath: path.join(dir, 'b.jpg'), size: 10 }),
+      ];
+
+      const result = await deduplicateManifest(entries);
+      expect(result.entries).toHaveLength(2);
+      expect(result.removedCount).toBe(0);
+    });
+  });
+
+  it('prefers the best-scored entry when deduplicating', async () => {
+    await withTempDir(async (dir) => {
+      const content = 'photo-data';
+      await fs.writeFile(path.join(dir, 'a.jpg'), content);
+      await fs.writeFile(path.join(dir, 'b.jpg'), content);
+
+      const goodEntry = entry({
+        sourcePath: path.join(dir, 'a.jpg'),
+        relativePath: 'IMG_001.jpg',
+        destinationKey: 'transfers/2024/01/01/IMG_001.jpg',
+        size: content.length,
+      });
+      const badEntry = entry({
+        sourcePath: path.join(dir, 'b.jpg'),
+        relativePath: 'Album/Sub/Deep/IMG_001__dup1.jpg',
+        destinationKey: 'transfers/2024/01/01/Album/Sub/Deep/IMG_001__dup1.jpg',
+        size: content.length,
+      });
+
+      const result = await deduplicateManifest([badEntry, goodEntry]);
+      expect(result.entries).toHaveLength(1);
+      expect(result.entries[0].destinationKey).toBe('transfers/2024/01/01/IMG_001.jpg');
+    });
+  });
+
+  it('handles large groups of duplicates', async () => {
+    await withTempDir(async (dir) => {
+      const content = 'same-video-data';
+      const entries: ManifestEntry[] = [];
+
+      for (let i = 0; i < 5; i++) {
+        const filePath = path.join(dir, `copy${i}.mov`);
+        await fs.writeFile(filePath, content);
+        entries.push(
+          entry({
+            sourcePath: filePath,
+            relativePath: `Album${i}/video.mov`,
+            destinationKey: `transfers/2024/01/01/Album${i}/video.mov`,
+            size: content.length,
+          }),
+        );
+      }
+
+      const result = await deduplicateManifest(entries);
+      expect(result.entries).toHaveLength(1);
+      expect(result.removedCount).toBe(4);
+      expect(result.removedBytes).toBe(4 * content.length);
+    });
+  });
+
+  it('reports progress during hashing', async () => {
+    await withTempDir(async (dir) => {
+      const content = 'data';
+      await fs.writeFile(path.join(dir, 'a.jpg'), content);
+      await fs.writeFile(path.join(dir, 'b.jpg'), content);
+
+      const entries = [
+        entry({ sourcePath: path.join(dir, 'a.jpg'), size: content.length }),
+        entry({ sourcePath: path.join(dir, 'b.jpg'), size: content.length }),
+      ];
+
+      const progressCalls: Array<[number, number]> = [];
+      await deduplicateManifest(entries, (processed, total) => {
+        progressCalls.push([processed, total]);
+      });
+
+      expect(progressCalls.length).toBeGreaterThan(0);
+      // Final call should have processed === total
+      const last = progressCalls[progressCalls.length - 1];
+      expect(last[0]).toBe(last[1]);
     });
   });
 });

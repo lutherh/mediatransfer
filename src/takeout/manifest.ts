@@ -1,5 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { inferDateFromFilename } from '../utils/exif.js';
 
 const MEDIA_EXTENSIONS = new Set([
@@ -243,4 +245,175 @@ async function exists(filePath: string): Promise<boolean> {
     }
     return false;
   }
+}
+
+// ── Content-based manifest deduplication ─────────────────────────────────────
+
+/**
+ * How many bytes of each file to hash for the fast fingerprint.
+ * 64 KB is enough to identify media files with virtually zero false positives
+ * while staying fast even for multi-GB video files.
+ */
+const PARTIAL_HASH_BYTES = 64 * 1024;
+
+export type DeduplicateManifestResult = {
+  /** Entries that survived dedup — one per unique content. */
+  entries: ManifestEntry[];
+  /** Number of duplicate entries that were removed. */
+  removedCount: number;
+  /** Total bytes of duplicate entries that were removed. */
+  removedBytes: number;
+};
+
+/**
+ * Score a manifest entry for "keep" priority when deduplicating.
+ * Higher score = more desirable to keep.
+ *
+ * Prefers:
+ * - Entries whose destination key has a clean date path (2020/03/15/)
+ * - Shorter destination keys (less nesting / cleaner path)
+ * - Non-__dup filenames
+ */
+export function scoreEntryForKeep(entry: ManifestEntry): number {
+  let score = 0;
+
+  // Proper date path at the start of the key (after optional transfers/ prefix)
+  if (/^(?:transfers\/)?(?:19|20)\d{2}\/\d{2}\/\d{2}\//.test(entry.destinationKey)) {
+    score += 10;
+  }
+
+  // Penalise deep nesting
+  const depth = (entry.destinationKey.match(/\//g) ?? []).length;
+  score -= depth;
+
+  // Penalise __dup files — they're Takeout artefacts for filename collisions
+  if (/__dup\d+/.test(entry.relativePath)) {
+    score -= 20;
+  }
+
+  return score;
+}
+
+/**
+ * Compute a fast 64 KB partial-content hash for a local file.
+ * For files smaller than 64 KB the entire content is hashed.
+ * Returns a hex-encoded SHA-256 digest.
+ */
+export function partialFileHash(filePath: string, bytes = PARTIAL_HASH_BYTES): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const hash = createHash('sha256');
+    const stream = createReadStream(filePath, { start: 0, end: bytes - 1 });
+    stream.on('data', (chunk: Buffer) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', reject);
+  });
+}
+
+/**
+ * Remove duplicate entries from a manifest by content fingerprint (file size + partial hash).
+ *
+ * Google Takeout exports the same photo/video into multiple album folders.
+ * Because each folder produces a different relative path (and thus a different S3 destination key),
+ * the uploader's key-based existence check cannot catch these cross-path duplicates.
+ *
+ * This function:
+ * 1. Groups entries by file size (zero-cost — no I/O).
+ * 2. For same-size groups, hashes the first 64 KB of each file to build a content fingerprint.
+ * 3. For each set of content-identical entries, keeps the highest-scored entry
+ *    (cleanest date path, shortest key, non-__dup filename).
+ *
+ * @returns The deduplicated manifest plus removal stats.
+ */
+export async function deduplicateManifest(
+  entries: ManifestEntry[],
+  onProgress?: ManifestProgressCallback,
+): Promise<DeduplicateManifestResult> {
+  if (entries.length === 0) {
+    return { entries: [], removedCount: 0, removedBytes: 0 };
+  }
+
+  // Phase 1 — group by file size (instant, no I/O)
+  const sizeGroups = new Map<number, ManifestEntry[]>();
+  for (const entry of entries) {
+    const list = sizeGroups.get(entry.size);
+    if (list) {
+      list.push(entry);
+    } else {
+      sizeGroups.set(entry.size, [entry]);
+    }
+  }
+
+  // Entries whose size is unique cannot be duplicates — keep them immediately
+  const kept: ManifestEntry[] = [];
+  const needsHash: ManifestEntry[] = [];
+
+  for (const group of sizeGroups.values()) {
+    if (group.length === 1) {
+      kept.push(group[0]);
+    } else {
+      needsHash.push(...group);
+    }
+  }
+
+  // Phase 2 — for same-size entries, compute partial hash and fingerprint
+  let hashed = 0;
+  const total = needsHash.length;
+  const fingerprintGroups = new Map<string, ManifestEntry[]>();
+
+  for (let i = 0; i < needsHash.length; i += IO_CONCURRENCY) {
+    const batch = needsHash.slice(i, i + IO_CONCURRENCY);
+    const hashes = await Promise.all(
+      batch.map(async (entry) => {
+        try {
+          return await partialFileHash(entry.sourcePath);
+        } catch {
+          // If we can't read the file, give it a unique fingerprint so it's never wrongly deduped
+          return `unhashable:${entry.sourcePath}`;
+        }
+      }),
+    );
+
+    for (let j = 0; j < batch.length; j++) {
+      const entry = batch[j];
+      const fp = `${entry.size}:${hashes[j]}`;
+      const list = fingerprintGroups.get(fp);
+      if (list) {
+        list.push(entry);
+      } else {
+        fingerprintGroups.set(fp, [entry]);
+      }
+    }
+
+    hashed += batch.length;
+    onProgress?.(hashed, total);
+  }
+
+  // Phase 3 — pick the best entry from each fingerprint group
+  let removedCount = 0;
+  let removedBytes = 0;
+
+  for (const group of fingerprintGroups.values()) {
+    if (group.length === 1) {
+      kept.push(group[0]);
+      continue;
+    }
+
+    // Sort by score descending, then by destinationKey for determinism
+    group.sort((a, b) => {
+      const scoreDiff = scoreEntryForKeep(b) - scoreEntryForKeep(a);
+      if (scoreDiff !== 0) return scoreDiff;
+      return a.destinationKey.localeCompare(b.destinationKey);
+    });
+
+    kept.push(group[0]); // keep the best one
+    for (let i = 1; i < group.length; i++) {
+      removedCount += 1;
+      removedBytes += group[i].size;
+    }
+  }
+
+  // Restore deterministic ordering
+  kept.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+
+  return { entries: kept, removedCount, removedBytes };
 }
