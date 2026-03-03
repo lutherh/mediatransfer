@@ -195,7 +195,8 @@ async function readSidecarDate(sidecarPath: string): Promise<Date | undefined> {
       const date = new Date(candidate);
       if (!Number.isNaN(date.getTime())) return date;
     }
-  } catch {
+  } catch (err) {
+    console.debug('[manifest] Failed to parse sidecar metadata', err);
     // ignore malformed sidecar and fall back to file metadata
   }
 
@@ -234,7 +235,8 @@ async function exists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
     return true;
-  } catch {
+  } catch (err) {
+    console.debug('[manifest] Path not accessible', { filePath, err });
     return false;
   }
 }

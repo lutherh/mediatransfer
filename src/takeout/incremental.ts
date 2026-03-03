@@ -64,7 +64,8 @@ export async function loadArchiveState(statePath: string): Promise<ArchiveState>
       return createEmptyArchiveState();
     }
     return parsed;
-  } catch {
+  } catch (err) {
+    console.debug('[incremental] Failed to load archive state, using empty state', err);
     return createEmptyArchiveState();
   }
 }
@@ -388,7 +389,8 @@ async function appendManifestJsonl(
 async function cleanupDir(dirPath: string): Promise<void> {
   try {
     await fs.rm(dirPath, { recursive: true, force: true });
-  } catch {
+  } catch (err) {
+    console.debug('[incremental] Best-effort cleanup failed', { dirPath, err });
     // best-effort cleanup
   }
 }
@@ -420,7 +422,8 @@ async function getUniqueDestinationPath(directory: string, fileName: string): Pr
   try {
     const dirEntries = await fs.readdir(directory);
     existingNames = new Set(dirEntries);
-  } catch {
+  } catch (err) {
+    console.debug('[incremental] Destination directory not readable, using base file name', { directory, err });
     // Directory doesn't exist yet — no collisions possible
     return path.join(directory, fileName);
   }

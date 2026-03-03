@@ -36,7 +36,10 @@ const envSchema = z.object({
   // Encryption
   ENCRYPTION_SECRET: z.string().min(16, {
     message: 'ENCRYPTION_SECRET must be at least 16 characters',
-  }),
+  }).refine(
+    (val) => !['change-me-to-a-random-secret', 'change-me'].includes(val.toLowerCase()),
+    { message: 'ENCRYPTION_SECRET is still set to the default placeholder. Generate a real secret.' },
+  ),
 
   // Scaleway Object Storage (optional — only needed when using Scaleway provider)
   SCW_ACCESS_KEY: z.string().min(1).optional(),
