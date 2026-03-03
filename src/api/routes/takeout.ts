@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Env } from '../../config/env.js';
 import type { UploadState, UploadStateItem } from '../../takeout/uploader.js';
 import { apiError } from '../errors.js';
+import { createJob, updateJob } from '../../db/jobs.js';
 
 type TakeoutAction =
   | 'scan'
@@ -47,6 +48,14 @@ type ActionCommand = {
 const MAX_OUTPUT_LINES = 300;
 const ACTION_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours — scan of many large archives can take >30 min
 const MANIFEST_COUNT_TIMEOUT_MS = 5000;
+
+// --- Transfer job tracking ---
+// When an upload or resume action runs, we create a TransferJob so
+// the /transfers page can display progress alongside other transfers.
+const UPLOAD_PROGRESS_RE = /items\s+\d+\/\d+\s+\((\d+)%\)/;
+const PROGRESS_UPDATE_INTERVAL_MS = 5_000; // throttle DB writes
+let currentTransferJobId: string | null = null;
+let lastProgressUpdateMs = 0;
 const ALLOWED_ACTIONS: TakeoutAction[] = [
   'scan',
   'upload',
@@ -181,6 +190,11 @@ function runAction(action: TakeoutAction): void {
   RUN_STATUS.success = undefined;
   RUN_STATUS.output = [];
 
+  // Create a TransferJob record so uploads appear on the /transfers page.
+  if (action === 'upload' || action === 'resume') {
+    createTransferJobForUpload();
+  }
+
   const runCommand = (index: number): void => {
     const current = commands[index];
     const child = spawn(current.command, current.args, {
@@ -208,6 +222,7 @@ function runAction(action: TakeoutAction): void {
       RUN_STATUS.success = false;
       currentProcess = null;
       currentTimeout = null;
+      finalizeTransferJob(false, 'Upload timed out');
     }, ACTION_TIMEOUT_MS);
 
     child.stdout.on('data', (chunk) => {
@@ -229,6 +244,7 @@ function runAction(action: TakeoutAction): void {
         clearTimeout(currentTimeout);
         currentTimeout = null;
       }
+      finalizeTransferJob(false, error.message);
     });
 
     child.on('close', (code) => {
@@ -252,6 +268,7 @@ function runAction(action: TakeoutAction): void {
       // After a successful upload or resume, automatically move completed archives
       // out of the input folder so the user doesn't have to do it manually.
       if (success && (action === 'upload' || action === 'resume')) {
+        finalizeTransferJob(true);
         appendOutput(`Action finished with code ${exitCode}`);
         appendOutput('✅ Upload complete — moving completed archives to uploaded-archives/...');
         RUN_STATUS.running = true;
@@ -266,6 +283,9 @@ function runAction(action: TakeoutAction): void {
 
       RUN_STATUS.running = false;
       RUN_STATUS.success = success;
+      if (!success) {
+        finalizeTransferJob(false, `Process exited with code ${exitCode}`);
+      }
       if (action === 'start-services' && !success) {
         appendStartServicesFailureHints();
       }
@@ -331,6 +351,65 @@ function appendStartServicesFailureHints(): void {
   appendOutput('Hint: Service startup failed. Run "docker compose logs postgres redis" and fix reported issues, then retry.');
 }
 
+// ---------------------------------------------------------------------------
+// Transfer-job helpers – fire-and-forget DB writes wrapped in try/catch so
+// a missing PostgreSQL never breaks the takeout flow.
+// ---------------------------------------------------------------------------
+
+/** Create a TransferJob record so the /transfers page can show the upload. */
+function createTransferJobForUpload(): void {
+  createJob({
+    sourceProvider: 'Google Takeout',
+    destProvider: 'Scaleway S3',
+  })
+    .then((job) => {
+      currentTransferJobId = job.id;
+      lastProgressUpdateMs = 0;
+      return updateJob(job.id, { status: 'IN_PROGRESS' as const, startedAt: new Date() });
+    })
+    .catch((err) => {
+      console.warn('[takeout] Could not create transfer job (DB may be unavailable):', err);
+    });
+}
+
+/** Throttled: update the transfer-job progress from upload output lines. */
+function maybeUpdateTransferProgress(lines: string[]): void {
+  if (!currentTransferJobId) return;
+
+  const now = Date.now();
+  if (now - lastProgressUpdateMs < PROGRESS_UPDATE_INTERVAL_MS) return;
+
+  // Scan the batch for the latest progress percentage
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const match = lines[i].match(UPLOAD_PROGRESS_RE);
+    if (match) {
+      const percent = parseInt(match[1], 10);
+      lastProgressUpdateMs = now;
+      updateJob(currentTransferJobId, { progress: percent / 100 }).catch((err) => {
+        console.debug('[takeout] Failed to update transfer-job progress:', err);
+      });
+      return;
+    }
+  }
+}
+
+/** Mark the current transfer job as COMPLETED or FAILED. */
+function finalizeTransferJob(success: boolean, errorMessage?: string): void {
+  if (!currentTransferJobId) return;
+
+  const jobId = currentTransferJobId;
+  currentTransferJobId = null;
+
+  updateJob(jobId, {
+    status: (success ? 'COMPLETED' : 'FAILED') as 'COMPLETED' | 'FAILED',
+    progress: success ? 1 : undefined,
+    errorMessage: success ? null : (errorMessage ?? 'Unknown error'),
+    completedAt: new Date(),
+  }).catch((err) => {
+    console.warn('[takeout] Failed to finalize transfer job:', err);
+  });
+}
+
 function appendOutput(chunk: string): void {
   const lines = chunk
     .split(/\r?\n/)
@@ -345,6 +424,9 @@ function appendOutput(chunk: string): void {
   if (RUN_STATUS.output.length > MAX_OUTPUT_LINES) {
     RUN_STATUS.output = RUN_STATUS.output.slice(RUN_STATUS.output.length - MAX_OUTPUT_LINES);
   }
+
+  // Throttled progress update for the transfer job
+  maybeUpdateTransferProgress(lines);
 }
 
 function parseScanProgress(): ScanProgress | undefined {
