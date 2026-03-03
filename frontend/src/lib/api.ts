@@ -743,9 +743,19 @@ export type DuplicatesResult = {
   bytesFreed: number;
 };
 
-/** Encode a raw S3 key to the base64url format the backend uses for :encodedKey params. */
+/**
+ * Encode a raw S3 key to the base64url format the backend uses for :encodedKey params.
+ * Uses TextEncoder so non-ASCII filenames (accented chars, emoji, CJK, etc.) are
+ * encoded identically to the Node.js backend's `Buffer.from(key, 'utf8').toString('base64url')`.
+ */
 export function encodeS3Key(key: string): string {
-  return btoa(key).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  const bytes = new TextEncoder().encode(key);
+  // Convert Uint8Array → binary string → standard base64 → base64url
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 export async function fetchDuplicates(apiToken?: string): Promise<DuplicatesResult> {
@@ -755,6 +765,26 @@ export async function fetchDuplicates(apiToken?: string): Promise<DuplicatesResu
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch duplicates');
+  }
+  return response.json();
+}
+
+// ── Dedup scan status polling ──────────────────────────────────────────────
+
+export type DedupScanStatus =
+  | { status: 'idle' }
+  | { status: 'scanning'; listed: number; totalFiles: number | null; startedAt: number }
+  | { status: 'done'; groups: DuplicateGroup[]; totalDuplicates: number; bytesFreed: number; completedAt: number }
+  | { status: 'error'; message: string; completedAt: number };
+
+/** Poll the server for the current dedup scan state (cached results or progress). */
+export async function fetchDedupScanStatus(apiToken?: string): Promise<DedupScanStatus> {
+  const url = new URL('/catalog/api/duplicates/scan/status', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch scan status');
   }
   return response.json();
 }
@@ -770,6 +800,9 @@ export type DupScanProgress =
  * Stream the duplicate scan via SSE, calling `onProgress` for each event.
  * Returns the final DuplicatesResult when complete.
  * The caller can abort by using an AbortController.
+ *
+ * If the stream ends without a 'done' or 'error' event (connection drop),
+ * rejects with a recognisable error so the caller can fall back to polling.
  */
 export function scanDuplicatesStream(
   onProgress: (event: DupScanProgress) => void,
@@ -780,11 +813,17 @@ export function scanDuplicatesStream(
     const url = new URL('/catalog/api/duplicates/scan', API_BASE_URL);
     if (apiToken) url.searchParams.set('apiToken', apiToken);
 
+    let settled = false;
+
     fetch(url.toString(), { signal })
       .then(async (response) => {
         if (!response.ok || !response.body) {
           const raw = await response.text();
-          reject(new Error(parseApiErrorMessage(raw) ?? 'Scan request failed'));
+          // 409 = scan already running — caller should poll instead
+          const msg = response.status === 409
+            ? 'SCAN_ALREADY_RUNNING'
+            : (parseApiErrorMessage(raw) ?? 'Scan request failed');
+          reject(new Error(msg));
           return;
         }
 
@@ -803,21 +842,31 @@ export function scanDuplicatesStream(
           buffer = lines.pop() ?? '';
 
           for (const chunk of lines) {
+            // Skip SSE comments (keepalive pings)
             const dataLine = chunk.split('\n').find((l) => l.startsWith('data: '));
             if (!dataLine) continue;
             try {
               const event = JSON.parse(dataLine.slice(6)) as DupScanProgress;
               onProgress(event);
               if (event.phase === 'done') {
+                settled = true;
                 resolve({ groups: event.groups, totalDuplicates: event.totalDuplicates, bytesFreed: event.bytesFreed });
               } else if (event.phase === 'error') {
+                settled = true;
                 reject(new Error(event.message));
               }
             } catch { /* skip malformed */ }
           }
         }
+
+        // Stream ended without a terminal event — connection was likely dropped
+        if (!settled) {
+          reject(new Error('STREAM_ENDED_UNEXPECTEDLY'));
+        }
       })
-      .catch(reject);
+      .catch((err) => {
+        if (!settled) reject(err);
+      });
   });
 }
 

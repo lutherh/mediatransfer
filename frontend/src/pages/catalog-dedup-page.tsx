@@ -5,6 +5,7 @@ import {
   catalogMediaUrl,
   deleteCatalogItems,
   encodeS3Key,
+  fetchDedupScanStatus,
   scanDuplicatesStream,
   type DuplicateGroup,
   type DuplicatesResult,
@@ -257,13 +258,54 @@ export function CatalogDedupPage() {
   const [data, setData] = useState<DuplicatesResult | null>(null);
   const [progress, setProgress] = useState<{ listed: number; totalFiles: number | null }>({ listed: 0, totalFiles: null });
   const abortRef = useRef<AbortController | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Local list of deleted raw keys (to hide groups optimistically)
   const [deletedKeys, setDeletedKeys] = useState<Set<string>>(() => new Set());
 
+  // ── Helpers ────────────────────────────────────────────────────────────
+
+  /** Stop any running poll interval. */
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  /** Start polling `/scan/status` until the server scan finishes. */
+  const pollForResult = useCallback(() => {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const status = await fetchDedupScanStatus(apiToken);
+        if (status.status === 'scanning') {
+          setProgress({ listed: status.listed, totalFiles: status.totalFiles });
+        } else if (status.status === 'done') {
+          stopPolling();
+          setData({ groups: status.groups, totalDuplicates: status.totalDuplicates, bytesFreed: status.bytesFreed });
+          setScanStatus('done');
+        } else if (status.status === 'error') {
+          stopPolling();
+          setScanError(status.message);
+          setScanStatus('error');
+        } else {
+          // idle — scan apparently finished while we weren't looking
+          stopPolling();
+          setScanStatus('error');
+          setScanError('Scan ended without results — please retry');
+        }
+      } catch {
+        // Network error — keep polling
+      }
+    }, 3_000);
+  }, [apiToken, stopPolling]);
+
+  /** Kick off a new scan via SSE, with automatic fallback to polling. */
   const startScan = useCallback(() => {
-    // Abort any in-flight scan
+    // Abort any in-flight scan / polling
     abortRef.current?.abort();
+    stopPolling();
     const controller = new AbortController();
     abortRef.current = controller;
 
@@ -289,15 +331,47 @@ export function CatalogDedupPage() {
       })
       .catch((err) => {
         if (controller.signal.aborted) return;
-        setScanError(err instanceof Error ? err.message : 'Scan failed');
+        const msg = err instanceof Error ? err.message : '';
+        // If the server says a scan is already running, or the SSE stream
+        // dropped mid-scan, fall back to polling for the cached result.
+        if (msg === 'SCAN_ALREADY_RUNNING' || msg === 'STREAM_ENDED_UNEXPECTEDLY') {
+          pollForResult();
+          return;
+        }
+        setScanError(msg || 'Scan failed');
         setScanStatus('error');
       });
-  }, [apiToken]);
+  }, [apiToken, pollForResult, stopPolling]);
 
-  // Abort scan on unmount
+  // On mount: check if the server already has scan results or a scan in progress
   useEffect(() => {
-    return () => abortRef.current?.abort();
-  }, []);
+    let cancelled = false;
+    fetchDedupScanStatus(apiToken)
+      .then((status) => {
+        if (cancelled) return;
+        if (status.status === 'done') {
+          setData({ groups: status.groups, totalDuplicates: status.totalDuplicates, bytesFreed: status.bytesFreed });
+          setScanStatus('done');
+        } else if (status.status === 'scanning') {
+          setScanStatus('scanning');
+          setProgress({ listed: status.listed, totalFiles: status.totalFiles });
+          pollForResult();
+        }
+        // idle / error — leave at idle, user can start a new scan
+      })
+      .catch(() => {
+        // Catalog unavailable — show idle, user can retry
+      });
+    return () => { cancelled = true; };
+  }, [apiToken, pollForResult]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      stopPolling();
+    };
+  }, [stopPolling]);
 
   const isLoading = scanStatus === 'scanning';
   const isError = scanStatus === 'error';
