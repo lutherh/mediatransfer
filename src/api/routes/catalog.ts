@@ -205,6 +205,26 @@ export async function registerCatalogRoutes(
     return { deleted: albumId };
   });
 
+  // ── Deduplication ──
+  app.get('/catalog/api/duplicates', async (req, reply) => {
+    if (!catalog) {
+      return reply.status(503).send({ error: 'CATALOG_UNAVAILABLE', message: 'Scaleway catalog is not configured' });
+    }
+    const groups = await catalog.findDuplicates();
+    const totalDuplicates = groups.reduce((sum, g) => sum + g.duplicateKeys.length, 0);
+    const bytesFreed = groups.reduce((sum, g) => sum + g.duplicateKeys.length * g.size, 0);
+    return { groups, totalDuplicates, bytesFreed };
+  });
+
+  app.post('/catalog/api/deduplicate', async (req, reply) => {
+    if (!catalog) {
+      return reply.status(503).send({ error: 'CATALOG_UNAVAILABLE', message: 'Scaleway catalog is not configured' });
+    }
+    const body = z.object({ dryRun: z.boolean().optional() }).parse(req.body);
+    const result = await catalog.deduplicateObjects({ dryRun: body.dryRun });
+    return result;
+  });
+
   app.get('/catalog/media/:encodedKey', async (req, reply) => {
     if (!catalog) {
       return reply.status(503).send({
