@@ -164,8 +164,8 @@ describe('frontend pages', () => {
 
   it('renders takeout progress page', async () => {
     renderRoute('/takeout');
-    expect(await screen.findByRole('heading', { name: 'Takeout Transfer Progress' })).toBeInTheDocument();
-    expect(await screen.findByText('Overall progress')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Google Takeout' })).toBeInTheDocument();
+    expect(await screen.findByText(/migrate your google photos library/i)).toBeInTheDocument();
   });
 
   it('renders transfer detail page', async () => {
@@ -197,7 +197,7 @@ describe('frontend pages', () => {
     expect(screen.getByRole('link', { name: 'Costs' })).toBeInTheDocument();
   });
 
-  it('shows stale stats warning when last scan failed but data exists', async () => {
+  it('shows error state when last scan failed', async () => {
     const api = await import('@/lib/api');
     vi.mocked(api.fetchTakeoutActionStatus).mockResolvedValueOnce({
       running: false,
@@ -208,6 +208,7 @@ describe('frontend pages', () => {
     });
 
     renderRoute('/takeout');
-    expect(await screen.findByText(/last scan failed.*stats below are from a previous/i)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /retry scan/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /continue with upload anyway/i })).toBeInTheDocument();
   });
 });
