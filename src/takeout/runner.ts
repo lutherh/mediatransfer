@@ -143,23 +143,15 @@ export async function runTakeoutScan(
     total: allArchives.length,
     percent: 2,
     detail: toExtract.length === 0
-      ? 'All archives already extracted'
+      ? 'All archives already extracted — rebuilding manifest...'
       : `${allArchives.length - toExtract.length} already extracted, ${toExtract.length} remaining`,
   });
 
-  // ── Short-circuit: nothing left to extract + manifest already built ────────
-  if (toExtract.length === 0) {
-    try {
-      const existingEntries = await loadManifestJsonl(manifestPath);
-      if (existingEntries.length > 0) {
-        onProgress?.({
-          phase: 'done', current: 1, total: 1, percent: 100,
-          detail: `No new archives — ${existingEntries.length.toLocaleString()} files already in manifest`,
-        });
-        return { manifestPath, mediaRoot: config.workDir, archives: [], entryCount: existingEntries.length };
-      }
-    } catch { /* no manifest yet — fall through to normalize+build */ }
-  }
+  // NOTE: We intentionally do NOT short-circuit when toExtract is empty.
+  // The scan-state file checkpoints extraction progress for crash-recovery.
+  // If all archives are marked as extracted, a prior run may have been
+  // interrupted after extraction but *before* normalize → manifest → clear.
+  // Always fall through so the full pipeline completes and the state is cleared.
 
   // ── Phase 1: Extract new archives one at a time (checkpointed) ────────────
   const effectiveExtractor = extractor ?? extractArchive;
