@@ -64,6 +64,19 @@ For large archives:
 npm run takeout:process -- --concurrency 2 --progress-interval-sec 2
 ```
 
+For low disk usage (auto-clean local files after each successfully uploaded archive):
+```bash
+npm run takeout:process -- --move-archive
+# or permanently delete archives after successful upload:
+npm run takeout:process -- --delete-archive
+```
+
+If you used `takeout:scan`/`takeout:upload` and want to reclaim disk safely afterward:
+```bash
+npm run takeout:cleanup -- --apply --move-archives
+# or: npm run takeout:cleanup -- --apply --delete-archives
+```
+
 ### API batch (app-created media only)
 ```bash
 npx tsx scripts/test-google-connection.ts                          # one-time OAuth

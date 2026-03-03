@@ -77,7 +77,7 @@ export function TakeoutProgressPage() {
 
       <Card className="space-y-3">
         <p className="text-sm font-medium text-slate-900">Run transfer actions (no terminal)</p>
-        <p className="text-xs text-slate-600">Recommended order: <span className="font-semibold">Start Services → Scan → Upload → Verify</span>. Use Resume if interrupted.</p>
+        <p className="text-xs text-slate-600">Recommended order: <span className="font-semibold">Start Services → Scan → Upload → Verify → Cleanup</span>. Use Resume if interrupted.</p>
         <div className="flex flex-wrap gap-2">
           <ActionButton
             action="start-services"
@@ -147,6 +147,40 @@ export function TakeoutProgressPage() {
             ) : null}
           </div>
         )}
+      </Card>
+
+      <Card className="space-y-3">
+        <p className="text-sm font-medium text-slate-900">Cleanup local files (reclaim disk)</p>
+        <p className="text-xs text-slate-600">
+          Cleanup is safe-guarded by upload state: items marked failed are not deleted. Use this after Upload/Verify.
+        </p>
+        <ul className="list-disc pl-5 space-y-1 text-xs text-slate-600">
+          <li><span className="font-semibold">Safe cleanup (recommended)</span>: removes extracted work files and moves archives to <span className="font-mono">uploaded-archives/</span>.</li>
+          <li><span className="font-semibold">Delete archives</span>: removes extracted work files and permanently deletes local archives.</li>
+        </ul>
+        <div className="flex flex-wrap gap-2">
+          <ActionButton
+            action="cleanup-move"
+            isRunning={isActionRunning}
+            isPending={actionMutation.isPending}
+            disabled={!hasManifest}
+            onRun={actionMutation.mutate}
+          >
+            Cleanup (Move Archives)
+          </ActionButton>
+          <ActionButton
+            action="cleanup-delete"
+            isRunning={isActionRunning}
+            isPending={actionMutation.isPending}
+            disabled={!hasManifest}
+            onRun={actionMutation.mutate}
+          >
+            Cleanup (Delete Archives)
+          </ActionButton>
+        </div>
+        {!hasManifest ? (
+          <p className="text-xs text-slate-600">Run <strong>Scan</strong> first so cleanup can validate uploaded items.</p>
+        ) : null}
       </Card>
 
       {staleStats ? (
@@ -343,17 +377,29 @@ function renderActionStatus(
   success: boolean | undefined,
   exitCode: number | undefined,
 ): string {
+  const actionLabel = action ? mapActionLabel(action) : undefined;
+
   if (running && action) {
-    return `Running: ${action}`;
+    return `Running: ${actionLabel}`;
   }
 
   if (typeof success === 'boolean' && action) {
     return success
-      ? `Last run: ${action} completed successfully`
-      : `Last run: ${action} failed (exit code ${typeof exitCode === 'number' ? exitCode : 'unknown'})`;
+      ? `Last run: ${actionLabel} completed successfully`
+      : `Last run: ${actionLabel} failed (exit code ${typeof exitCode === 'number' ? exitCode : 'unknown'})`;
   }
 
   return 'No action is running.';
+}
+
+function mapActionLabel(action: TakeoutAction): string {
+  if (action === 'cleanup-move') {
+    return 'cleanup (move archives)';
+  }
+  if (action === 'cleanup-delete') {
+    return 'cleanup (delete archives)';
+  }
+  return action;
 }
 
 function MetricCard({ label, value }: { label: string; value: number }): ReactElement {
