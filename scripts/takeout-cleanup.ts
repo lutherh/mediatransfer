@@ -43,6 +43,7 @@ const deleteArchives = args.includes('--delete-archives');
 const moveArchives = args.includes('--move-archives');
 const backfillState = args.includes('--backfill-state');
 const force = args.includes('--force'); // bypass missing-state check; still respects archive-state.json
+const includeUnscanned = args.includes('--include-unscanned'); // also handle archives not in archive-state when safe
 const moveTargetArg = readStringArg(args, '--move-dir');
 const moveTarget = moveTargetArg
   ? path.resolve(moveTargetArg)
@@ -159,12 +160,21 @@ const completedArchiveNames = new Set(
     .map(([name]) => name),
 );
 
-const eligibleInputArchives = inputArchives.filter((archivePath) =>
-  completedArchiveNames.has(path.basename(archivePath))
-);
+// When --include-unscanned is set AND all files are safely uploaded (missing=0, failed=0),
+// treat archives not tracked in archive-state.json as eligible too — they were added after
+// the last scan and contain nothing new (everything already uploaded).
+const allSafe = missing === 0 && failed === 0;
+const unscannedArchives = includeUnscanned && allSafe
+  ? inputArchives.filter((a) => !completedArchiveNames.has(path.basename(a)))
+  : [];
+
+const eligibleInputArchives = [
+  ...inputArchives.filter((archivePath) => completedArchiveNames.has(path.basename(archivePath))),
+  ...unscannedArchives,
+];
 
 const protectedInputArchives = inputArchives.filter((archivePath) =>
-  !completedArchiveNames.has(path.basename(archivePath))
+  !completedArchiveNames.has(path.basename(archivePath)) && !unscannedArchives.includes(archivePath)
 );
 
 let inputSize = 0;
@@ -183,6 +193,9 @@ console.log(`   Input archives eligible (${eligibleInputArchives.length}/${input
 
 if (protectedInputArchives.length > 0) {
   console.log(`   🔒 Protected (not completed): ${protectedInputArchives.length}`);
+}
+if (unscannedArchives.length > 0) {
+  console.log(`   📂 Unscanned (will include because all uploads done): ${unscannedArchives.length}`);
 }
 
 let willFree = extractedSize + normalizedSize + tempSize;
@@ -239,7 +252,14 @@ if (deleteArchives && eligibleInputArchives.length > 0) {
 if (actions.length === 0) {
   if ((deleteArchives || moveArchives) && inputArchives.length > 0 && eligibleInputArchives.length === 0) {
     console.log('✅ No archive cleanup actions planned.');
-    console.log('   Safety mode: no input archive is marked completed in archive-state.json.');
+    if (protectedInputArchives.length > 0) {
+      console.log(`   ${protectedInputArchives.length} archive(s) in input/ are not in archive-state.json (never scanned).`);
+      if (!includeUnscanned) {
+        console.log('   If all files are uploaded, re-run with --include-unscanned to also clean those up.');
+      } else if (!allSafe) {
+        console.log('   --include-unscanned requires missing=0 and failed=0; fix uploads first.');
+      }
+    }
   }
   console.log('✅ Nothing to clean up — disk is already clean.');
   process.exit(0);

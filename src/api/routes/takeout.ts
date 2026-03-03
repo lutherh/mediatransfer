@@ -270,10 +270,10 @@ function resolveActionCommand(action: TakeoutAction): string {
     upload: 'takeout:upload',
     verify: 'takeout:verify',
     resume: 'takeout:resume',
-    'cleanup-move': 'takeout:cleanup -- --apply --move-archives',
-    'cleanup-delete': 'takeout:cleanup -- --apply --delete-archives',
-    'cleanup-force-move': 'takeout:cleanup -- --apply --move-archives --force',
-    'cleanup-force-delete': 'takeout:cleanup -- --apply --delete-archives --force',
+    'cleanup-move': 'takeout:cleanup -- --apply --move-archives --include-unscanned',
+    'cleanup-delete': 'takeout:cleanup -- --apply --delete-archives --include-unscanned',
+    'cleanup-force-move': 'takeout:cleanup -- --apply --move-archives --force --include-unscanned',
+    'cleanup-force-delete': 'takeout:cleanup -- --apply --delete-archives --force --include-unscanned',
   };
 
   return `npm run ${scriptByAction[action]}`;
