@@ -46,6 +46,17 @@ type ActionCommand = {
 const MAX_OUTPUT_LINES = 300;
 const ACTION_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours — scan of many large archives can take >30 min
 const MANIFEST_COUNT_TIMEOUT_MS = 5000;
+const ALLOWED_ACTIONS: TakeoutAction[] = [
+  'scan',
+  'upload',
+  'verify',
+  'resume',
+  'start-services',
+  'cleanup-move',
+  'cleanup-delete',
+  'cleanup-force-move',
+  'cleanup-force-delete',
+];
 const RUN_STATUS: ActionStatus = {
   running: false,
   output: [],
@@ -137,17 +148,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     if (!isAction(action)) {
       return reply.code(400).send({
         ...apiError('UNKNOWN_ACTION', `Unknown action: ${String(action)}`),
-        allowedActions: [
-          'scan',
-          'upload',
-          'verify',
-          'resume',
-          'start-services',
-          'cleanup-move',
-          'cleanup-delete',
-          'cleanup-force-move',
-          'cleanup-force-delete',
-        ],
+        allowedActions: ALLOWED_ACTIONS,
       });
     }
 
@@ -386,15 +387,10 @@ function snapshotStatus(): ActionStatus {
 }
 
 function isAction(value: string | undefined): value is TakeoutAction {
-  return value === 'scan'
-    || value === 'upload'
-    || value === 'verify'
-    || value === 'resume'
-    || value === 'start-services'
-    || value === 'cleanup-move'
-    || value === 'cleanup-delete'
-    || value === 'cleanup-force-move'
-    || value === 'cleanup-force-delete';
+  if (!value) {
+    return false;
+  }
+  return ALLOWED_ACTIONS.includes(value as TakeoutAction);
 }
 
 /**

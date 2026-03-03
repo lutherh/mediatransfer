@@ -45,10 +45,9 @@ export async function registerUploadRoutes(
   app.post('/uploads', {
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
   }, async (req, reply) => {
-    if (!uploads) {
-      return reply.code(503).send({
-        ...apiError('UPLOAD_SERVICE_UNAVAILABLE', 'Upload service unavailable. Configure Scaleway storage credentials.'),
-      });
+    const uploadService = requireUploads(uploads, reply);
+    if (!uploadService) {
+      return;
     }
     const parts = req.files();
     const results: UploadResult[] = [];
@@ -71,7 +70,7 @@ export async function registerUploadRoutes(
         const contentType = part.mimetype || 'application/octet-stream';
 
         // Check for duplicate by hash
-        const existing = await uploads.findByHash(digest);
+        const existing = await uploadService.findByHash(digest);
         if (existing) {
           results.push({
             filename,
@@ -103,10 +102,10 @@ export async function registerUploadRoutes(
 
         // Upload to storage
         const stream = createReadStream(tempFilePath);
-        await uploads.uploadToStorage(s3Key, stream, contentType);
+        await uploadService.uploadToStorage(s3Key, stream, contentType);
 
         // Save media item record
-        const mediaItem = await uploads.createMediaItem({
+        const mediaItem = await uploadService.createMediaItem({
           filename,
           s3Key,
           sha256: digest,
@@ -171,10 +170,9 @@ export async function registerUploadRoutes(
    * List uploaded media items with pagination.
    */
   app.get('/uploads', async (req, reply) => {
-    if (!uploads) {
-      return reply.code(503).send({
-        ...apiError('UPLOAD_SERVICE_UNAVAILABLE', 'Upload service unavailable. Configure Scaleway storage credentials.'),
-      });
+    const uploadService = requireUploads(uploads, reply);
+    if (!uploadService) {
+      return;
     }
 
     const query = req.query as {
@@ -187,8 +185,8 @@ export async function registerUploadRoutes(
     const offset = Math.max(Number(query.offset) || 0, 0);
 
     const [items, total] = await Promise.all([
-      uploads.listMediaItems({ source: query.source }, limit, offset),
-      uploads.countMediaItems(),
+      uploadService.listMediaItems({ source: query.source }, limit, offset),
+      uploadService.countMediaItems(),
     ]);
 
     return {
@@ -205,15 +203,25 @@ export async function registerUploadRoutes(
    * Quick stats about the media library.
    */
   app.get('/uploads/stats', async (_req, reply) => {
-    if (!uploads) {
-      return reply.code(503).send({
-        ...apiError('UPLOAD_SERVICE_UNAVAILABLE', 'Upload service unavailable. Configure Scaleway storage credentials.'),
-      });
+    const uploadService = requireUploads(uploads, reply);
+    if (!uploadService) {
+      return;
     }
 
-    const total = await uploads.countMediaItems();
+    const total = await uploadService.countMediaItems();
     return { totalItems: total };
   });
+}
+
+function requireUploads(uploads: UploadService | undefined, reply: { code: (status: number) => { send: (payload: unknown) => unknown } }): UploadService | null {
+  if (!uploads) {
+    reply.code(503).send({
+      ...apiError('UPLOAD_SERVICE_UNAVAILABLE', 'Upload service unavailable. Configure Scaleway storage credentials.'),
+    });
+    return null;
+  }
+
+  return uploads;
 }
 
 type UploadResult = {

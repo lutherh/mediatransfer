@@ -52,12 +52,13 @@ export async function registerCatalogRoutes(
   });
 
   app.get('/catalog/api/items', async (req, reply) => {
-    if (!catalog) {
-      return reply.status(503).send(apiError('CATALOG_UNAVAILABLE', 'Scaleway catalog is not configured'));
+    const catalogService = requireCatalog(catalog, reply);
+    if (!catalogService) {
+      return;
     }
 
     const query = listQuerySchema.parse(req.query);
-    const page = await catalog.listPage({
+    const page = await catalogService.listPage({
       max: query.max,
       token: query.token,
       prefix: query.prefix,
@@ -66,54 +67,59 @@ export async function registerCatalogRoutes(
   });
 
   app.get('/catalog/api/stats', async (_req, reply) => {
-    if (!catalog) {
-      return reply.status(503).send(apiError('CATALOG_UNAVAILABLE', 'Scaleway catalog is not configured'));
+    const catalogService = requireCatalog(catalog, reply);
+    if (!catalogService) {
+      return;
     }
 
-    const stats = await catalog.getStats();
+    const stats = await catalogService.getStats();
     return stats;
   });
 
   app.get('/catalog/api/items/all', async (req, reply) => {
-    if (!catalog) {
-      return reply.status(503).send(apiError('CATALOG_UNAVAILABLE', 'Scaleway catalog is not configured'));
+    const catalogService = requireCatalog(catalog, reply);
+    if (!catalogService) {
+      return;
     }
 
     const query = z.object({ prefix: z.string().optional() }).parse(req.query);
-    const items = await catalog.listAll(query.prefix);
+    const items = await catalogService.listAll(query.prefix);
     return { items };
   });
 
   app.delete('/catalog/api/items', async (req, reply) => {
-    if (!catalog) {
-      return reply.status(503).send(apiError('CATALOG_UNAVAILABLE', 'Scaleway catalog is not configured'));
+    const catalogService = requireCatalog(catalog, reply);
+    if (!catalogService) {
+      return;
     }
 
     const { encodedKeys } = deleteBodySchema.parse(req.body);
-    const result = await catalog.deleteObjects(encodedKeys);
+    const result = await catalogService.deleteObjects(encodedKeys);
     return result;
   });
 
   app.patch('/catalog/api/items/move', async (req, reply) => {
-    if (!catalog) {
-      return reply.status(503).send(apiError('CATALOG_UNAVAILABLE', 'Scaleway catalog is not configured'));
+    const catalogService = requireCatalog(catalog, reply);
+    if (!catalogService) {
+      return;
     }
 
     const { encodedKey, newDatePrefix } = moveBodySchema.parse(req.body);
-    const result = await catalog.moveObject(encodedKey, newDatePrefix);
+    const result = await catalogService.moveObject(encodedKey, newDatePrefix);
     return result;
   });
 
   app.patch('/catalog/api/items/bulk-move', async (req, reply) => {
-    if (!catalog) {
-      return reply.status(503).send(apiError('CATALOG_UNAVAILABLE', 'Scaleway catalog is not configured'));
+    const catalogService = requireCatalog(catalog, reply);
+    if (!catalogService) {
+      return;
     }
 
     const { moves } = bulkMoveBodySchema.parse(req.body);
     const results = { moved: [] as { from: string; to: string }[], failed: [] as { key: string; error: string }[] };
     for (const move of moves) {
       try {
-        const result = await catalog.moveObject(move.encodedKey, move.newDatePrefix);
+        const result = await catalogService.moveObject(move.encodedKey, move.newDatePrefix);
         results.moved.push(result);
       } catch (err) {
         results.failed.push({ key: move.encodedKey, error: String(err) });
@@ -123,36 +129,39 @@ export async function registerCatalogRoutes(
   });
 
   app.get('/catalog/api/duplicates', async (_req, reply) => {
-    if (!catalog) {
-      return reply.status(503).send(apiError('CATALOG_UNAVAILABLE', 'Scaleway catalog is not configured'));
+    const catalogService = requireCatalog(catalog, reply);
+    if (!catalogService) {
+      return;
     }
 
-    const groups = await catalog.findDuplicates();
+    const groups = await catalogService.findDuplicates();
     const totalDuplicates = groups.reduce((sum, group) => sum + group.duplicateKeys.length, 0);
     const bytesFreed = groups.reduce((sum, group) => sum + group.duplicateKeys.length * group.size, 0);
     return { groups, totalDuplicates, bytesFreed };
   });
 
   app.post('/catalog/api/deduplicate', async (req, reply) => {
-    if (!catalog) {
-      return reply.status(503).send(apiError('CATALOG_UNAVAILABLE', 'Scaleway catalog is not configured'));
+    const catalogService = requireCatalog(catalog, reply);
+    if (!catalogService) {
+      return;
     }
 
     const body = z.object({ dryRun: z.boolean().optional() }).parse(req.body);
-    const result = await catalog.deduplicateObjects({ dryRun: body.dryRun });
+    const result = await catalogService.deduplicateObjects({ dryRun: body.dryRun });
     return result;
   });
 
   app.get('/catalog/media/:encodedKey', async (req, reply) => {
-    if (!catalog) {
-      return reply.status(503).send(apiError('CATALOG_UNAVAILABLE', 'Scaleway catalog is not configured'));
+    const catalogService = requireCatalog(catalog, reply);
+    if (!catalogService) {
+      return;
     }
 
     const { encodedKey } = mediaParamsSchema.parse(req.params);
 
     let media;
     try {
-      media = await catalog.getObject(encodedKey);
+      media = await catalogService.getObject(encodedKey);
     } catch (error) {
       if (isCatalogObjectNotFound(error)) {
         return reply.status(404).send({
@@ -205,14 +214,15 @@ export async function registerCatalogRoutes(
   });
 
   app.get('/catalog/api/exif/:encodedKey', async (req, reply) => {
-    if (!catalog) {
-      return reply.status(503).send(apiError('CATALOG_UNAVAILABLE', 'Scaleway catalog is not configured'));
+    const catalogService = requireCatalog(catalog, reply);
+    if (!catalogService) {
+      return;
     }
 
     const { encodedKey } = mediaParamsSchema.parse(req.params);
 
     try {
-      const { buffer, contentType, contentLength } = await catalog.getObjectBuffer(encodedKey, 65536);
+      const { buffer, contentType, contentLength } = await catalogService.getObjectBuffer(encodedKey, 65536);
       const exif = await extractExifMetadata(buffer);
 
       let rawExif: Record<string, unknown> | undefined;
@@ -249,6 +259,15 @@ export async function registerCatalogRoutes(
       throw error;
     }
   });
+}
+
+function requireCatalog(catalog: CatalogService | undefined, reply: { status: (code: number) => { send: (payload: unknown) => unknown } }): CatalogService | null {
+  if (!catalog) {
+    reply.status(503).send(apiError('CATALOG_UNAVAILABLE', 'Scaleway catalog is not configured'));
+    return null;
+  }
+
+  return catalog;
 }
 
 function normalizeEtag(value: string | undefined): string | undefined {
