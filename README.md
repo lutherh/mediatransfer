@@ -37,7 +37,8 @@ Copy `.env.example` → `.env`. Required values:
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google Cloud Console → OAuth |
 | `GOOGLE_REDIRECT_URI` | `http://localhost:5173/auth/google/callback` |
 
-Defaults are fine for `DATABASE_URL`, `REDIS_URL`, `ENCRYPTION_SECRET`, and other values.
+Defaults are fine for `DATABASE_URL`, `REDIS_URL`, and most other values.
+Set `ENCRYPTION_SECRET` to a real secret (at least 16 chars, not the placeholder).
 
 ## Transfer flows
 

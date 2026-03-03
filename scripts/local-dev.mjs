@@ -1,5 +1,6 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawn, execSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,11 +29,7 @@ const MAX_RESTARTS_PER_WINDOW = 8;
 
 function runCommand(command, args, cwd) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      stdio: 'inherit',
-      shell: isWindows,
-    });
+    const child = spawnProcess(command, args, cwd);
 
     child.on('error', (error) => reject(error));
     child.on('exit', (code) => {
@@ -46,11 +43,60 @@ function runCommand(command, args, cwd) {
 }
 
 function startLongRunning(command, args, cwd) {
+  return spawnProcess(command, args, cwd);
+}
+
+function quoteCmdArg(value) {
+  if (!/[\s"^&|<>]/.test(value)) {
+    return value;
+  }
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function spawnProcess(command, args, cwd) {
+  if (isWindows && command.toLowerCase().endsWith('.cmd')) {
+    const comspec = process.env.ComSpec || 'cmd.exe';
+    const commandLine = [command, ...args].map(quoteCmdArg).join(' ');
+    return spawn(comspec, ['/d', '/s', '/c', commandLine], {
+      cwd,
+      stdio: 'inherit',
+      shell: false,
+    });
+  }
+
   return spawn(command, args, {
     cwd,
     stdio: 'inherit',
-    shell: isWindows,
+    shell: false,
   });
+}
+
+function ensureEncryptionSecret(envPath) {
+  const placeholderValues = new Set(['change-me-to-a-random-secret', 'change-me', '']);
+  const raw = readFileSync(envPath, 'utf8');
+  const lines = raw.split(/\r?\n/);
+
+  let updated = false;
+  const nextLines = lines.map((line) => {
+    const match = line.match(/^\s*ENCRYPTION_SECRET\s*=\s*(.*)\s*$/);
+    if (!match) {
+      return line;
+    }
+
+    const originalValue = (match[1] ?? '').trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1');
+    if (!placeholderValues.has(originalValue.toLowerCase())) {
+      return line;
+    }
+
+    const generated = randomBytes(24).toString('hex');
+    updated = true;
+    return `ENCRYPTION_SECRET=${generated}`;
+  });
+
+  if (updated) {
+    writeFileSync(envPath, nextLines.join('\n'), 'utf8');
+    console.log('Generated a secure ENCRYPTION_SECRET in .env for local development.');
+  }
 }
 
 function sleep(ms) {
@@ -237,6 +283,8 @@ async function runSetup() {
     console.error('Missing .env file. Create it from .env.example and set credentials before starting.');
     process.exit(1);
   }
+
+  ensureEncryptionSecret(envPath);
 
   await ensureDependencies();
   await ensureDockerRunning();
