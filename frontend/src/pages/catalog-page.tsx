@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import {
   catalogMediaUrl,
@@ -240,9 +241,17 @@ export function CatalogPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl sm:text-2xl font-semibold">Catalog</h1>
-        <p className="text-sm text-slate-600">Browse media stored in Scaleway Object Storage.</p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-semibold">Catalog</h1>
+          <p className="text-sm text-slate-600">Browse media stored in Scaleway Object Storage.</p>
+        </div>
+        <Link
+          to="/catalog/dedup"
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          🔍 Deduplication
+        </Link>
       </div>
 
       {/* Stats */}
