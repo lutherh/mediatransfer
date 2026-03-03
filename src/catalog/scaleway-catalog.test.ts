@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Readable } from 'node:stream';
-import { ScalewayCatalogService, decodeKey, encodeKey } from './scaleway-catalog.js';
+import {
+  ScalewayCatalogService,
+  buildDuplicateGroups,
+  decodeKey,
+  encodeKey,
+  scoreKeyForKeep,
+} from './scaleway-catalog.js';
 
 function makeService(send: ReturnType<typeof vi.fn>) {
   return new ScalewayCatalogService(
@@ -317,6 +323,383 @@ describe('scaleway catalog service', () => {
       await service.getStats();
       // Second call should use cache
       expect(callCount).toBe(1);
+    });
+  });
+
+  // ── Deduplication tests ──────────────────────────────────────
+
+  describe('scoreKeyForKeep', () => {
+    it('scores keys with proper date path higher', () => {
+      const datePathScore = scoreKeyForKeep('2020/03/15/photo.jpg');
+      const flatScore = scoreKeyForKeep('archive/photo.jpg');
+      expect(datePathScore).toBeGreaterThan(flatScore);
+    });
+
+    it('penalises deeply nested keys', () => {
+      const shallow = scoreKeyForKeep('2020/03/15/photo.jpg');
+      const deep = scoreKeyForKeep('backup/archive/old/2020/03/15/subfolder/photo.jpg');
+      expect(shallow).toBeGreaterThan(deep);
+    });
+
+    it('returns positive score for standard date-path keys', () => {
+      expect(scoreKeyForKeep('2020/01/01/img.jpg')).toBeGreaterThan(0);
+    });
+
+    it('returns lower score for non-date paths', () => {
+      expect(scoreKeyForKeep('random/folder/img.jpg')).toBeLessThan(
+        scoreKeyForKeep('2020/01/01/img.jpg'),
+      );
+    });
+  });
+
+  describe('buildDuplicateGroups', () => {
+    it('returns empty array when no duplicates', () => {
+      const objects = [
+        { key: '2020/01/01/a.jpg', size: 100, etag: 'aaa' },
+        { key: '2020/01/02/b.jpg', size: 200, etag: 'bbb' },
+        { key: '2020/01/03/c.jpg', size: 300, etag: 'ccc' },
+      ];
+      expect(buildDuplicateGroups(objects)).toEqual([]);
+    });
+
+    it('groups duplicates by size + etag', () => {
+      const objects = [
+        { key: '2020/01/01/a.jpg', size: 100, etag: 'aaa' },
+        { key: '2021/06/15/a_copy.jpg', size: 100, etag: 'aaa' },
+        { key: '2020/01/02/b.jpg', size: 200, etag: 'bbb' },
+      ];
+      const groups = buildDuplicateGroups(objects);
+      expect(groups).toHaveLength(1);
+      expect(groups[0]!.duplicateKeys).toHaveLength(1);
+    });
+
+    it('keeps the key with proper date path', () => {
+      const objects = [
+        { key: 'archive/flat/photo.jpg', size: 500, etag: 'eee' },
+        { key: '2020/03/15/photo.jpg', size: 500, etag: 'eee' },
+      ];
+      const groups = buildDuplicateGroups(objects);
+      expect(groups).toHaveLength(1);
+      expect(groups[0]!.keepKey).toBe('2020/03/15/photo.jpg');
+      expect(groups[0]!.duplicateKeys).toEqual(['archive/flat/photo.jpg']);
+    });
+
+    it('handles triple duplicates — keeps one, removes two', () => {
+      const objects = [
+        { key: 'backup/old/photo.jpg', size: 1000, etag: 'fff' },
+        { key: '2020/06/01/photo.jpg', size: 1000, etag: 'fff' },
+        { key: 'archive/2020/photo.jpg', size: 1000, etag: 'fff' },
+      ];
+      const groups = buildDuplicateGroups(objects);
+      expect(groups).toHaveLength(1);
+      expect(groups[0]!.keepKey).toBe('2020/06/01/photo.jpg');
+      expect(groups[0]!.duplicateKeys).toHaveLength(2);
+    });
+
+    it('does not group items with same size but different etag', () => {
+      const objects = [
+        { key: '2020/01/01/a.jpg', size: 100, etag: 'aaa' },
+        { key: '2020/01/02/b.jpg', size: 100, etag: 'bbb' },
+      ];
+      expect(buildDuplicateGroups(objects)).toEqual([]);
+    });
+
+    it('does not group items with same etag but different size', () => {
+      const objects = [
+        { key: '2020/01/01/a.jpg', size: 100, etag: 'aaa' },
+        { key: '2020/01/02/b.jpg', size: 200, etag: 'aaa' },
+      ];
+      expect(buildDuplicateGroups(objects)).toEqual([]);
+    });
+
+    it('sorts groups by bytes wasted descending', () => {
+      const objects = [
+        // group A: 1 dup × 100 = 100 bytes wasted
+        { key: '2020/01/01/small.jpg', size: 100, etag: 'aaa' },
+        { key: '2020/01/02/small_copy.jpg', size: 100, etag: 'aaa' },
+        // group B: 1 dup × 5000 = 5000 bytes wasted
+        { key: '2020/01/01/big.mp4', size: 5000, etag: 'bbb' },
+        { key: '2020/01/02/big_copy.mp4', size: 5000, etag: 'bbb' },
+      ];
+      const groups = buildDuplicateGroups(objects);
+      expect(groups).toHaveLength(2);
+      expect(groups[0]!.size).toBe(5000);
+      expect(groups[1]!.size).toBe(100);
+    });
+
+    it('uses lexicographic order as tiebreaker when scores are equal', () => {
+      const objects = [
+        { key: '2020/01/01/z_photo.jpg', size: 100, etag: 'aaa' },
+        { key: '2020/01/01/a_photo.jpg', size: 100, etag: 'aaa' },
+      ];
+      const groups = buildDuplicateGroups(objects);
+      expect(groups).toHaveLength(1);
+      // Both have same date path score, so lexicographically smaller wins
+      expect(groups[0]!.keepKey).toBe('2020/01/01/a_photo.jpg');
+      expect(groups[0]!.duplicateKeys).toEqual(['2020/01/01/z_photo.jpg']);
+    });
+
+    it('handles multiple independent duplicate groups', () => {
+      const objects = [
+        { key: '2020/01/01/a.jpg', size: 100, etag: 'aaa' },
+        { key: '2020/01/02/a_copy.jpg', size: 100, etag: 'aaa' },
+        { key: '2020/03/01/b.mp4', size: 2000, etag: 'bbb' },
+        { key: '2020/03/02/b_copy.mp4', size: 2000, etag: 'bbb' },
+        { key: '2020/05/01/c.png', size: 500, etag: 'ccc' }, // unique
+      ];
+      const groups = buildDuplicateGroups(objects);
+      expect(groups).toHaveLength(2);
+      const allDupKeys = groups.flatMap((g) => g.duplicateKeys);
+      expect(allDupKeys).not.toContain('2020/05/01/c.png');
+    });
+
+    it('handles empty input', () => {
+      expect(buildDuplicateGroups([])).toEqual([]);
+    });
+  });
+
+  describe('findDuplicates', () => {
+    it('returns duplicate groups from S3 listing', async () => {
+      const send = vi.fn(async () => ({
+        Contents: [
+          { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01'), ETag: '"abc123"' },
+          { Key: '2021/06/15/a_copy.jpg', Size: 100, LastModified: new Date('2021-06-15'), ETag: '"abc123"' },
+          { Key: '2020/01/02/b.mp4', Size: 5000, LastModified: new Date('2020-01-02'), ETag: '"def456"' },
+        ],
+        IsTruncated: false,
+      }));
+
+      const service = makeService(send);
+      const groups = await service.findDuplicates();
+      expect(groups).toHaveLength(1);
+      expect(groups[0]!.duplicateKeys).toHaveLength(1);
+      expect(groups[0]!.size).toBe(100);
+    });
+
+    it('returns empty when no duplicates exist', async () => {
+      const send = vi.fn(async () => ({
+        Contents: [
+          { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01'), ETag: '"aaa"' },
+          { Key: '2020/01/02/b.jpg', Size: 200, LastModified: new Date('2020-01-02'), ETag: '"bbb"' },
+        ],
+        IsTruncated: false,
+      }));
+
+      const service = makeService(send);
+      const groups = await service.findDuplicates();
+      expect(groups).toEqual([]);
+    });
+
+    it('handles pagination when scanning for duplicates', async () => {
+      let callCount = 0;
+      const send = vi.fn(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            Contents: [
+              { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01'), ETag: '"abc"' },
+            ],
+            IsTruncated: true,
+            NextContinuationToken: 'tok1',
+          };
+        }
+        return {
+          Contents: [
+            { Key: '2021/06/15/a_copy.jpg', Size: 100, LastModified: new Date('2021-06-15'), ETag: '"abc"' },
+          ],
+          IsTruncated: false,
+        };
+      });
+
+      const service = makeService(send);
+      const groups = await service.findDuplicates();
+      expect(groups).toHaveLength(1);
+      expect(callCount).toBe(2);
+    });
+
+    it('skips objects without ETag', async () => {
+      const send = vi.fn(async () => ({
+        Contents: [
+          { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01'), ETag: '"abc"' },
+          { Key: '2020/01/02/b.jpg', Size: 100, LastModified: new Date('2020-01-02') }, // no ETag
+        ],
+        IsTruncated: false,
+      }));
+
+      const service = makeService(send);
+      const groups = await service.findDuplicates();
+      expect(groups).toEqual([]);
+    });
+
+    it('normalizes etag quotes for comparison', async () => {
+      const send = vi.fn(async () => ({
+        Contents: [
+          { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01'), ETag: '"abc123"' },
+          { Key: '2020/01/02/a_dup.jpg', Size: 100, LastModified: new Date('2020-01-02'), ETag: 'abc123' },
+        ],
+        IsTruncated: false,
+      }));
+
+      const service = makeService(send);
+      const groups = await service.findDuplicates();
+      // Should match since ETags are the same after normalization
+      expect(groups).toHaveLength(1);
+    });
+
+    it('filters non-media files from duplicate detection', async () => {
+      const send = vi.fn(async () => ({
+        Contents: [
+          { Key: '_albums.json', Size: 50, LastModified: new Date('2024-01-01'), ETag: '"json1"' },
+          { Key: 'readme.txt', Size: 50, LastModified: new Date('2024-01-01'), ETag: '"json1"' },
+          { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01'), ETag: '"img1"' },
+        ],
+        IsTruncated: false,
+      }));
+
+      const service = makeService(send);
+      const groups = await service.findDuplicates();
+      // Non-media files with same size+etag should not be grouped
+      expect(groups).toEqual([]);
+    });
+  });
+
+  describe('deduplicateObjects', () => {
+    function makeDedupSend(contentsList: any[]) {
+      return vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'ListObjectsV2Command') {
+          return {
+            Contents: contentsList,
+            IsTruncated: false,
+          };
+        }
+        if (name === 'DeleteObjectsCommand') {
+          const objects = cmd.input?.Delete?.Objects ?? [];
+          return {
+            Deleted: objects.map((o: any) => ({ Key: o.Key })),
+            Errors: [],
+          };
+        }
+        return {};
+      });
+    }
+
+    it('dry run returns groups without deleting', async () => {
+      const send = makeDedupSend([
+        { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01'), ETag: '"abc"' },
+        { Key: '2021/06/15/a_copy.jpg', Size: 100, LastModified: new Date('2021-06-15'), ETag: '"abc"' },
+      ]);
+
+      const service = makeService(send);
+      const result = await service.deduplicateObjects({ dryRun: true });
+
+      expect(result.groups).toHaveLength(1);
+      expect(result.totalDuplicates).toBe(1);
+      expect(result.bytesFreed).toBe(100);
+      expect(result.deleteResult).toBeUndefined();
+      // Should not have called DeleteObjectsCommand
+      const deleteCall = send.mock.calls.find(
+        (call: any) => call[0]?.constructor?.name === 'DeleteObjectsCommand',
+      );
+      expect(deleteCall).toBeUndefined();
+    });
+
+    it('actual run deletes duplicates and returns results', async () => {
+      const send = makeDedupSend([
+        { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01'), ETag: '"abc"' },
+        { Key: 'archive/a_copy.jpg', Size: 100, LastModified: new Date('2020-01-01'), ETag: '"abc"' },
+      ]);
+
+      const service = makeService(send);
+      const result = await service.deduplicateObjects({ dryRun: false });
+
+      expect(result.totalDuplicates).toBe(1);
+      expect(result.bytesFreed).toBe(100);
+      expect(result.deleteResult).toBeDefined();
+      expect(result.deleteResult!.deleted).toHaveLength(1);
+      expect(result.deleteResult!.failed).toHaveLength(0);
+    });
+
+    it('defaults to dry run when no options provided', async () => {
+      const send = makeDedupSend([
+        { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01'), ETag: '"abc"' },
+        { Key: '2021/06/15/a_copy.jpg', Size: 100, LastModified: new Date('2021-06-15'), ETag: '"abc"' },
+      ]);
+
+      const service = makeService(send);
+      const result = await service.deduplicateObjects();
+
+      expect(result.deleteResult).toBeUndefined();
+    });
+
+    it('returns zero counts when no duplicates found', async () => {
+      const send = makeDedupSend([
+        { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01'), ETag: '"aaa"' },
+        { Key: '2020/01/02/b.jpg', Size: 200, LastModified: new Date('2020-01-02'), ETag: '"bbb"' },
+      ]);
+
+      const service = makeService(send);
+      const result = await service.deduplicateObjects({ dryRun: false });
+
+      expect(result.groups).toHaveLength(0);
+      expect(result.totalDuplicates).toBe(0);
+      expect(result.bytesFreed).toBe(0);
+      // No deleteResult because nothing to delete
+      expect(result.deleteResult).toBeUndefined();
+    });
+
+    it('handles multiple duplicate groups in one pass', async () => {
+      const send = makeDedupSend([
+        { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01'), ETag: '"aaa"' },
+        { Key: '2020/02/01/a_dup.jpg', Size: 100, LastModified: new Date('2020-02-01'), ETag: '"aaa"' },
+        { Key: '2020/03/01/b.mp4', Size: 5000, LastModified: new Date('2020-03-01'), ETag: '"bbb"' },
+        { Key: '2020/04/01/b_dup.mp4', Size: 5000, LastModified: new Date('2020-04-01'), ETag: '"bbb"' },
+        { Key: '2020/04/01/b_dup2.mp4', Size: 5000, LastModified: new Date('2020-04-01'), ETag: '"bbb"' },
+      ]);
+
+      const service = makeService(send);
+      const result = await service.deduplicateObjects({ dryRun: false });
+
+      expect(result.groups).toHaveLength(2);
+      expect(result.totalDuplicates).toBe(3); // 1 + 2
+      expect(result.bytesFreed).toBe(100 + 5000 * 2);
+      expect(result.deleteResult!.deleted).toHaveLength(3);
+    });
+
+    it('invalidates stats cache after dedup deletion', async () => {
+      let listCallCount = 0;
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'ListObjectsV2Command') {
+          listCallCount++;
+          return {
+            Contents: [
+              { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01'), ETag: '"abc"' },
+              { Key: '2020/02/01/a_dup.jpg', Size: 100, LastModified: new Date('2020-02-01'), ETag: '"abc"' },
+            ],
+            IsTruncated: false,
+          };
+        }
+        if (name === 'DeleteObjectsCommand') {
+          return {
+            Deleted: (cmd.input?.Delete?.Objects ?? []).map((o: any) => ({ Key: o.Key })),
+            Errors: [],
+          };
+        }
+        return {};
+      });
+
+      const service = makeService(send);
+      // Prime stats cache
+      await service.getStats();
+      const countAfterPrime = listCallCount;
+
+      // Dedup should invalidate cache via internal deleteObjects
+      await service.deduplicateObjects({ dryRun: false });
+
+      // getStats should re-fetch
+      await service.getStats();
+      expect(listCallCount).toBeGreaterThan(countAfterPrime + 1); // +1 for findDuplicates, +1 for re-fetch
     });
   });
 });
