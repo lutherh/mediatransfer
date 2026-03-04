@@ -36,8 +36,9 @@ import { formatBytes } from '../src/utils/format.js';
 
 dotenv.config();
 
-const config = loadTakeoutConfig();
 const args = process.argv.slice(2);
+const inputDirArg = readStringArg(args, '--input-dir');
+const config = loadTakeoutConfig(undefined, { inputDir: inputDirArg });
 const apply = args.includes('--apply');
 const deleteArchives = args.includes('--delete-archives');
 const moveArchives = args.includes('--move-archives');

@@ -55,9 +55,16 @@ function readNumberArg(argv: string[], flag: string): number | undefined {
   return Number.isFinite(val) ? val : undefined;
 }
 
+function readStringArg(argv: string[], flag: string): string | undefined {
+  const idx = argv.indexOf(flag);
+  if (idx < 0 || idx + 1 >= argv.length) return undefined;
+  return argv[idx + 1];
+}
+
 // ── Load config ─────────────────────────────────────────────────
 
-const config = loadTakeoutConfig();
+const inputDirArg = readStringArg(args, '--input-dir');
+const config = loadTakeoutConfig(undefined, { inputDir: inputDirArg });
 const scwConfig = validateScalewayConfig({
   provider: 'scaleway',
   region: process.env.SCW_REGION,

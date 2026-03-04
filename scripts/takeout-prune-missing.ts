@@ -34,9 +34,16 @@ import {
 
 dotenv.config();
 
-const config = loadTakeoutConfig();
 const args = process.argv.slice(2);
+const inputDirArg = readStringArg(args, '--input-dir');
+const config = loadTakeoutConfig(undefined, { inputDir: inputDirArg });
 const apply = args.includes('--apply');
+
+function readStringArg(argv: string[], flag: string): string | undefined {
+  const idx = argv.indexOf(flag);
+  if (idx < 0 || idx + 1 >= argv.length) return undefined;
+  return argv[idx + 1];
+}
 
 const manifestPath = path.join(config.workDir, 'manifest.jsonl');
 
