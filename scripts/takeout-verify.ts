@@ -5,7 +5,9 @@ import { validateScalewayConfig, ScalewayProvider } from '../src/providers/scale
 
 dotenv.config();
 
-const config = loadTakeoutConfig();
+const args = process.argv.slice(2);
+const inputDirArg = readStringArg(args, '--input-dir');
+const config = loadTakeoutConfig(undefined, { inputDir: inputDirArg });
 const scalewayConfig = validateScalewayConfig({
   provider: 'scaleway',
   region: process.env.SCW_REGION,
@@ -31,4 +33,10 @@ if (summary.missingKeys.length > 0) {
     console.log(`   - ${key}`);
   }
   process.exitCode = 1;
+}
+
+function readStringArg(argv: string[], flag: string): string | undefined {
+  const idx = argv.indexOf(flag);
+  if (idx < 0 || idx + 1 >= argv.length) return undefined;
+  return argv[idx + 1];
 }

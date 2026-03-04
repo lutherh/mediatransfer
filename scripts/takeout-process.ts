@@ -15,7 +15,9 @@ import { formatDuration, formatBytes } from '../src/utils/format.js';
 
 dotenv.config();
 
-const config = loadTakeoutConfig();
+const args = process.argv.slice(2);
+const inputDirArg = readStringArg(args, '--input-dir');
+const config = loadTakeoutConfig(undefined, { inputDir: inputDirArg });
 const scalewayConfig = validateScalewayConfig({
   provider: 'scaleway',
   region: process.env.SCW_REGION,
@@ -26,8 +28,6 @@ const scalewayConfig = validateScalewayConfig({
 });
 
 const provider = new ScalewayProvider(scalewayConfig);
-
-const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const deleteArchive = args.includes('--delete-archive');
 const moveArchive = args.includes('--move-archive') || args.includes('--archive-complete-dir');
