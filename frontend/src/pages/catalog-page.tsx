@@ -339,6 +339,7 @@ export function CatalogPage() {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [sortNewestFirst, setSortNewestFirst] = useState(true);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
@@ -382,11 +383,18 @@ export function CatalogPage() {
       if (!map.has(item.sectionDate)) map.set(item.sectionDate, []);
       map.get(item.sectionDate)!.push(item);
     }
-    // Newest dates first; within each section, newest items first
+    // Sort sections and items within each section by sort direction
+    const dir = sortNewestFirst ? -1 : 1;
     return [...map.entries()]
-      .sort(([a], [b]) => b.localeCompare(a))
-      .map(([date, items]) => [date, items.sort((a, b) => b.capturedAt.localeCompare(a.capturedAt))] as [string, CatalogItem[]]);
-  }, [allItems]);
+      .sort(([a], [b]) => dir * a.localeCompare(b))
+      .map(([date, items]) => [date, items.sort((a, b) => dir * a.capturedAt.localeCompare(b.capturedAt))] as [string, CatalogItem[]]);
+  }, [allItems, sortNewestFirst]);
+
+  // Flat sorted list matching the lightbox index order
+  const sortedItems = useMemo(
+    () => sections.flatMap(([, items]) => items),
+    [sections],
+  );
 
   // Infinite scroll
   useEffect(() => {
@@ -518,7 +526,7 @@ export function CatalogPage() {
         ) : null}
       </Card>
 
-      {/* Prefix filter */}
+      {/* Prefix filter + sort toggle */}
       <div className="flex flex-wrap items-center gap-2">
         <input
           type="text"
@@ -535,6 +543,14 @@ export function CatalogPage() {
             Clear
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => setSortNewestFirst((p) => !p)}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-600 hover:bg-slate-50"
+          title={sortNewestFirst ? 'Showing newest first' : 'Showing oldest first'}
+        >
+          {sortNewestFirst ? '↓ Newest first' : '↑ Oldest first'}
+        </button>
         <span className="text-xs text-slate-500">
           {allItems.length.toLocaleString()} item{allItems.length !== 1 ? 's' : ''}
           {itemsQuery.hasNextPage ? '+' : ''}
@@ -601,9 +617,9 @@ export function CatalogPage() {
       <DateScroller sections={sections} sectionRefs={sectionRefs} />
 
       {/* Lightbox */}
-      {lightboxIndex !== null && allItems.length > 0 && (
+      {lightboxIndex !== null && sortedItems.length > 0 && (
         <Lightbox
-          items={allItems}
+          items={sortedItems}
           index={lightboxIndex}
           apiToken={apiToken}
           onClose={handleClose}

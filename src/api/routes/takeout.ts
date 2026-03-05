@@ -74,6 +74,13 @@ const RUN_STATUS: ActionStatus = {
 
 let currentProcess: ChildProcess | null = null;
 let currentTimeout: NodeJS.Timeout | null = null;
+
+/**
+ * User-overridden input directory (set via PUT /takeout/input-dir).
+ * When set, this is used instead of env.TAKEOUT_INPUT_DIR for status
+ * and is passed as --input-dir to spawned action scripts.
+ */
+let customInputDir: string | undefined;
 const manifestCountCache = new Map<string, {
   mtimeMs: number;
   size: number;
@@ -87,8 +94,25 @@ const manifestKeysCache = new Map<string, {
 }>();
 
 export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Promise<void> {
+  // ── Change input directory ──────────────────────────────────────────────
+
+  app.put('/takeout/input-dir', async (req, reply) => {
+    const body = req.body as { inputDir?: string } | null;
+    const dir = body?.inputDir?.trim();
+    if (!dir || dir.length === 0) {
+      return reply.code(400).send(apiError('INVALID_INPUT', 'inputDir is required'));
+    }
+    customInputDir = path.resolve(dir);
+    return { inputDir: customInputDir };
+  });
+
+  app.delete('/takeout/input-dir', async () => {
+    customInputDir = undefined;
+    return { inputDir: path.resolve(env.TAKEOUT_INPUT_DIR), reset: true };
+  });
+
   app.get('/takeout/status', async () => {
-    const inputDir = path.resolve(env.TAKEOUT_INPUT_DIR);
+    const inputDir = customInputDir ?? path.resolve(env.TAKEOUT_INPUT_DIR);
     const workDir = path.resolve(env.TAKEOUT_WORK_DIR);
     const statePath = path.resolve(env.TRANSFER_STATE_PATH);
     const manifestPath = path.join(workDir, 'manifest.jsonl');
@@ -323,10 +347,17 @@ function resolveActionCommands(action: TakeoutAction): ActionCommand[] {
     'cleanup-force-delete': 'takeout:cleanup -- --apply --delete-archives --force --include-unscanned',
   };
 
+  let scriptArgs = scriptByAction[action].split(' ');
+
+  // Append --input-dir when the user chose a custom input folder.
+  if (customInputDir) {
+    scriptArgs = [...scriptArgs, '--', '--input-dir', customInputDir];
+  }
+
   return [{
     command: 'npm',
-    args: ['run', ...scriptByAction[action].split(' ')],
-    display: `npm run ${scriptByAction[action]}`,
+    args: ['run', ...scriptArgs],
+    display: `npm run ${scriptArgs.join(' ')}`,
   }];
 }
 

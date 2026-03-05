@@ -148,4 +148,154 @@ describe('takeout routes', () => {
 
     await app.close();
   });
+
+  // ─── PUT /takeout/input-dir ───────────────────────────────────────────────
+
+  it('PUT /takeout/input-dir sets custom input dir and returns it resolved', async () => {
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/takeout/input-dir',
+      payload: { inputDir: './custom/input' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().inputDir).toBe(path.resolve('./custom/input'));
+
+    await app.close();
+  });
+
+  it('PUT /takeout/input-dir returns 400 when inputDir is missing', async () => {
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/takeout/input-dir',
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it('PUT /takeout/input-dir returns 400 when inputDir is empty string', async () => {
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/takeout/input-dir',
+      payload: { inputDir: '   ' },
+    });
+
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  // ─── DELETE /takeout/input-dir ────────────────────────────────────────────
+
+  it('DELETE /takeout/input-dir resets to env default', async () => {
+    const customEnvInput = path.join(tempDir, 'env-input');
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv({ TAKEOUT_INPUT_DIR: customEnvInput }));
+
+    // First set a custom dir
+    await app.inject({
+      method: 'PUT',
+      url: '/takeout/input-dir',
+      payload: { inputDir: './override' },
+    });
+
+    // Then reset
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/takeout/input-dir',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().reset).toBe(true);
+    expect(res.json().inputDir).toBe(path.resolve(customEnvInput));
+
+    await app.close();
+  });
+
+  // ─── Custom inputDir affects /takeout/status ──────────────────────────────
+
+  it('custom inputDir is reflected in /takeout/status paths', async () => {
+    const customInput = path.join(tempDir, 'custom-input');
+    const workDir = path.join(tempDir, 'work');
+    await fs.mkdir(customInput, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+
+    const env = baseEnv({ TAKEOUT_INPUT_DIR: './default-input', TAKEOUT_WORK_DIR: workDir });
+    const app = Fastify();
+    await registerTakeoutRoutes(app, env);
+
+    // Set custom input dir
+    await app.inject({
+      method: 'PUT',
+      url: '/takeout/input-dir',
+      payload: { inputDir: customInput },
+    });
+
+    // Check status reflects the custom dir
+    const statusRes = await app.inject({ method: 'GET', url: '/takeout/status' });
+    expect(statusRes.statusCode).toBe(200);
+    expect(statusRes.json().paths.inputDir).toBe(path.resolve(customInput));
+
+    await app.close();
+  });
+
+  // ─── Custom inputDir is passed to spawned scripts ─────────────────────────
+
+  it('spawned action commands include --input-dir when custom dir is set', async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+
+    spawnMock.mockImplementation(() => {
+      queueMicrotask(() => {
+        child.stdout.emit('data', 'scan output\n');
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const customInput = path.join(tempDir, 'my-archives');
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    // Set custom input dir
+    await app.inject({
+      method: 'PUT',
+      url: '/takeout/input-dir',
+      payload: { inputDir: customInput },
+    });
+
+    // Trigger an action
+    const okRes = await app.inject({
+      method: 'POST',
+      url: '/takeout/actions/scan',
+    });
+    expect(okRes.statusCode).toBe(202);
+
+    // Verify the spawned command includes --input-dir
+    expect(spawnMock).toHaveBeenCalled();
+    const spawnArgs = spawnMock.mock.calls[0][1] as string[];
+    expect(spawnArgs).toContain('--input-dir');
+    expect(spawnArgs).toContain(path.resolve(customInput));
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await app.close();
+  });
 });
