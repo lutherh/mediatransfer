@@ -296,6 +296,42 @@ export async function runTakeoutAction(action: TakeoutAction): Promise<{ message
   return response.json();
 }
 
+export async function updateTakeoutInputDir(inputDir: string): Promise<{ inputDir: string }> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/takeout/input-dir`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inputDir }),
+    },
+    TAKEOUT_FETCH_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const raw = await response.text();
+    const message = parseApiErrorMessage(raw) ?? 'Failed to update input directory';
+    throw new Error(message);
+  }
+
+  return response.json();
+}
+
+export async function resetTakeoutInputDir(): Promise<{ inputDir: string; reset: boolean }> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/takeout/input-dir`,
+    { method: 'DELETE' },
+    TAKEOUT_FETCH_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const raw = await response.text();
+    const message = parseApiErrorMessage(raw) ?? 'Failed to reset input directory';
+    throw new Error(message);
+  }
+
+  return response.json();
+}
+
 function parseApiErrorMessage(raw: string): string | undefined {
   if (!raw) return undefined;
 

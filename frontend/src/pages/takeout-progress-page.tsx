@@ -7,6 +7,8 @@ import {
   fetchTakeoutActionStatus,
   fetchTakeoutStatus,
   runTakeoutAction,
+  updateTakeoutInputDir,
+  resetTakeoutInputDir,
   type TakeoutAction,
   type ScanProgress,
 } from '@/lib/api';
@@ -493,7 +495,12 @@ export function TakeoutProgressPage() {
         <div className="mt-3 space-y-3">
           <Card className="space-y-2 text-xs">
             <p className="font-medium text-slate-700">File paths</p>
-            <PathRow label="Input"    value={data.paths.inputDir}     />
+            <EditablePathRow
+              label="Input"
+              value={data.paths.inputDir}
+              onSave={async (v) => { await updateTakeoutInputDir(v); await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
+              onReset={async ()  => { await resetTakeoutInputDir();   await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
+            />
             <PathRow label="Work"     value={data.paths.workDir}      />
             <PathRow label="Manifest" value={data.paths.manifestPath} />
             <PathRow label="State"    value={data.paths.statePath}    />
@@ -621,6 +628,126 @@ function PathRow({ label, value }: { label: string; value: string }): ReactEleme
     <div className="flex gap-2 min-w-0">
       <span className="text-slate-400 shrink-0 w-16">{label}</span>
       <span className="text-slate-600 break-all font-mono min-w-0">{value}</span>
+    </div>
+  );
+}
+
+// ─── Editable path row ────────────────────────────────────────────────────────
+
+function EditablePathRow({
+  label,
+  value,
+  onSave,
+  onReset,
+}: {
+  label: string;
+  value: string;
+  onSave: (newValue: string) => Promise<void>;
+  onReset: () => Promise<void>;
+}): ReactElement {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const startEditing = () => {
+    setDraft(value);
+    setEditing(true);
+    // Focus the input after React renders it
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const cancel = () => {
+    setEditing(false);
+    setDraft(value);
+  };
+
+  const save = async () => {
+    const trimmed = draft.trim();
+    if (!trimmed || trimmed === value) {
+      cancel();
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(trimmed);
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reset = async () => {
+    setSaving(true);
+    try {
+      await onReset();
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <div className="flex gap-2 min-w-0 items-center group">
+        <span className="text-slate-400 shrink-0 w-16">{label}</span>
+        <span className="text-slate-600 break-all font-mono min-w-0">{value}</span>
+        <button
+          type="button"
+          onClick={startEditing}
+          className="shrink-0 text-slate-300 hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity"
+          title="Change input directory"
+        >
+          ✎
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5 min-w-0">
+      <div className="flex gap-2 min-w-0 items-center">
+        <span className="text-slate-400 shrink-0 w-16">{label}</span>
+        <input
+          ref={inputRef}
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void save();
+            if (e.key === 'Escape') cancel();
+          }}
+          disabled={saving}
+          className="flex-1 min-w-0 rounded border border-slate-300 bg-white px-2 py-0.5 text-xs font-mono text-slate-700 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50"
+        />
+      </div>
+      <div className="flex gap-1.5 ml-[4.5rem]">
+        <Button
+          type="button"
+          className="h-5 px-2 text-[10px]"
+          onClick={() => void save()}
+          disabled={saving || !draft.trim()}
+        >
+          {saving ? '…' : 'Save'}
+        </Button>
+        <Button
+          type="button"
+          className="h-5 px-2 text-[10px] bg-slate-100 text-slate-600 hover:bg-slate-200"
+          onClick={cancel}
+          disabled={saving}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          className="h-5 px-2 text-[10px] bg-amber-50 text-amber-700 hover:bg-amber-100"
+          onClick={() => void reset()}
+          disabled={saving}
+          title="Reset to default from environment"
+        >
+          Reset default
+        </Button>
+      </div>
     </div>
   );
 }
