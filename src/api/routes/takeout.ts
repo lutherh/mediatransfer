@@ -7,6 +7,14 @@ import type { FastifyInstance } from 'fastify';
 import type { Env } from '../../config/env.js';
 import type { UploadState, UploadStateItem } from '../../takeout/uploader.js';
 import { OVERRIDABLE_PATHS, type OverridablePathName } from '../../takeout/config.js';
+import {
+  loadPipelineState,
+  savePipelineState,
+  markStepStarted,
+  markStepFinished,
+  buildPipelineSummary,
+  type PipelineState,
+} from '../../takeout/pipeline-state.js';
 import { apiError } from '../errors.js';
 import { createJob, updateJob } from '../../db/jobs.js';
 
@@ -81,8 +89,39 @@ let currentTimeout: NodeJS.Timeout | null = null;
  * Keys are OverridablePathName values (e.g. 'inputDir', 'workDir').
  * When set, these are used instead of env defaults for status
  * and passed as CLI flags to spawned action scripts.
+ * Persisted to disk so they survive server restarts.
  */
 const customPaths = new Map<string, string>();
+const CUSTOM_PATHS_FILE = 'custom-paths.json';
+
+function customPathsFilePath(env: Env): string {
+  // Store next to TRANSFER_STATE_PATH (a fixed location independent of workDir)
+  return path.join(path.dirname(path.resolve(env.TRANSFER_STATE_PATH)), CUSTOM_PATHS_FILE);
+}
+
+async function loadCustomPaths(env: Env): Promise<void> {
+  try {
+    const raw = await fs.readFile(customPathsFilePath(env), 'utf8');
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === 'string' && value.length > 0) {
+        customPaths.set(key, value);
+      }
+    }
+  } catch {
+    // File missing or malformed — start with empty overrides
+  }
+}
+
+function persistCustomPaths(env: Env): void {
+  const obj = Object.fromEntries(customPaths);
+  const filePath = customPathsFilePath(env);
+  fs.mkdir(path.dirname(filePath), { recursive: true })
+    .then(() => fs.writeFile(filePath, JSON.stringify(obj, null, 2), 'utf8'))
+    .catch((err) => {
+      console.debug('[takeout] Failed to persist custom paths:', err);
+    });
+}
 const manifestCountCache = new Map<string, {
   mtimeMs: number;
   size: number;
@@ -95,7 +134,43 @@ const manifestKeysCache = new Map<string, {
   keys: Set<string>;
 }>();
 
+let pipelineState: PipelineState | null = null;
+let resolvedWorkDir: string | null = null;
+
+/** Load pipeline state from disk (lazy, once per process). */
+async function ensurePipelineState(workDir: string): Promise<PipelineState> {
+  if (pipelineState && resolvedWorkDir === workDir) return pipelineState;
+  pipelineState = await loadPipelineState(workDir);
+  resolvedWorkDir = workDir;
+
+  // Recover from a crash: if last action was in-progress, mark it as failed
+  if (pipelineState.lastAction && !pipelineState.lastAction.finishedAt) {
+    markStepFinished(
+      pipelineState,
+      pipelineState.lastAction.action,
+      false,
+      new Date().toISOString(),
+      -1,
+      ['Process was interrupted (server restart detected)'],
+    );
+    await savePipelineState(workDir, pipelineState);
+  }
+
+  return pipelineState;
+}
+
+/** Persist pipeline state to disk (fire-and-forget, never throws). */
+function persistPipelineState(): void {
+  if (!pipelineState || !resolvedWorkDir) return;
+  savePipelineState(resolvedWorkDir, pipelineState).catch((err) => {
+    console.debug('[takeout] Failed to persist pipeline state:', err);
+  });
+}
+
 export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Promise<void> {
+  // ── Load persisted custom paths from previous session ───────────────────
+  await loadCustomPaths(env);
+
   // ── Override any configurable path ──────────────────────────────────────
 
   app.put('/takeout/paths/:name', async (req, reply) => {
@@ -111,6 +186,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     }
     const resolved = path.resolve(value);
     customPaths.set(name, resolved);
+    persistCustomPaths(env);
     return { name, value: resolved };
   });
 
@@ -121,6 +197,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       return reply.code(400).send(apiError('INVALID_INPUT', `Unknown path name: ${name}`));
     }
     customPaths.delete(name);
+    persistCustomPaths(env);
     return { name, value: path.resolve(env[def.envKey]), reset: true };
   });
 
@@ -132,11 +209,13 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       return reply.code(400).send(apiError('INVALID_INPUT', 'inputDir is required'));
     }
     customPaths.set('inputDir', path.resolve(dir));
+    persistCustomPaths(env);
     return { inputDir: customPaths.get('inputDir') };
   });
 
   app.delete('/takeout/input-dir', async () => {
     customPaths.delete('inputDir');
+    persistCustomPaths(env);
     return { inputDir: path.resolve(env.TAKEOUT_INPUT_DIR), reset: true };
   });
 
@@ -147,11 +226,13 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       return reply.code(400).send(apiError('INVALID_INPUT', 'workDir is required'));
     }
     customPaths.set('workDir', path.resolve(dir));
+    persistCustomPaths(env);
     return { workDir: customPaths.get('workDir') };
   });
 
   app.delete('/takeout/work-dir', async () => {
     customPaths.delete('workDir');
+    persistCustomPaths(env);
     return { workDir: path.resolve(env.TAKEOUT_WORK_DIR), reset: true };
   });
 
@@ -161,9 +242,10 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     const statePath = path.resolve(env.TRANSFER_STATE_PATH);
     const manifestPath = path.join(workDir, 'manifest.jsonl');
 
-    const [state, manifestKeys] = await Promise.all([
+    const [state, manifestKeys, pipeline] = await Promise.all([
       readUploadState(statePath),
       readManifestKeys(manifestPath),
+      ensurePipelineState(workDir),
     ]);
 
     // Count only state entries that correspond to current manifest keys.
@@ -212,6 +294,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       recentFailures: summary.recentFailures,
       isComplete: total > 0 && pending === 0 && summary.failed === 0,
       archivesInInput,
+      pipeline: buildPipelineSummary(pipeline),
     };
   });
 
@@ -250,13 +333,20 @@ function runAction(action: TakeoutAction): void {
   const projectRoot = path.resolve(process.cwd());
   const commands = resolveActionCommands(action);
 
+  const startedAt = new Date().toISOString();
   RUN_STATUS.running = true;
   RUN_STATUS.action = action;
-  RUN_STATUS.startedAt = new Date().toISOString();
+  RUN_STATUS.startedAt = startedAt;
   RUN_STATUS.finishedAt = undefined;
   RUN_STATUS.exitCode = undefined;
   RUN_STATUS.success = undefined;
   RUN_STATUS.output = [];
+
+  // Update pipeline state
+  if (pipelineState) {
+    markStepStarted(pipelineState, action, startedAt);
+    persistPipelineState();
+  }
 
   // Create a TransferJob record so uploads appear on the /transfers page.
   if (action === 'upload' || action === 'resume') {
@@ -284,13 +374,18 @@ function runAction(action: TakeoutAction): void {
 
       appendOutput(`Action timed out after ${Math.round(ACTION_TIMEOUT_MS / 60000)} minutes.`);
       child.kill();
+      const timedOutAt = new Date().toISOString();
       RUN_STATUS.running = false;
-      RUN_STATUS.finishedAt = new Date().toISOString();
+      RUN_STATUS.finishedAt = timedOutAt;
       RUN_STATUS.exitCode = -1;
       RUN_STATUS.success = false;
       currentProcess = null;
       currentTimeout = null;
       finalizeTransferJob(false, 'Upload timed out');
+      if (pipelineState) {
+        markStepFinished(pipelineState, action, false, timedOutAt, -1, RUN_STATUS.output.slice(-50));
+        persistPipelineState();
+      }
     }, ACTION_TIMEOUT_MS);
 
     child.stdout.on('data', (chunk) => {
@@ -303,8 +398,9 @@ function runAction(action: TakeoutAction): void {
 
     child.on('error', (error) => {
       appendOutput(`Process error: ${error.message}`);
+      const errorAt = new Date().toISOString();
       RUN_STATUS.running = false;
-      RUN_STATUS.finishedAt = new Date().toISOString();
+      RUN_STATUS.finishedAt = errorAt;
       RUN_STATUS.exitCode = -1;
       RUN_STATUS.success = false;
       currentProcess = null;
@@ -313,6 +409,10 @@ function runAction(action: TakeoutAction): void {
         currentTimeout = null;
       }
       finalizeTransferJob(false, error.message);
+      if (pipelineState) {
+        markStepFinished(pipelineState, action, false, errorAt, -1, RUN_STATUS.output.slice(-50));
+        persistPipelineState();
+      }
     });
 
     child.on('close', (code) => {
@@ -353,6 +453,10 @@ function runAction(action: TakeoutAction): void {
       RUN_STATUS.success = success;
       if (!success) {
         finalizeTransferJob(false, `Process exited with code ${exitCode}`);
+      }
+      if (pipelineState) {
+        markStepFinished(pipelineState, action, success, RUN_STATUS.finishedAt!, exitCode, RUN_STATUS.output.slice(-50));
+        persistPipelineState();
       }
       if (action === 'start-services' && !success) {
         appendStartServicesFailureHints();
@@ -584,9 +688,9 @@ async function readManifestKeys(manifestPath: string): Promise<Set<string>> {
 
     manifestKeysCache.set(manifestPath, { mtimeMs: stat.mtimeMs, size: stat.size, keys });
     return keys;
-  } catch (err) {
-    console.debug('[takeout] Manifest not available, using cached keys if present', err);
-    // Manifest doesn't exist yet — return whatever is in cache, or empty
+  } catch {
+    // Manifest doesn't exist yet — return whatever is in cache, or empty.
+    // This is expected before the first scan and is silently tolerated.
     const cached = manifestKeysCache.get(manifestPath);
     return cached?.keys ?? new Set();
   }
@@ -673,8 +777,8 @@ async function readUploadState(statePath: string): Promise<UploadState> {
     }
 
     return parsed;
-  } catch (err) {
-    console.debug('[takeout] Upload state unavailable, returning empty state', err);
+  } catch {
+    // Upload state file doesn't exist yet — normal before first upload.
     return createEmptyState();
   }
 }

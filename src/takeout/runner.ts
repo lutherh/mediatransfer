@@ -34,6 +34,16 @@ import {
 
 export const DEFAULT_MANIFEST_FILE = 'manifest.jsonl';
 
+async function assertManifestExists(manifestPath: string): Promise<void> {
+  try {
+    await fs.access(manifestPath);
+  } catch {
+    throw new Error(
+      `Manifest not found at ${manifestPath}. Run the Scan step first to generate it.`,
+    );
+  }
+}
+
 // ─── Scan checkpoint state ────────────────────────────────────────────────────
 // Persisted at work/scan-state.json so a scan can resume after a timeout or
 // crash — only archives that have NOT yet been extracted are processed on the
@@ -253,6 +263,7 @@ export async function runTakeoutUpload(
   manifestPath = path.join(config.workDir, DEFAULT_MANIFEST_FILE),
   options: UploadRunOptions = {},
 ): Promise<UploadRunResult> {
+  await assertManifestExists(manifestPath);
   const entries = await loadManifestJsonl(manifestPath);
 
   const summary = await uploadManifest({
@@ -297,6 +308,7 @@ export async function runTakeoutVerify(
   provider: CloudProvider,
   manifestPath = path.join(config.workDir, DEFAULT_MANIFEST_FILE),
 ): Promise<VerifySummary> {
+  await assertManifestExists(manifestPath);
   const entries = await loadManifestJsonl(manifestPath);
   const indexedKeys = await preloadDestinationIndex(provider, entries);
   const confirmedExistingKeys = new Set<string>(indexedKeys);
