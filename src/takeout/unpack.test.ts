@@ -221,4 +221,65 @@ describe('takeout/unpack', () => {
       expect(result.mediaRoot).toBe(inputDir);
     });
   });
+
+  it('skips duplicate files with same content during normalization', async () => {
+    await withTempDir(async (dir) => {
+      const rootA = path.join(dir, 'part1', 'Takeout', 'Google Photos', 'AlbumA');
+      const rootB = path.join(dir, 'part2', 'Google Photos', 'AlbumA');
+      await fs.mkdir(rootA, { recursive: true });
+      await fs.mkdir(rootB, { recursive: true });
+
+      // Same filename, same content — should be deduplicated (no __dup copy)
+      await fs.writeFile(path.join(rootA, 'IMG_0099.jpg'), 'identical-content');
+      await fs.writeFile(path.join(rootB, 'IMG_0099.jpg'), 'identical-content');
+
+      const normalized = await normalizeTakeoutMediaRoot(dir);
+      const albumFiles = await fs.readdir(path.join(normalized, 'AlbumA'));
+
+      expect(albumFiles).toContain('IMG_0099.jpg');
+      expect(albumFiles.filter((name) => name.includes('IMG_0099'))).toHaveLength(1);
+    });
+  });
+
+  it('still creates __dup when same-name files have different content', async () => {
+    await withTempDir(async (dir) => {
+      const rootA = path.join(dir, 'part1', 'Takeout', 'Google Photos', 'AlbumB');
+      const rootB = path.join(dir, 'part2', 'Google Photos', 'AlbumB');
+      await fs.mkdir(rootA, { recursive: true });
+      await fs.mkdir(rootB, { recursive: true });
+
+      // Same filename, different content — should create __dup
+      await fs.writeFile(path.join(rootA, 'IMG_0100.jpg'), 'version-one');
+      await fs.writeFile(path.join(rootB, 'IMG_0100.jpg'), 'version-two-longer');
+
+      const normalized = await normalizeTakeoutMediaRoot(dir);
+      const albumFiles = await fs.readdir(path.join(normalized, 'AlbumB'));
+
+      expect(albumFiles).toContain('IMG_0100.jpg');
+      expect(albumFiles.some((name) => name.startsWith('IMG_0100__dup'))).toBe(true);
+    });
+  });
+
+  it('skips duplicate even when same-size files have matching partial hash', async () => {
+    await withTempDir(async (dir) => {
+      const rootA = path.join(dir, 'part1', 'Takeout', 'Google Photos', 'AlbumC');
+      const rootB = path.join(dir, 'part2', 'Google Photos', 'AlbumC');
+      const rootC = path.join(dir, 'part3', 'Google Photos', 'AlbumC');
+      await fs.mkdir(rootA, { recursive: true });
+      await fs.mkdir(rootB, { recursive: true });
+      await fs.mkdir(rootC, { recursive: true });
+
+      // Three copies of the same file from three archive parts
+      const content = 'a'.repeat(1024);
+      await fs.writeFile(path.join(rootA, 'photo.png'), content);
+      await fs.writeFile(path.join(rootB, 'photo.png'), content);
+      await fs.writeFile(path.join(rootC, 'photo.png'), content);
+
+      const normalized = await normalizeTakeoutMediaRoot(dir);
+      const albumFiles = await fs.readdir(path.join(normalized, 'AlbumC'));
+
+      expect(albumFiles.filter((name) => name.includes('photo'))).toHaveLength(1);
+      expect(albumFiles).toContain('photo.png');
+    });
+  });
 });

@@ -2,6 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import extractZip from 'extract-zip';
 import { extract as extractTar } from 'tar';
+import { partialFileHash } from './manifest.js';
 
 const ARCHIVE_EXTENSIONS = ['.zip', '.tar', '.tgz', '.tar.gz'] as const;
 const MEDIA_EXTENSIONS = new Set([
@@ -207,16 +208,34 @@ async function mergeDirectory(sourceDir: string, targetDir: string): Promise<voi
 }
 
 async function copyWithCollisionHandling(sourcePath: string, targetPath: string): Promise<void> {
-  let candidate = targetPath;
-  let suffix = 1;
+  if (!(await exists(targetPath))) {
+    await fs.copyFile(sourcePath, targetPath);
+    return;
+  }
 
-  while (await exists(candidate)) {
+  // Target exists — check if it's the same content (fast: size then partial hash)
+  if (await isSameContent(sourcePath, targetPath)) {
+    return; // skip duplicate
+  }
+
+  // Different content with same name — find a free __dup slot
+  let candidate: string;
+  let suffix = 1;
+  do {
     const parsed = path.parse(targetPath);
     candidate = path.join(parsed.dir, `${parsed.name}__dup${suffix}${parsed.ext}`);
     suffix += 1;
-  }
+  } while (await exists(candidate));
 
   await fs.copyFile(sourcePath, candidate);
+}
+
+/** Compare two files by size then partial hash (first 64 KB). */
+async function isSameContent(fileA: string, fileB: string): Promise<boolean> {
+  const [statA, statB] = await Promise.all([fs.stat(fileA), fs.stat(fileB)]);
+  if (statA.size !== statB.size) return false;
+  const [hashA, hashB] = await Promise.all([partialFileHash(fileA), partialFileHash(fileB)]);
+  return hashA === hashB;
 }
 
 async function exists(filePath: string): Promise<boolean> {
