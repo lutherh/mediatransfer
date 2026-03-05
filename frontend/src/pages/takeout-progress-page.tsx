@@ -11,6 +11,9 @@ import {
   resetTakeoutPath,
   type TakeoutAction,
   type ScanProgress,
+  type PipelineSummary,
+  type StepRecord,
+  type StepStatus,
 } from '@/lib/api';
 
 // ─── Page states ──────────────────────────────────────────────────────────────
@@ -142,6 +145,11 @@ export function TakeoutProgressPage() {
       {/* Mutation error */}
       {actionMutation.isError && (
         <Alert variant="error" className="text-xs">{mutationError}</Alert>
+      )}
+
+      {/* Pipeline stepper — shows the 4-step workflow visually */}
+      {data.pipeline && (
+        <PipelineStepper pipeline={data.pipeline} isActionRunning={isActionRunning} currentAction={actionStatus?.action} />
       )}
 
       {/* Watching: no archives, no manifest */}
@@ -522,6 +530,96 @@ export function TakeoutProgressPage() {
           </Card>
         </div>
       </details>
+    </div>
+  );
+}
+
+// ─── Pipeline stepper ─────────────────────────────────────────────────────────
+
+const STEP_LABELS: Record<string, string> = {
+  scan:    'Scan',
+  upload:  'Upload',
+  verify:  'Verify',
+  cleanup: 'Cleanup',
+};
+
+const STEP_ICONS: Record<StepStatus, string> = {
+  pending:       '○',
+  'in-progress': '◉',
+  completed:     '✓',
+  failed:        '✗',
+  skipped:       '–',
+};
+
+function stepColor(status: StepStatus, isActive: boolean): string {
+  if (status === 'completed') return 'text-green-600';
+  if (status === 'failed')    return 'text-red-600';
+  if (status === 'in-progress' || isActive) return 'text-blue-600';
+  return 'text-slate-400';
+}
+
+function connectorColor(status: StepStatus): string {
+  if (status === 'completed') return 'bg-green-400';
+  if (status === 'failed')    return 'bg-red-300';
+  return 'bg-slate-200';
+}
+
+function PipelineStepper({
+  pipeline,
+  isActionRunning,
+  currentAction,
+}: {
+  pipeline: PipelineSummary;
+  isActionRunning: boolean;
+  currentAction?: TakeoutAction;
+}): ReactElement {
+  const steps = pipeline.steps;
+
+  return (
+    <div className="flex items-center gap-0 px-1 py-2" role="list" aria-label="Migration pipeline steps">
+      {steps.map((step, i) => {
+        const isActive = isActionRunning && step.step === pipeline.currentStep;
+        const color = stepColor(step.status, isActive);
+        const icon = isActive ? '◉' : STEP_ICONS[step.status];
+
+        return (
+          <div key={step.step} className="flex items-center" role="listitem">
+            {/* Step circle + label */}
+            <div className={`flex flex-col items-center gap-0.5 ${color}`}>
+              <span
+                className={`
+                  flex h-7 w-7 items-center justify-center rounded-full border-2 text-xs font-bold
+                  ${step.status === 'completed' ? 'border-green-500 bg-green-50' : ''}
+                  ${step.status === 'failed' ? 'border-red-400 bg-red-50' : ''}
+                  ${step.status === 'in-progress' || isActive ? 'border-blue-500 bg-blue-50' : ''}
+                  ${step.status === 'pending' || step.status === 'skipped' ? 'border-slate-300 bg-white' : ''}
+                  ${isActive ? 'animate-pulse' : ''}
+                `}
+                aria-label={`${STEP_LABELS[step.step]}: ${step.status}`}
+              >
+                {icon}
+              </span>
+              <span className="text-[10px] font-medium leading-tight whitespace-nowrap">
+                {STEP_LABELS[step.step] ?? step.step}
+              </span>
+              {step.status === 'completed' && step.itemsDone != null && (
+                <span className="text-[9px] text-green-600 tabular-nums">
+                  {step.itemsDone.toLocaleString()} done
+                </span>
+              )}
+              {step.status === 'failed' && step.itemsFailed != null && step.itemsFailed > 0 && (
+                <span className="text-[9px] text-red-500 tabular-nums">
+                  {step.itemsFailed.toLocaleString()} failed
+                </span>
+              )}
+            </div>
+            {/* Connector line between steps */}
+            {i < steps.length - 1 && (
+              <div className={`h-0.5 w-6 sm:w-10 mx-1 rounded-full ${connectorColor(step.status)}`} />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
