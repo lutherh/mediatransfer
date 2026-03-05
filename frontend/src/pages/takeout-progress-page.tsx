@@ -933,9 +933,10 @@ function ScanProgressBar({
       </div>
       {progress.total > 0 && progress.phase !== 'done' ? (
         <p className="text-[11px] text-slate-400 tabular-nums">
-          {progress.current} / {progress.total}
-          {progress.phase === 'extract'  ? ' archives' : ''}
-          {progress.phase === 'manifest' ? ' files'    : ''}
+          {progress.current.toLocaleString()} / {progress.total.toLocaleString()}
+          {progress.phase === 'extract'   ? ' archives' : ''}
+          {progress.phase === 'normalize' ? ' files'    : ''}
+          {progress.phase === 'manifest'  ? ' files'    : ''}
         </p>
       ) : null}
     </div>

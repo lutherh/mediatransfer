@@ -19,6 +19,7 @@ export type UnpackResult = {
 };
 
 export type ExtractProgressCallback = (current: number, total: number, archiveName: string) => void;
+export type NormalizeProgressCallback = (processed: number, total: number, fileName: string) => void;
 
 /**
  * Discover Google Takeout archive files in input directory.
@@ -82,7 +83,10 @@ export async function extractArchive(
  *
  * Returns `${workDir}/normalized/Google Photos`.
  */
-export async function normalizeTakeoutMediaRoot(workDir: string): Promise<string> {
+export async function normalizeTakeoutMediaRoot(
+  workDir: string,
+  onProgress?: NormalizeProgressCallback,
+): Promise<string> {
   const roots = await findGooglePhotosRoots(workDir);
   if (roots.length === 0) {
     throw new Error(`No Google Photos folders found in work directory: ${workDir}`);
@@ -91,8 +95,21 @@ export async function normalizeTakeoutMediaRoot(workDir: string): Promise<string
   const normalizedRoot = path.join(workDir, 'normalized', 'Google Photos');
   await fs.mkdir(normalizedRoot, { recursive: true });
 
+  // Count total files across all roots for progress reporting
+  let totalFiles = 0;
+  if (onProgress) {
+    for (const root of roots) {
+      totalFiles += await countFilesRecursive(root);
+    }
+  }
+
+  let processed = 0;
+  const progressWrapper = onProgress
+    ? (fileName: string) => { processed++; onProgress(processed, totalFiles, fileName); }
+    : undefined;
+
   for (const root of roots) {
-    await mergeDirectory(root, normalizedRoot);
+    await mergeDirectory(root, normalizedRoot, progressWrapper);
   }
 
   return normalizedRoot;
@@ -188,7 +205,11 @@ async function walkDirectories(
   }
 }
 
-async function mergeDirectory(sourceDir: string, targetDir: string): Promise<void> {
+async function mergeDirectory(
+  sourceDir: string,
+  targetDir: string,
+  onFile?: (fileName: string) => void,
+): Promise<void> {
   const entries = await fs.readdir(sourceDir, { withFileTypes: true });
 
   for (const entry of entries) {
@@ -197,12 +218,13 @@ async function mergeDirectory(sourceDir: string, targetDir: string): Promise<voi
 
     if (entry.isDirectory()) {
       await fs.mkdir(targetPath, { recursive: true });
-      await mergeDirectory(sourcePath, targetPath);
+      await mergeDirectory(sourcePath, targetPath, onFile);
       continue;
     }
 
     if (entry.isFile()) {
       await copyWithCollisionHandling(sourcePath, targetPath);
+      onFile?.(entry.name);
     }
   }
 }
@@ -250,6 +272,20 @@ async function exists(filePath: string): Promise<boolean> {
     }
     return false;
   }
+}
+
+async function countFilesRecursive(dir: string): Promise<number> {
+  let count = 0;
+  const stack = [dir];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) stack.push(path.join(current, entry.name));
+      else if (entry.isFile()) count++;
+    }
+  }
+  return count;
 }
 
 async function containsMediaFiles(rootDir: string): Promise<boolean> {

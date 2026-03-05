@@ -208,7 +208,16 @@ export async function runTakeoutScan(
   const roots = await findGooglePhotosRoots(config.workDir);
   let mediaRoot: string;
   if (roots.length > 0) {
-    mediaRoot = await normalizeTakeoutMediaRoot(config.workDir);
+    mediaRoot = await normalizeTakeoutMediaRoot(config.workDir, (processed, total, fileName) => {
+      const pct = 67 + Math.round((processed / Math.max(total, 1)) * 5);
+      onProgress?.({
+        phase: 'normalize',
+        current: processed,
+        total,
+        percent: Math.min(pct, 72),
+        detail: `${processed.toLocaleString()}/${total.toLocaleString()} files — ${fileName}`,
+      });
+    });
   } else {
     const hasMedia = await containsMediaFiles(config.workDir);
     if (!hasMedia) {
