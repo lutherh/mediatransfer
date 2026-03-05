@@ -105,6 +105,28 @@ export type TakeoutStatus = {
   isComplete: boolean;
   /** Number of .zip / .tgz / .tar archive files currently sitting in the input folder */
   archivesInInput: number;
+  /** Pipeline state: ordered step progression with per-step status */
+  pipeline?: PipelineSummary;
+};
+
+export type PipelineStepName = 'scan' | 'upload' | 'verify' | 'cleanup';
+export type StepStatus = 'pending' | 'in-progress' | 'completed' | 'failed' | 'skipped';
+
+export type StepRecord = {
+  step: PipelineStepName;
+  status: StepStatus;
+  startedAt?: string;
+  completedAt?: string;
+  itemsTotal?: number;
+  itemsDone?: number;
+  itemsFailed?: number;
+  detail?: string;
+};
+
+export type PipelineSummary = {
+  currentStep: PipelineStepName;
+  steps: StepRecord[];
+  updatedAt: string;
 };
 
 export type TakeoutAction =
