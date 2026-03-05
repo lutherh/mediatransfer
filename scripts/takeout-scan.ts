@@ -1,24 +1,18 @@
 import * as dotenv from 'dotenv';
-import { loadTakeoutConfig } from '../src/takeout/config.js';
+import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
 import { runTakeoutScan, type ScanProgressEvent } from '../src/takeout/runner.js';
 
 dotenv.config();
 
 const args = process.argv.slice(2);
-const inputDirArg = readStringArg(args, '--input-dir');
-
-function readStringArg(argv: string[], flag: string): string | undefined {
-	const idx = argv.indexOf(flag);
-	if (idx < 0 || idx + 1 >= argv.length) return undefined;
-	return argv[idx + 1];
-}
+const pathOverrides = parseTakeoutPathArgs(args);
 
 function emitProgress(event: ScanProgressEvent): void {
 	console.log(`[SCAN_PROGRESS]${JSON.stringify(event)}`);
 }
 
 try {
-	const config = loadTakeoutConfig(undefined, { inputDir: inputDirArg });
+	const config = loadTakeoutConfig(undefined, pathOverrides);
 
 	console.log('🔎 Scanning and unpacking Google Takeout archives...');
 	const result = await runTakeoutScan(config, undefined, emitProgress);

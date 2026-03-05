@@ -296,41 +296,65 @@ export async function runTakeoutAction(action: TakeoutAction): Promise<{ message
   return response.json();
 }
 
-export async function updateTakeoutInputDir(inputDir: string): Promise<{ inputDir: string }> {
+/**
+ * Generic helpers to update / reset any overridable takeout path.
+ * `name` must match a key in the backend's OVERRIDABLE_PATHS map
+ * (e.g. 'inputDir', 'workDir').
+ */
+export async function updateTakeoutPath(
+  name: string,
+  value: string,
+): Promise<{ value: string }> {
   const response = await fetchWithTimeout(
-    `${API_BASE_URL}/takeout/input-dir`,
+    `${API_BASE_URL}/takeout/paths/${encodeURIComponent(name)}`,
     {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ inputDir }),
+      body: JSON.stringify({ value }),
     },
     TAKEOUT_FETCH_TIMEOUT_MS,
   );
 
   if (!response.ok) {
     const raw = await response.text();
-    const message = parseApiErrorMessage(raw) ?? 'Failed to update input directory';
+    const message = parseApiErrorMessage(raw) ?? `Failed to update ${name}`;
     throw new Error(message);
   }
 
   return response.json();
 }
 
-export async function resetTakeoutInputDir(): Promise<{ inputDir: string; reset: boolean }> {
+export async function resetTakeoutPath(
+  name: string,
+): Promise<{ value: string; reset: boolean }> {
   const response = await fetchWithTimeout(
-    `${API_BASE_URL}/takeout/input-dir`,
+    `${API_BASE_URL}/takeout/paths/${encodeURIComponent(name)}`,
     { method: 'DELETE' },
     TAKEOUT_FETCH_TIMEOUT_MS,
   );
 
   if (!response.ok) {
     const raw = await response.text();
-    const message = parseApiErrorMessage(raw) ?? 'Failed to reset input directory';
+    const message = parseApiErrorMessage(raw) ?? `Failed to reset ${name}`;
     throw new Error(message);
   }
 
   return response.json();
 }
+
+/* ── Legacy wrappers (kept for backward compatibility) ──────── */
+
+export const updateTakeoutInputDir = (dir: string) =>
+  updateTakeoutPath('inputDir', dir).then((r) => ({ inputDir: r.value }));
+
+export const resetTakeoutInputDir = () =>
+  resetTakeoutPath('inputDir').then((r) => ({ inputDir: r.value, reset: r.reset }));
+
+export const updateTakeoutWorkDir = (dir: string) =>
+  updateTakeoutPath('workDir', dir).then((r) => ({ workDir: r.value }));
+
+export const resetTakeoutWorkDir = () =>
+  resetTakeoutPath('workDir').then((r) => ({ workDir: r.value, reset: r.reset }));
 
 function parseApiErrorMessage(raw: string): string | undefined {
   if (!raw) return undefined;

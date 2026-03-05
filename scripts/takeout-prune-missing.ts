@@ -21,7 +21,7 @@ import * as dotenv from 'dotenv';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
-import { loadTakeoutConfig } from '../src/takeout/config.js';
+import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
 import {
   loadManifestJsonl,
   persistManifestJsonl,
@@ -35,15 +35,9 @@ import {
 dotenv.config();
 
 const args = process.argv.slice(2);
-const inputDirArg = readStringArg(args, '--input-dir');
-const config = loadTakeoutConfig(undefined, { inputDir: inputDirArg });
+const pathOverrides = parseTakeoutPathArgs(args);
+const config = loadTakeoutConfig(undefined, pathOverrides);
 const apply = args.includes('--apply');
-
-function readStringArg(argv: string[], flag: string): string | undefined {
-  const idx = argv.indexOf(flag);
-  if (idx < 0 || idx + 1 >= argv.length) return undefined;
-  return argv[idx + 1];
-}
 
 const manifestPath = path.join(config.workDir, 'manifest.jsonl');
 
