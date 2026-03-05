@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { loadEnv } from '../config/env.js';
-import { loadTakeoutConfig } from './config.js';
+import { loadTakeoutConfig, parseTakeoutPathArgs, OVERRIDABLE_PATHS } from './config.js';
 
 const validEnv = {
   NODE_ENV: 'development',
@@ -108,5 +108,102 @@ describe('loadTakeoutConfig', () => {
     const cfg = loadTakeoutConfig(env, { inputDir: './override-only' });
 
     expect(cfg.inputDir).toBe(path.resolve('./override-only'));
+  });
+
+  // ─── workDir overrides ──────────────────────────────────────────────────
+
+  it('should override workDir from overrides', () => {
+    const env = loadEnv(validEnv);
+    const cfg = loadTakeoutConfig(env, { workDir: './my-work' });
+
+    expect(cfg.workDir).toBe(path.resolve('./my-work'));
+  });
+
+  it('should fall back to env workDir when overrides.workDir is undefined', () => {
+    const env = loadEnv({ ...validEnv, TAKEOUT_WORK_DIR: './env-work' });
+    const cfg = loadTakeoutConfig(env, { workDir: undefined });
+
+    expect(cfg.workDir).toBe(path.resolve('./env-work'));
+  });
+
+  it('should fall back to env workDir when overrides.workDir is empty string', () => {
+    const env = loadEnv({ ...validEnv, TAKEOUT_WORK_DIR: './env-work' });
+    const cfg = loadTakeoutConfig(env, { workDir: '' });
+
+    expect(cfg.workDir).toBe(path.resolve('./env-work'));
+  });
+
+  it('should resolve relative override workDir to absolute path', () => {
+    const env = loadEnv(validEnv);
+    const cfg = loadTakeoutConfig(env, { workDir: '../some/work-dir' });
+
+    expect(path.isAbsolute(cfg.workDir)).toBe(true);
+    expect(cfg.workDir).toBe(path.resolve('../some/work-dir'));
+  });
+
+  it('should override both inputDir and workDir simultaneously', () => {
+    const env = loadEnv(validEnv);
+    const cfg = loadTakeoutConfig(env, { inputDir: './my-input', workDir: './my-work' });
+
+    expect(cfg.inputDir).toBe(path.resolve('./my-input'));
+    expect(cfg.workDir).toBe(path.resolve('./my-work'));
+  });
+});
+
+describe('OVERRIDABLE_PATHS', () => {
+  it('entries have required keys (envKey, cliFlag, label)', () => {
+    for (const [name, def] of Object.entries(OVERRIDABLE_PATHS)) {
+      expect(def).toHaveProperty('envKey');
+      expect(def).toHaveProperty('cliFlag');
+      expect(def).toHaveProperty('label');
+      expect(typeof def.envKey).toBe('string');
+      expect(def.cliFlag).toMatch(/^--/);
+      expect(def.label.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('contains inputDir and workDir entries', () => {
+    expect(OVERRIDABLE_PATHS).toHaveProperty('inputDir');
+    expect(OVERRIDABLE_PATHS).toHaveProperty('workDir');
+  });
+});
+
+describe('parseTakeoutPathArgs', () => {
+  it('returns empty object when no flags present', () => {
+    const result = parseTakeoutPathArgs(['--apply', '--concurrency', '4']);
+    expect(result).toEqual({});
+  });
+
+  it('parses --input-dir flag', () => {
+    const result = parseTakeoutPathArgs(['--input-dir', '/tmp/input', '--apply']);
+    expect(result).toEqual({ inputDir: '/tmp/input' });
+  });
+
+  it('parses --work-dir flag', () => {
+    const result = parseTakeoutPathArgs(['--work-dir', './work']);
+    expect(result).toEqual({ workDir: './work' });
+  });
+
+  it('parses both flags together', () => {
+    const result = parseTakeoutPathArgs([
+      '--input-dir', '/data/in',
+      '--apply',
+      '--work-dir', '/data/work',
+    ]);
+    expect(result).toEqual({ inputDir: '/data/in', workDir: '/data/work' });
+  });
+
+  it('ignores flag without following value', () => {
+    const result = parseTakeoutPathArgs(['--input-dir']);
+    expect(result).toEqual({});
+  });
+
+  it('integrates with loadTakeoutConfig', () => {
+    const overrides = parseTakeoutPathArgs(['--input-dir', './cli-input', '--work-dir', './cli-work']);
+    const env = loadEnv(validEnv);
+    const cfg = loadTakeoutConfig(env, overrides);
+
+    expect(cfg.inputDir).toBe(path.resolve('./cli-input'));
+    expect(cfg.workDir).toBe(path.resolve('./cli-work'));
   });
 });

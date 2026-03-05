@@ -1,7 +1,7 @@
 import * as dotenv from 'dotenv';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { loadTakeoutConfig } from '../src/takeout/config.js';
+import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
 import {
   runTakeoutIncremental,
   loadArchiveState,
@@ -16,8 +16,8 @@ import { formatDuration, formatBytes } from '../src/utils/format.js';
 dotenv.config();
 
 const args = process.argv.slice(2);
-const inputDirArg = readStringArg(args, '--input-dir');
-const config = loadTakeoutConfig(undefined, { inputDir: inputDirArg });
+const pathOverrides = parseTakeoutPathArgs(args);
+const config = loadTakeoutConfig(undefined, pathOverrides);
 const scalewayConfig = validateScalewayConfig({
   provider: 'scaleway',
   region: process.env.SCW_REGION,

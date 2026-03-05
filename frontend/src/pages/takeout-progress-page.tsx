@@ -7,8 +7,8 @@ import {
   fetchTakeoutActionStatus,
   fetchTakeoutStatus,
   runTakeoutAction,
-  updateTakeoutInputDir,
-  resetTakeoutInputDir,
+  updateTakeoutPath,
+  resetTakeoutPath,
   type TakeoutAction,
   type ScanProgress,
 } from '@/lib/api';
@@ -498,10 +498,15 @@ export function TakeoutProgressPage() {
             <EditablePathRow
               label="Input"
               value={data.paths.inputDir}
-              onSave={async (v) => { await updateTakeoutInputDir(v); await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
-              onReset={async ()  => { await resetTakeoutInputDir();   await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
+              onSave={async (v) => { await updateTakeoutPath('inputDir', v); await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
+              onReset={async ()  => { await resetTakeoutPath('inputDir');    await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
             />
-            <PathRow label="Work"     value={data.paths.workDir}      />
+            <EditablePathRow
+              label="Work"
+              value={data.paths.workDir}
+              onSave={async (v) => { await updateTakeoutPath('workDir', v); await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
+              onReset={async ()  => { await resetTakeoutPath('workDir');     await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
+            />
             <PathRow label="Manifest" value={data.paths.manifestPath} />
             <PathRow label="State"    value={data.paths.statePath}    />
           </Card>

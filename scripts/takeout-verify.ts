@@ -1,13 +1,13 @@
 import * as dotenv from 'dotenv';
-import { loadTakeoutConfig } from '../src/takeout/config.js';
+import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
 import { runTakeoutVerify } from '../src/takeout/runner.js';
 import { validateScalewayConfig, ScalewayProvider } from '../src/providers/scaleway.js';
 
 dotenv.config();
 
 const args = process.argv.slice(2);
-const inputDirArg = readStringArg(args, '--input-dir');
-const config = loadTakeoutConfig(undefined, { inputDir: inputDirArg });
+const pathOverrides = parseTakeoutPathArgs(args);
+const config = loadTakeoutConfig(undefined, pathOverrides);
 const scalewayConfig = validateScalewayConfig({
   provider: 'scaleway',
   region: process.env.SCW_REGION,
@@ -35,8 +35,3 @@ if (summary.missingKeys.length > 0) {
   process.exitCode = 1;
 }
 
-function readStringArg(argv: string[], flag: string): string | undefined {
-  const idx = argv.indexOf(flag);
-  if (idx < 0 || idx + 1 >= argv.length) return undefined;
-  return argv[idx + 1];
-}

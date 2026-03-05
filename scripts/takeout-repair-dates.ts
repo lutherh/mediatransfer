@@ -26,7 +26,7 @@ import {
   DeleteObjectCommand,
   HeadObjectCommand,
 } from '@aws-sdk/client-s3';
-import { loadTakeoutConfig } from '../src/takeout/config.js';
+import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
 import {
   buildManifest,
   loadManifestJsonl,
@@ -63,8 +63,8 @@ function readStringArg(argv: string[], flag: string): string | undefined {
 
 // ── Load config ─────────────────────────────────────────────────
 
-const inputDirArg = readStringArg(args, '--input-dir');
-const config = loadTakeoutConfig(undefined, { inputDir: inputDirArg });
+const pathOverrides = parseTakeoutPathArgs(args);
+const config = loadTakeoutConfig(undefined, pathOverrides);
 const scwConfig = validateScalewayConfig({
   provider: 'scaleway',
   region: process.env.SCW_REGION,

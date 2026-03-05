@@ -6,6 +6,7 @@ import { createReadStream } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import type { Env } from '../../config/env.js';
 import type { UploadState, UploadStateItem } from '../../takeout/uploader.js';
+import { OVERRIDABLE_PATHS, type OverridablePathName } from '../../takeout/config.js';
 import { apiError } from '../errors.js';
 import { createJob, updateJob } from '../../db/jobs.js';
 
@@ -76,11 +77,12 @@ let currentProcess: ChildProcess | null = null;
 let currentTimeout: NodeJS.Timeout | null = null;
 
 /**
- * User-overridden input directory (set via PUT /takeout/input-dir).
- * When set, this is used instead of env.TAKEOUT_INPUT_DIR for status
- * and is passed as --input-dir to spawned action scripts.
+ * User-overridden paths (set via PUT /takeout/paths/:name).
+ * Keys are OverridablePathName values (e.g. 'inputDir', 'workDir').
+ * When set, these are used instead of env defaults for status
+ * and passed as CLI flags to spawned action scripts.
  */
-let customInputDir: string | undefined;
+const customPaths = new Map<string, string>();
 const manifestCountCache = new Map<string, {
   mtimeMs: number;
   size: number;
@@ -94,26 +96,68 @@ const manifestKeysCache = new Map<string, {
 }>();
 
 export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Promise<void> {
-  // ── Change input directory ──────────────────────────────────────────────
+  // ── Override any configurable path ──────────────────────────────────────
 
+  app.put('/takeout/paths/:name', async (req, reply) => {
+    const { name } = req.params as { name: string };
+    const def = OVERRIDABLE_PATHS[name as OverridablePathName];
+    if (!def) {
+      return reply.code(400).send(apiError('INVALID_INPUT', `Unknown path name: ${name}`));
+    }
+    const body = req.body as { value?: string } | null;
+    const value = body?.value?.trim();
+    if (!value || value.length === 0) {
+      return reply.code(400).send(apiError('INVALID_INPUT', 'value is required'));
+    }
+    const resolved = path.resolve(value);
+    customPaths.set(name, resolved);
+    return { name, value: resolved };
+  });
+
+  app.delete('/takeout/paths/:name', async (req, reply) => {
+    const { name } = req.params as { name: string };
+    const def = OVERRIDABLE_PATHS[name as OverridablePathName];
+    if (!def) {
+      return reply.code(400).send(apiError('INVALID_INPUT', `Unknown path name: ${name}`));
+    }
+    customPaths.delete(name);
+    return { name, value: path.resolve(env[def.envKey]), reset: true };
+  });
+
+  // Legacy convenience aliases (thin wrappers around the generic endpoints)
   app.put('/takeout/input-dir', async (req, reply) => {
     const body = req.body as { inputDir?: string } | null;
     const dir = body?.inputDir?.trim();
     if (!dir || dir.length === 0) {
       return reply.code(400).send(apiError('INVALID_INPUT', 'inputDir is required'));
     }
-    customInputDir = path.resolve(dir);
-    return { inputDir: customInputDir };
+    customPaths.set('inputDir', path.resolve(dir));
+    return { inputDir: customPaths.get('inputDir') };
   });
 
   app.delete('/takeout/input-dir', async () => {
-    customInputDir = undefined;
+    customPaths.delete('inputDir');
     return { inputDir: path.resolve(env.TAKEOUT_INPUT_DIR), reset: true };
   });
 
+  app.put('/takeout/work-dir', async (req, reply) => {
+    const body = req.body as { workDir?: string } | null;
+    const dir = body?.workDir?.trim();
+    if (!dir || dir.length === 0) {
+      return reply.code(400).send(apiError('INVALID_INPUT', 'workDir is required'));
+    }
+    customPaths.set('workDir', path.resolve(dir));
+    return { workDir: customPaths.get('workDir') };
+  });
+
+  app.delete('/takeout/work-dir', async () => {
+    customPaths.delete('workDir');
+    return { workDir: path.resolve(env.TAKEOUT_WORK_DIR), reset: true };
+  });
+
   app.get('/takeout/status', async () => {
-    const inputDir = customInputDir ?? path.resolve(env.TAKEOUT_INPUT_DIR);
-    const workDir = path.resolve(env.TAKEOUT_WORK_DIR);
+    const inputDir = customPaths.get('inputDir') ?? path.resolve(env.TAKEOUT_INPUT_DIR);
+    const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
     const statePath = path.resolve(env.TRANSFER_STATE_PATH);
     const manifestPath = path.join(workDir, 'manifest.jsonl');
 
@@ -349,9 +393,14 @@ function resolveActionCommands(action: TakeoutAction): ActionCommand[] {
 
   let scriptArgs = scriptByAction[action].split(' ');
 
-  // Append --input-dir when the user chose a custom input folder.
-  if (customInputDir) {
-    scriptArgs = [...scriptArgs, '--', '--input-dir', customInputDir];
+  // Append custom directory overrides when the user chose them.
+  const extraArgs: string[] = [];
+  for (const [name, def] of Object.entries(OVERRIDABLE_PATHS)) {
+    const value = customPaths.get(name);
+    if (value) extraArgs.push(def.cliFlag, value);
+  }
+  if (extraArgs.length > 0) {
+    scriptArgs = [...scriptArgs, '--', ...extraArgs];
   }
 
   return [{

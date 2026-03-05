@@ -298,4 +298,267 @@ describe('takeout routes', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     await app.close();
   });
+
+  // ─── PUT /takeout/work-dir ────────────────────────────────────────────────
+
+  it('PUT /takeout/work-dir sets custom work dir and returns it resolved', async () => {
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/takeout/work-dir',
+      payload: { workDir: './custom/work' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().workDir).toBe(path.resolve('./custom/work'));
+
+    await app.close();
+  });
+
+  it('PUT /takeout/work-dir returns 400 when workDir is missing', async () => {
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/takeout/work-dir',
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it('PUT /takeout/work-dir returns 400 when workDir is empty string', async () => {
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/takeout/work-dir',
+      payload: { workDir: '  ' },
+    });
+
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  // ─── DELETE /takeout/work-dir ─────────────────────────────────────────────
+
+  it('DELETE /takeout/work-dir resets to env default', async () => {
+    const envWorkDir = path.join(tempDir, 'env-work');
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv({ TAKEOUT_WORK_DIR: envWorkDir }));
+
+    await app.inject({
+      method: 'PUT',
+      url: '/takeout/work-dir',
+      payload: { workDir: './override-work' },
+    });
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/takeout/work-dir',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().reset).toBe(true);
+    expect(res.json().workDir).toBe(path.resolve(envWorkDir));
+
+    await app.close();
+  });
+
+  // ─── Custom workDir affects /takeout/status ───────────────────────────────
+
+  it('custom workDir is reflected in /takeout/status paths', async () => {
+    const customWork = path.join(tempDir, 'custom-work');
+    await fs.mkdir(customWork, { recursive: true });
+
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    await app.inject({
+      method: 'PUT',
+      url: '/takeout/work-dir',
+      payload: { workDir: customWork },
+    });
+
+    const statusRes = await app.inject({ method: 'GET', url: '/takeout/status' });
+    expect(statusRes.statusCode).toBe(200);
+    expect(statusRes.json().paths.workDir).toBe(path.resolve(customWork));
+
+    await app.close();
+  });
+
+  // ─── Custom workDir is passed to spawned scripts ──────────────────────────
+
+  it('spawned action commands include --work-dir when custom dir is set', async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+
+    spawnMock.mockImplementation(() => {
+      queueMicrotask(() => {
+        child.stdout.emit('data', 'scan output\n');
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const customWork = path.join(tempDir, 'my-work');
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    await app.inject({
+      method: 'PUT',
+      url: '/takeout/work-dir',
+      payload: { workDir: customWork },
+    });
+
+    const okRes = await app.inject({
+      method: 'POST',
+      url: '/takeout/actions/scan',
+    });
+    expect(okRes.statusCode).toBe(202);
+
+    expect(spawnMock).toHaveBeenCalled();
+    const spawnArgs = spawnMock.mock.calls[0][1] as string[];
+    expect(spawnArgs).toContain('--work-dir');
+    expect(spawnArgs).toContain(path.resolve(customWork));
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await app.close();
+  });
+
+  // ─── Generic PUT /takeout/paths/:name ─────────────────────────────────────
+
+  it('PUT /takeout/paths/:name sets custom path and returns resolved value', async () => {
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/takeout/paths/inputDir',
+      payload: { value: './generic-input' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().name).toBe('inputDir');
+    expect(res.json().value).toBe(path.resolve('./generic-input'));
+
+    await app.close();
+  });
+
+  it('PUT /takeout/paths/:name returns 400 for unknown name', async () => {
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/takeout/paths/unknownField',
+      payload: { value: '/some/path' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('INVALID_INPUT');
+
+    await app.close();
+  });
+
+  it('PUT /takeout/paths/:name returns 400 for empty value', async () => {
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/takeout/paths/inputDir',
+      payload: { value: '   ' },
+    });
+
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  // ─── Generic DELETE /takeout/paths/:name ──────────────────────────────────
+
+  it('DELETE /takeout/paths/:name resets to env default', async () => {
+    const envInput = path.join(tempDir, 'env-default');
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv({ TAKEOUT_INPUT_DIR: envInput }));
+
+    // Set a custom value first
+    await app.inject({
+      method: 'PUT',
+      url: '/takeout/paths/inputDir',
+      payload: { value: './override' },
+    });
+
+    // Now reset
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/takeout/paths/inputDir',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().reset).toBe(true);
+    expect(res.json().value).toBe(path.resolve(envInput));
+
+    await app.close();
+  });
+
+  it('DELETE /takeout/paths/:name returns 400 for unknown name', async () => {
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/takeout/paths/bogus',
+    });
+
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  // ─── Generic endpoint state is shared with legacy endpoints ───────────────
+
+  it('generic and legacy endpoints share the same state', async () => {
+    const customInput = path.join(tempDir, 'shared-input');
+    const customWork = path.join(tempDir, 'shared-work');
+    await fs.mkdir(customInput, { recursive: true });
+    await fs.mkdir(customWork, { recursive: true });
+
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv({ TAKEOUT_WORK_DIR: customWork }));
+
+    // Set via generic endpoint
+    await app.inject({
+      method: 'PUT',
+      url: '/takeout/paths/inputDir',
+      payload: { value: customInput },
+    });
+
+    // Read via status (should see the generic-set value)
+    const statusRes = await app.inject({ method: 'GET', url: '/takeout/status' });
+    expect(statusRes.json().paths.inputDir).toBe(path.resolve(customInput));
+
+    // Reset via legacy endpoint
+    await app.inject({ method: 'DELETE', url: '/takeout/input-dir' });
+
+    // Status should be back to env default
+    const afterReset = await app.inject({ method: 'GET', url: '/takeout/status' });
+    expect(afterReset.json().paths.inputDir).not.toBe(path.resolve(customInput));
+
+    await app.close();
+  });
 });
