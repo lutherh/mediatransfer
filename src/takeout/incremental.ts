@@ -25,6 +25,7 @@ import {
   persistReportCsv,
   persistReportJson,
 } from './report.js';
+import { extractAndPersistArchiveMetadata } from './archive-metadata.js';
 import { DEFAULT_MANIFEST_FILE } from './runner.js';
 
 // ─── Archive-level state tracking ──────────────────────────────────────────
@@ -93,12 +94,30 @@ export type IncrementalOptions = {
   completedArchiveDir?: string;
   deleteExtractedAfterUpload?: boolean;
   reportDir?: string;
+  metadataDir?: string;
   progressIntervalMs?: number;
   onArchiveStart?: (archiveName: string, index: number, total: number) => void;
   onArchiveComplete?: (archiveName: string, summary: UploadSummary) => void;
   onArchiveError?: (archiveName: string, error: unknown) => void;
   onUploadProgress?: (archiveName: string, snapshot: UploadProgressSnapshot) => void;
 };
+
+async function persistArchiveMetadataBestEffort(
+  extractDir: string,
+  entries: ManifestEntry[],
+  archiveName: string,
+  metadataDir: string,
+): Promise<void> {
+  try {
+    await extractAndPersistArchiveMetadata(extractDir, entries, archiveName, metadataDir);
+  } catch (error) {
+    console.warn('[incremental] Failed to persist archive metadata; continuing upload', {
+      archiveName,
+      metadataDir,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
 
 export type IncrementalResult = {
   totalArchives: number;
@@ -156,6 +175,7 @@ export async function runTakeoutIncremental(
   };
 
   const globalManifestPath = path.join(config.workDir, DEFAULT_MANIFEST_FILE);
+  const metadataDir = options.metadataDir ?? path.join(config.workDir, 'metadata');
 
   for (let i = 0; i < pending.length; i += 1) {
     const archivePath = pending[i];
@@ -200,6 +220,8 @@ export async function runTakeoutIncremental(
           await cleanupDir(extractDir);
           continue;
         }
+        // Save album + sidecar + duplicate metadata before cleanup
+        await persistArchiveMetadataBestEffort(extractDir, entries, archiveName, metadataDir);
         // Process entries from the root
         archiveSummary = await processArchiveEntries(
           entries,
@@ -222,6 +244,9 @@ export async function runTakeoutIncremental(
           const entries = await buildManifest(root);
           allEntries.push(...entries);
         }
+
+        // Save album + sidecar + duplicate metadata before cleanup
+        await persistArchiveMetadataBestEffort(extractDir, allEntries, archiveName, metadataDir);
 
         archiveSummary = await processArchiveEntries(
           allEntries,

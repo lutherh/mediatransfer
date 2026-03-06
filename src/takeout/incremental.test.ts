@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import type { CloudProvider, ObjectInfo } from '../providers/types.js';
 import type { TakeoutConfig } from './config.js';
 import { runTakeoutIncremental, loadArchiveState } from './incremental.js';
+import { loadArchiveMetadata } from './archive-metadata.js';
 
 class MockProvider implements CloudProvider {
   readonly name = 'MockProvider';
@@ -188,6 +189,87 @@ describe('takeout/incremental', () => {
       expect(result.processedArchives).toBe(1);
       await fs.access(path.join(completedDir, 'takeout-001.tgz'));
       await fs.access(path.join(completedDir, 'takeout-001-1.tgz'));
+    });
+  });
+
+  it('persists archive metadata JSON while still cleaning extracted files', async () => {
+    await withTempDir(async (root) => {
+      const config = configFrom(root);
+      await fs.mkdir(config.inputDir, { recursive: true });
+
+      const archivePath = path.join(config.inputDir, 'takeout-001.tgz');
+      await fs.writeFile(archivePath, 'dummy');
+
+      const provider = new MockProvider();
+
+      const extractor = async (_archivePath: string, destinationDir: string) => {
+        const album1 = path.join(destinationDir, 'Google Photos', 'Trip');
+        const album2 = path.join(destinationDir, 'Google Photos', 'Family');
+        await fs.mkdir(album1, { recursive: true });
+        await fs.mkdir(album2, { recursive: true });
+
+        const img1 = path.join(album1, 'IMG_1.jpg');
+        const img2 = path.join(album2, 'IMG_2.jpg');
+
+        await fs.writeFile(img1, 'same-content');
+        await fs.writeFile(img2, 'same-content');
+
+        await fs.writeFile(
+          `${img1}.json`,
+          JSON.stringify({
+            title: 'Trip shot',
+            photoTakenTime: { timestamp: '1765584000' },
+            people: [{ name: 'Alice' }],
+          }),
+        );
+      };
+
+      const result = await runTakeoutIncremental(config, provider, {}, extractor);
+
+      expect(result.processedArchives).toBe(1);
+
+      // Extracted temp files should be cleaned up
+      await expect(fs.access(path.join(config.workDir, 'temp-extract'))).rejects.toBeDefined();
+
+      // Metadata should still exist after cleanup
+      const metadata = await loadArchiveMetadata(path.join(config.workDir, 'metadata'), 'takeout-001.tgz');
+      expect(metadata).toBeDefined();
+      expect(metadata?.items.length).toBe(2);
+      expect(Object.keys(metadata?.albums ?? {})).toEqual(expect.arrayContaining(['Trip', 'Family']));
+      expect(metadata?.duplicates.length).toBe(1);
+      expect(metadata?.duplicates[0].items.length).toBe(2);
+    });
+  });
+
+  it('continues upload when metadata directory is invalid', async () => {
+    await withTempDir(async (root) => {
+      const config = configFrom(root);
+      await fs.mkdir(config.inputDir, { recursive: true });
+
+      const archivePath = path.join(config.inputDir, 'takeout-001.tgz');
+      await fs.writeFile(archivePath, 'dummy');
+
+      const provider = new MockProvider();
+
+      const extractor = async (_archivePath: string, destinationDir: string) => {
+        const media = path.join(destinationDir, 'Google Photos', 'Album', 'IMG_1.jpg');
+        await fs.mkdir(path.dirname(media), { recursive: true });
+        await fs.writeFile(media, 'img');
+      };
+
+      // Point metadataDir at an existing file so mkdir(metadataDir) fails.
+      const invalidMetadataPath = path.join(root, 'metadata-as-file');
+      await fs.writeFile(invalidMetadataPath, 'not-a-directory');
+
+      const result = await runTakeoutIncremental(
+        config,
+        provider,
+        { metadataDir: invalidMetadataPath },
+        extractor,
+      );
+
+      expect(result.processedArchives).toBe(1);
+      expect(result.failedArchives).toBe(0);
     });
   });
 });
