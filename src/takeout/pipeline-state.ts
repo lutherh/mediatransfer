@@ -119,7 +119,24 @@ export async function savePipelineState(workDir: string, state: PipelineState): 
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(state, null, 2), 'utf8');
-  await fs.rename(tmp, filePath);
+  try {
+    await fs.rename(tmp, filePath);
+  } catch (error) {
+    if (!isFileNotFoundError(error)) {
+      throw error;
+    }
+    // Rare race on temp-file rename: fall back to direct write to keep state current.
+    await fs.writeFile(filePath, JSON.stringify(state, null, 2), 'utf8');
+  }
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && (error as { code?: string }).code === 'ENOENT',
+  );
 }
 
 // ─── State transitions ───────────────────────────────────────────────────────

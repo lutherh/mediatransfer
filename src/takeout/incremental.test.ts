@@ -156,6 +156,11 @@ describe('takeout/incremental', () => {
       expect(result.processedArchives).toBe(1);
       await expect(fs.access(archivePath)).rejects.toBeDefined();
       await fs.access(path.join(config.inputDir, 'uploaded-archives', 'takeout-001.tgz'));
+
+      const archiveState = await loadArchiveState(path.join(config.workDir, 'archive-state.json'));
+      const record = archiveState.archives['takeout-001.tgz'];
+      expect(record.archiveSizeBytes).toBe(5);
+      expect(record.mediaBytes).toBe(3);
     });
   });
 

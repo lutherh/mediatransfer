@@ -85,14 +85,35 @@ describe('takeout routes', () => {
         },
       }),
     );
+    await fs.writeFile(
+      path.join(workDir, 'archive-state.json'),
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        archives: {
+          'takeout-001.tgz': {
+            status: 'completed',
+            entryCount: 2,
+            uploadedCount: 2,
+            skippedCount: 0,
+            failedCount: 0,
+            archiveSizeBytes: 1073741824,
+            mediaBytes: 2147483648,
+            startedAt: '2025-01-01T01:00:00.000Z',
+            completedAt: '2025-01-01T01:10:00.000Z',
+          },
+        },
+      }),
+    );
 
     const env = baseEnv({ TAKEOUT_INPUT_DIR: inputDir, TAKEOUT_WORK_DIR: workDir, TRANSFER_STATE_PATH: statePath });
     const app = Fastify();
     await registerTakeoutRoutes(app, env);
 
     const res = await app.inject({ method: 'GET', url: '/takeout/status' });
+    const body = res.json();
     expect(res.statusCode).toBe(200);
-    expect(res.json().counts).toEqual({
+    expect(body.counts).toEqual({
       total: 2,
       processed: 1,
       pending: 1,
@@ -100,7 +121,17 @@ describe('takeout routes', () => {
       skipped: 0,
       failed: 0,
     });
-    expect(res.json().archivesInInput).toBe(1);
+    expect(body.archivesInInput).toBe(1);
+    expect(body.archiveHistory).toEqual([
+      expect.objectContaining({
+        archiveName: 'takeout-001.tgz',
+        archiveSizeBytes: 1073741824,
+        mediaBytes: 2147483648,
+        handledPercent: 100,
+        isFullyUploaded: true,
+        status: 'completed',
+      }),
+    ]);
 
     await app.close();
   });
@@ -390,6 +421,61 @@ describe('takeout routes', () => {
     const statusRes = await app.inject({ method: 'GET', url: '/takeout/status' });
     expect(statusRes.statusCode).toBe(200);
     expect(statusRes.json().paths.workDir).toBe(path.resolve(customWork));
+
+    await app.close();
+  });
+
+  it('keeps archive history from default workDir when custom workDir has no archive-state', async () => {
+    const customWork = path.join(tempDir, 'custom-work');
+    const defaultWork = path.join(tempDir, 'default-work');
+    const inputDir = path.join(tempDir, 'input');
+    const statePath = path.join(tempDir, 'state.json');
+
+    await fs.mkdir(customWork, { recursive: true });
+    await fs.mkdir(defaultWork, { recursive: true });
+    await fs.mkdir(inputDir, { recursive: true });
+    await fs.writeFile(statePath, JSON.stringify({ version: 1, updatedAt: '2025-01-01T00:00:00.000Z', items: {} }));
+    await fs.writeFile(
+      path.join(defaultWork, 'archive-state.json'),
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        archives: {
+          'takeout-legacy-001.tgz': {
+            status: 'completed',
+            entryCount: 10,
+            uploadedCount: 10,
+            skippedCount: 0,
+            failedCount: 0,
+            completedAt: '2025-01-01T00:10:00.000Z',
+          },
+        },
+      }),
+    );
+
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv({
+      TAKEOUT_INPUT_DIR: inputDir,
+      TAKEOUT_WORK_DIR: defaultWork,
+      TRANSFER_STATE_PATH: statePath,
+    }));
+
+    await app.inject({
+      method: 'PUT',
+      url: '/takeout/work-dir',
+      payload: { workDir: customWork },
+    });
+
+    const statusRes = await app.inject({ method: 'GET', url: '/takeout/status' });
+    expect(statusRes.statusCode).toBe(200);
+    expect(statusRes.json().paths.workDir).toBe(path.resolve(customWork));
+    expect(statusRes.json().archiveHistory).toEqual([
+      expect.objectContaining({
+        archiveName: 'takeout-legacy-001.tgz',
+        isFullyUploaded: true,
+        status: 'completed',
+      }),
+    ]);
 
     await app.close();
   });
