@@ -885,12 +885,16 @@ async function buildArchiveHistory(
     Object.entries(archives).map(async ([archiveName, item]) => {
       const archiveSizeBytes = item.archiveSizeBytes ?? await resolveArchiveSizeBytes(archiveName, inputDir);
       const processedCount = item.uploadedCount + item.skippedCount + item.failedCount;
+      const hasItemAccounting = item.entryCount > 0 || processedCount > 0;
       const handledPercent = item.entryCount > 0
         ? Math.min(100, Math.round((processedCount / item.entryCount) * 10000) / 100)
-        : item.status === 'completed'
+        : hasItemAccounting && item.status === 'completed'
           ? 100
           : 0;
-      const isFullyUploaded = item.status === 'completed' && item.failedCount === 0 && handledPercent >= 100;
+      const isFullyUploaded = item.status === 'completed'
+        && item.failedCount === 0
+        && hasItemAccounting
+        && handledPercent >= 100;
 
       return {
         archiveName,

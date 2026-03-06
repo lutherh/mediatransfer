@@ -96,6 +96,7 @@ export function TakeoutProgressPage() {
   const failureReason    = getActionFailureReason(lastOutput);
 
   const busy = isActionRunning || actionMutation.isPending;
+  const disablePathEditing = busy;
   const run  = (action: TakeoutAction) => actionMutation.mutate(action);
 
   // Parsed verify output
@@ -476,6 +477,52 @@ export function TakeoutProgressPage() {
         </div>
       )}
 
+      {/* Technical details */}
+      <details
+        open={detailsOpen}
+        onToggle={(e) => setDetailsOpen((e.target as HTMLDetailsElement).open)}
+      >
+        <summary className="cursor-pointer select-none text-xs text-slate-400 hover:text-slate-600 py-1">
+          {detailsOpen ? '▾' : '▸'} Configuration &amp; Logs
+        </summary>
+        <div className="mt-3 space-y-3">
+          <Card className="space-y-2 text-xs">
+            <p className="font-medium text-slate-700">File paths <span className="font-normal text-slate-400">(click ✎ to edit)</span></p>
+            {disablePathEditing && (
+              <p className="text-[11px] text-amber-700">
+                Path edits are disabled while a job is running.
+              </p>
+            )}
+            <EditablePathRow
+              label="Input"
+              value={data.paths.inputDir}
+              disabled={disablePathEditing}
+              onSave={async (v) => { await updateTakeoutPath('inputDir', v); await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
+              onReset={async ()  => { await resetTakeoutPath('inputDir');    await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
+            />
+            <EditablePathRow
+              label="Work"
+              value={data.paths.workDir}
+              disabled={disablePathEditing}
+              onSave={async (v) => { await updateTakeoutPath('workDir', v); await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
+              onReset={async ()  => { await resetTakeoutPath('workDir');     await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
+            />
+            <PathRow label="Manifest" value={data.paths.manifestPath} />
+            <PathRow label="State"    value={data.paths.statePath}    />
+          </Card>
+          <Card className="space-y-2">
+            <p className="text-xs font-medium text-slate-700">Command output</p>
+            {lastOutput.length ? (
+              <pre className="max-h-72 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100 leading-relaxed">
+                {lastOutput.join('\n')}
+              </pre>
+            ) : (
+              <p className="text-xs text-slate-500">No output yet.</p>
+            )}
+          </Card>
+        </div>
+      </details>
+
       {/* Archive history */}
       {archiveHistory.length > 0 && (
         <Card className="space-y-3">
@@ -535,45 +582,6 @@ export function TakeoutProgressPage() {
           ))}
         </div>
       )}
-
-      {/* Technical details */}
-      <details
-        open={detailsOpen}
-        onToggle={(e) => setDetailsOpen((e.target as HTMLDetailsElement).open)}
-      >
-        <summary className="cursor-pointer select-none text-xs text-slate-400 hover:text-slate-600 py-1">
-          {detailsOpen ? '▾' : '▸'} Technical details
-        </summary>
-        <div className="mt-3 space-y-3">
-          <Card className="space-y-2 text-xs">
-            <p className="font-medium text-slate-700">File paths</p>
-            <EditablePathRow
-              label="Input"
-              value={data.paths.inputDir}
-              onSave={async (v) => { await updateTakeoutPath('inputDir', v); await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
-              onReset={async ()  => { await resetTakeoutPath('inputDir');    await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
-            />
-            <EditablePathRow
-              label="Work"
-              value={data.paths.workDir}
-              onSave={async (v) => { await updateTakeoutPath('workDir', v); await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
-              onReset={async ()  => { await resetTakeoutPath('workDir');     await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
-            />
-            <PathRow label="Manifest" value={data.paths.manifestPath} />
-            <PathRow label="State"    value={data.paths.statePath}    />
-          </Card>
-          <Card className="space-y-2">
-            <p className="text-xs font-medium text-slate-700">Command output</p>
-            {lastOutput.length ? (
-              <pre className="max-h-72 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100 leading-relaxed">
-                {lastOutput.join('\n')}
-              </pre>
-            ) : (
-              <p className="text-xs text-slate-500">No output yet.</p>
-            )}
-          </Card>
-        </div>
-      </details>
     </div>
   );
 }
@@ -769,10 +777,23 @@ function CleanupOption({
 }
 
 function ArchiveStatusPill({ record }: { record: TakeoutArchiveHistoryEntry }): ReactElement {
+  const hasItemAccounting = record.entryCount > 0
+    || record.uploadedCount > 0
+    || record.skippedCount > 0
+    || record.failedCount > 0;
+
   if (record.isFullyUploaded) {
     return (
       <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-medium text-green-800">
         100% uploaded
+      </span>
+    );
+  }
+
+  if (record.status === 'completed' && !hasItemAccounting) {
+    return (
+      <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+        Completed (legacy record)
       </span>
     );
   }
@@ -816,11 +837,13 @@ function PathRow({ label, value }: { label: string; value: string }): ReactEleme
 function EditablePathRow({
   label,
   value,
+  disabled,
   onSave,
   onReset,
 }: {
   label: string;
   value: string;
+  disabled?: boolean;
   onSave: (newValue: string) => Promise<void>;
   onReset: () => Promise<void>;
 }): ReactElement {
@@ -830,6 +853,7 @@ function EditablePathRow({
   const inputRef = useRef<HTMLInputElement>(null);
 
   const startEditing = () => {
+    if (disabled) return;
     setDraft(value);
     setEditing(true);
     // Focus the input after React renders it
@@ -874,8 +898,9 @@ function EditablePathRow({
         <button
           type="button"
           onClick={startEditing}
-          className="shrink-0 text-slate-300 hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity"
-          title="Change input directory"
+          className="shrink-0 text-slate-400 hover:text-blue-500 transition-colors"
+          disabled={disabled}
+          title={disabled ? 'Path editing is disabled while processing is running' : 'Edit path'}
         >
           ✎
         </button>
@@ -896,7 +921,7 @@ function EditablePathRow({
             if (e.key === 'Enter') void save();
             if (e.key === 'Escape') cancel();
           }}
-          disabled={saving}
+          disabled={saving || disabled}
           className="flex-1 min-w-0 rounded border border-slate-300 bg-white px-2 py-0.5 text-xs font-mono text-slate-700 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50"
         />
       </div>
@@ -905,7 +930,7 @@ function EditablePathRow({
           type="button"
           className="h-5 px-2 text-[10px]"
           onClick={() => void save()}
-          disabled={saving || !draft.trim()}
+          disabled={saving || disabled || !draft.trim()}
         >
           {saving ? '…' : 'Save'}
         </Button>
@@ -913,7 +938,7 @@ function EditablePathRow({
           type="button"
           className="h-5 px-2 text-[10px] bg-slate-100 text-slate-600 hover:bg-slate-200"
           onClick={cancel}
-          disabled={saving}
+          disabled={saving || disabled}
         >
           Cancel
         </Button>
@@ -921,7 +946,7 @@ function EditablePathRow({
           type="button"
           className="h-5 px-2 text-[10px] bg-amber-50 text-amber-700 hover:bg-amber-100"
           onClick={() => void reset()}
-          disabled={saving}
+          disabled={saving || disabled}
           title="Reset to default from environment"
         >
           Reset default
