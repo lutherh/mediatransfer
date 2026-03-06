@@ -10,6 +10,7 @@ import {
   updateTakeoutPath,
   resetTakeoutPath,
   type TakeoutAction,
+  type TakeoutArchiveHistoryEntry,
   type ScanProgress,
   type PipelineSummary,
   type StepRecord,
@@ -88,6 +89,7 @@ export function TakeoutProgressPage() {
   const hasFailed        = data.counts.failed > 0;
   const lastActionFailed = !isActionRunning && actionStatus?.success === false;
   const archivesInInput  = data.archivesInInput ?? 0;
+  const archiveHistory   = data.archiveHistory ?? [];
   const mutationError    = actionMutation.error instanceof Error
     ? actionMutation.error.message
     : 'Failed to start action.';
@@ -474,6 +476,48 @@ export function TakeoutProgressPage() {
         </div>
       )}
 
+      {/* Archive history */}
+      {archiveHistory.length > 0 && (
+        <Card className="space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <p className="text-sm font-semibold text-slate-900">Archive Upload History</p>
+            <p className="text-xs text-slate-500">{archiveHistory.length.toLocaleString()} archive records</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-xs">
+              <thead>
+                <tr className="text-left text-slate-500 border-b border-slate-200">
+                  <th className="py-2 pr-3 font-medium">Archive</th>
+                  <th className="py-2 pr-3 font-medium">TGZ Size</th>
+                  <th className="py-2 pr-3 font-medium">Handled Data</th>
+                  <th className="py-2 pr-3 font-medium">Items</th>
+                  <th className="py-2 pr-3 font-medium">Status</th>
+                  <th className="py-2 font-medium">Finished</th>
+                </tr>
+              </thead>
+              <tbody>
+                {archiveHistory.map((record) => (
+                  <tr key={record.archiveName} className="border-b border-slate-100 last:border-b-0 align-top">
+                    <td className="py-2 pr-3 font-mono text-slate-700 break-all">{record.archiveName}</td>
+                    <td className="py-2 pr-3 text-slate-700 tabular-nums">{formatBytesAsGb(record.archiveSizeBytes)}</td>
+                    <td className="py-2 pr-3 text-slate-700 tabular-nums">{formatBytesAsGb(record.mediaBytes)}</td>
+                    <td className="py-2 pr-3 text-slate-700 tabular-nums">
+                      {record.uploadedCount.toLocaleString()} / {record.entryCount.toLocaleString()}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <ArchiveStatusPill record={record} />
+                    </td>
+                    <td className="py-2 text-slate-500 tabular-nums">
+                      {record.completedAt ? formatDateTime(record.completedAt) : 'In progress'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
       {/* Failed upload list */}
       {hasFailed && (
         <div className="space-y-2">
@@ -722,6 +766,38 @@ function CleanupOption({
       </Button>
     </div>
   );
+}
+
+function ArchiveStatusPill({ record }: { record: TakeoutArchiveHistoryEntry }): ReactElement {
+  if (record.isFullyUploaded) {
+    return (
+      <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-medium text-green-800">
+        100% uploaded
+      </span>
+    );
+  }
+
+  if (record.status === 'failed') {
+    return (
+      <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-800">
+        Failed ({record.handledPercent.toFixed(0)}%)
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+      {record.status} ({record.handledPercent.toFixed(0)}%)
+    </span>
+  );
+}
+
+function formatBytesAsGb(value?: number): string {
+  if (typeof value !== 'number' || Number.isNaN(value) || value <= 0) {
+    return 'unknown';
+  }
+  const gb = value / (1024 ** 3);
+  return `${gb.toFixed(2)} GB`;
 }
 
 // ─── Path row ─────────────────────────────────────────────────────────────────

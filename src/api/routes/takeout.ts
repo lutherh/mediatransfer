@@ -15,6 +15,7 @@ import {
   buildPipelineSummary,
   type PipelineState,
 } from '../../takeout/pipeline-state.js';
+import { loadArchiveState, type ArchiveStateItem } from '../../takeout/incremental.js';
 import { apiError } from '../errors.js';
 import { createJob, updateJob } from '../../db/jobs.js';
 
@@ -52,6 +53,22 @@ type ActionCommand = {
   command: string;
   args: string[];
   display: string;
+};
+
+type ArchiveHistoryEntry = {
+  archiveName: string;
+  status: 'pending' | 'extracting' | 'uploading' | 'completed' | 'failed';
+  archiveSizeBytes?: number;
+  mediaBytes?: number;
+  entryCount: number;
+  uploadedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  handledPercent: number;
+  isFullyUploaded: boolean;
+  startedAt?: string;
+  completedAt?: string;
+  error?: string;
 };
 
 const MAX_OUTPUT_LINES = 300;
@@ -239,13 +256,15 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
   app.get('/takeout/status', async () => {
     const inputDir = customPaths.get('inputDir') ?? path.resolve(env.TAKEOUT_INPUT_DIR);
     const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
+    const defaultWorkDir = path.resolve(env.TAKEOUT_WORK_DIR);
     const statePath = path.resolve(env.TRANSFER_STATE_PATH);
     const manifestPath = path.join(workDir, 'manifest.jsonl');
 
-    const [state, manifestKeys, pipeline] = await Promise.all([
+    const [state, manifestKeys, pipeline, mergedArchiveState] = await Promise.all([
       readUploadState(statePath),
       readManifestKeys(manifestPath),
       ensurePipelineState(workDir),
+      loadMergedArchiveState(workDir, defaultWorkDir),
     ]);
 
     // Count only state entries that correspond to current manifest keys.
@@ -261,6 +280,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     const processed = summary.uploaded + summary.skipped + summary.failed;
     const pending = Math.max(total - processed, 0);
     const progress = total > 0 ? Math.min(processed / total, 1) : 0;
+    const archiveHistory = await buildArchiveHistory(mergedArchiveState, inputDir);
 
     // Count archive files waiting in the input directory
     let archivesInInput = 0;
@@ -294,6 +314,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       recentFailures: summary.recentFailures,
       isComplete: total > 0 && pending === 0 && summary.failed === 0,
       archivesInInput,
+      archiveHistory,
       pipeline: buildPipelineSummary(pipeline),
     };
   });
@@ -327,6 +348,30 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       status: snapshotStatus(),
     });
   });
+}
+
+async function loadMergedArchiveState(
+  activeWorkDir: string,
+  defaultWorkDir: string,
+): Promise<Record<string, ArchiveStateItem>> {
+  const activePath = path.join(activeWorkDir, 'archive-state.json');
+
+  if (activeWorkDir === defaultWorkDir) {
+    const state = await loadArchiveState(activePath);
+    return state.archives;
+  }
+
+  const fallbackPath = path.join(defaultWorkDir, 'archive-state.json');
+  const [active, fallback] = await Promise.all([
+    loadArchiveState(activePath),
+    loadArchiveState(fallbackPath),
+  ]);
+
+  // Keep all history entries; active dir wins on exact key collisions.
+  return {
+    ...fallback.archives,
+    ...active.archives,
+  };
 }
 
 function runAction(action: TakeoutAction): void {
@@ -830,4 +875,72 @@ function summarizeState(items: Record<string, UploadStateItem>): {
     failed,
     recentFailures: recentFailures.slice(0, 10),
   };
+}
+
+async function buildArchiveHistory(
+  archives: Record<string, ArchiveStateItem>,
+  inputDir: string,
+): Promise<ArchiveHistoryEntry[]> {
+  const entries = await Promise.all(
+    Object.entries(archives).map(async ([archiveName, item]) => {
+      const archiveSizeBytes = item.archiveSizeBytes ?? await resolveArchiveSizeBytes(archiveName, inputDir);
+      const processedCount = item.uploadedCount + item.skippedCount + item.failedCount;
+      const handledPercent = item.entryCount > 0
+        ? Math.min(100, Math.round((processedCount / item.entryCount) * 10000) / 100)
+        : item.status === 'completed'
+          ? 100
+          : 0;
+      const isFullyUploaded = item.status === 'completed' && item.failedCount === 0 && handledPercent >= 100;
+
+      return {
+        archiveName,
+        status: item.status,
+        archiveSizeBytes,
+        mediaBytes: item.mediaBytes,
+        entryCount: item.entryCount,
+        uploadedCount: item.uploadedCount,
+        skippedCount: item.skippedCount,
+        failedCount: item.failedCount,
+        handledPercent,
+        isFullyUploaded,
+        startedAt: item.startedAt,
+        completedAt: item.completedAt,
+        error: item.error,
+      } satisfies ArchiveHistoryEntry;
+    }),
+  );
+
+  entries.sort((left, right) => {
+    const leftDate = left.completedAt ?? left.startedAt ?? '';
+    const rightDate = right.completedAt ?? right.startedAt ?? '';
+    if (leftDate !== rightDate) {
+      return rightDate.localeCompare(leftDate);
+    }
+    return left.archiveName.localeCompare(right.archiveName);
+  });
+
+  return entries;
+}
+
+async function resolveArchiveSizeBytes(
+  archiveName: string,
+  inputDir: string,
+): Promise<number | undefined> {
+  const candidatePaths = [
+    path.join(inputDir, archiveName),
+    path.join(inputDir, 'uploaded-archives', archiveName),
+  ];
+
+  for (const candidatePath of candidatePaths) {
+    try {
+      const stats = await fs.stat(candidatePath);
+      if (stats.isFile()) {
+        return stats.size;
+      }
+    } catch {
+      // Ignore missing paths and try next location.
+    }
+  }
+
+  return undefined;
 }

@@ -105,8 +105,26 @@ export type TakeoutStatus = {
   isComplete: boolean;
   /** Number of .zip / .tgz / .tar archive files currently sitting in the input folder */
   archivesInInput: number;
+  /** Archive-level processing history from archive-state.json */
+  archiveHistory?: TakeoutArchiveHistoryEntry[];
   /** Pipeline state: ordered step progression with per-step status */
   pipeline?: PipelineSummary;
+};
+
+export type TakeoutArchiveHistoryEntry = {
+  archiveName: string;
+  status: 'pending' | 'extracting' | 'uploading' | 'completed' | 'failed';
+  archiveSizeBytes?: number;
+  mediaBytes?: number;
+  entryCount: number;
+  uploadedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  handledPercent: number;
+  isFullyUploaded: boolean;
+  startedAt?: string;
+  completedAt?: string;
+  error?: string;
 };
 
 export type PipelineStepName = 'scan' | 'upload' | 'verify' | 'cleanup';

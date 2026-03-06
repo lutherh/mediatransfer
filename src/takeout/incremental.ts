@@ -38,6 +38,8 @@ export type ArchiveStateItem = {
   uploadedCount: number;
   skippedCount: number;
   failedCount: number;
+  archiveSizeBytes?: number;
+  mediaBytes?: number;
   startedAt?: string;
   completedAt?: string;
   error?: string;
@@ -66,7 +68,9 @@ export async function loadArchiveState(statePath: string): Promise<ArchiveState>
     }
     return parsed;
   } catch (err) {
-    console.debug('[incremental] Failed to load archive state, using empty state', err);
+    if (!isFileNotFoundError(err)) {
+      console.debug('[incremental] Failed to load archive state, using empty state', err);
+    }
     return createEmptyArchiveState();
   }
 }
@@ -181,6 +185,7 @@ export async function runTakeoutIncremental(
     const archivePath = pending[i];
     const archiveName = path.basename(archivePath);
     const extractDir = path.join(config.workDir, 'temp-extract');
+    const archiveSizeBytes = await getFileSizeBestEffort(archivePath);
 
     options.onArchiveStart?.(archiveName, i + 1, pending.length);
 
@@ -191,6 +196,7 @@ export async function runTakeoutIncremental(
       uploadedCount: 0,
       skippedCount: 0,
       failedCount: 0,
+      archiveSizeBytes,
       startedAt: new Date().toISOString(),
     };
     await persistArchiveState(archiveStatePath, archiveState);
@@ -386,6 +392,7 @@ async function processArchiveEntries(
     uploadedCount: summary.uploaded,
     skippedCount: summary.skipped,
     failedCount: summary.failed,
+    mediaBytes: entries.reduce((sum, entry) => sum + Math.max(0, entry.size ?? 0), 0),
     completedAt: new Date().toISOString(),
     error: failed ? `${summary.failed} item(s) failed in archive upload` : undefined,
   };
@@ -474,6 +481,24 @@ function isCrossDeviceRenameError(error: unknown): boolean {
     && 'code' in error
     && (error as { code?: string }).code === 'EXDEV',
   );
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && (error as { code?: string }).code === 'ENOENT',
+  );
+}
+
+async function getFileSizeBestEffort(filePath: string): Promise<number | undefined> {
+  try {
+    const stats = await fs.stat(filePath);
+    return stats.size;
+  } catch {
+    return undefined;
+  }
 }
 
 // ─── Summary / progress helpers ────────────────────────────────────────────
