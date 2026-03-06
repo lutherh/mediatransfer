@@ -34,6 +34,63 @@ import {
 
 export const DEFAULT_MANIFEST_FILE = 'manifest.jsonl';
 
+type ArchiveHistoryItem = {
+  status: 'pending' | 'extracting' | 'uploading' | 'completed' | 'failed';
+  entryCount: number;
+  uploadedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  archiveSizeBytes?: number;
+  mediaBytes?: number;
+  startedAt?: string;
+  completedAt?: string;
+  error?: string;
+};
+
+type ArchiveHistoryState = {
+  version: 1;
+  updatedAt: string;
+  archives: Record<string, ArchiveHistoryItem>;
+};
+
+function createEmptyArchiveHistoryState(): ArchiveHistoryState {
+  return {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    archives: {},
+  };
+}
+
+async function loadArchiveHistoryState(statePath: string): Promise<ArchiveHistoryState> {
+  try {
+    const raw = (await fs.readFile(statePath, 'utf8')).replace(/^\uFEFF/, '');
+    const parsed = JSON.parse(raw) as ArchiveHistoryState;
+    if (parsed.version === 1 && typeof parsed.archives === 'object') {
+      return parsed;
+    }
+  } catch {
+    // Missing or malformed archive state is treated as empty.
+  }
+  return createEmptyArchiveHistoryState();
+}
+
+async function persistArchiveHistoryState(statePath: string, state: ArchiveHistoryState): Promise<void> {
+  state.updatedAt = new Date().toISOString();
+  await fs.mkdir(path.dirname(statePath), { recursive: true });
+  const tmp = `${statePath}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(state, null, 2), 'utf8');
+  await fs.rename(tmp, statePath);
+}
+
+async function getFileSizeBestEffort(filePath: string): Promise<number | undefined> {
+  try {
+    const stats = await fs.stat(filePath);
+    return stats.isFile() ? stats.size : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function assertManifestExists(manifestPath: string): Promise<void> {
   try {
     await fs.access(manifestPath);
@@ -126,7 +183,9 @@ export async function runTakeoutScan(
   const allArchives = await discoverTakeoutArchives(config.inputDir);
   const manifestPath = path.join(config.workDir, DEFAULT_MANIFEST_FILE);
   const scanStatePath = path.join(config.workDir, 'scan-state.json');
+  const archiveStatePath = path.join(config.workDir, 'archive-state.json');
   const normalizedDir  = path.join(config.workDir, 'normalized');
+  const archiveState = await loadArchiveHistoryState(archiveStatePath);
 
   // ── No archive files at all: fall back to direct-media / descriptive error ─
   if (allArchives.length === 0) {
@@ -181,6 +240,25 @@ export async function runTakeoutScan(
   for (let i = 0; i < toExtract.length; i++) {
     const archivePath = toExtract[i];
     const archiveName = path.basename(archivePath);
+    const existing = archiveState.archives[archiveName];
+    const shouldTrackScanState = existing?.status !== 'completed';
+    const archiveSizeBytes = await getFileSizeBestEffort(archivePath);
+
+    if (shouldTrackScanState) {
+      archiveState.archives[archiveName] = {
+        status: 'extracting',
+        entryCount: existing?.entryCount ?? 0,
+        uploadedCount: existing?.uploadedCount ?? 0,
+        skippedCount: existing?.skippedCount ?? 0,
+        failedCount: existing?.failedCount ?? 0,
+        archiveSizeBytes: existing?.archiveSizeBytes ?? archiveSizeBytes,
+        mediaBytes: existing?.mediaBytes,
+        startedAt: existing?.startedAt ?? new Date().toISOString(),
+        completedAt: existing?.completedAt,
+        error: undefined,
+      };
+      await persistArchiveHistoryState(archiveStatePath, archiveState);
+    }
 
     // Weight extraction as 0‒65 % of total progress
     const percent = Math.round(((alreadyDone + i) / Math.max(totalArchives, 1)) * 65);
@@ -192,11 +270,33 @@ export async function runTakeoutScan(
       detail: archiveName,
     });
 
-    await effectiveExtractor(archivePath, config.workDir);
+    try {
+      await effectiveExtractor(archivePath, config.workDir);
+    } catch (error) {
+      if (shouldTrackScanState) {
+        archiveState.archives[archiveName] = {
+          ...archiveState.archives[archiveName],
+          status: 'failed',
+          completedAt: new Date().toISOString(),
+          error: error instanceof Error ? error.message : String(error),
+        };
+        await persistArchiveHistoryState(archiveStatePath, archiveState);
+      }
+      throw error;
+    }
 
     // Checkpoint immediately so a timeout / crash leaves progress intact
     scanState.extractedArchives.push(archiveName);
     await saveScanState(scanStatePath, scanState);
+
+    if (shouldTrackScanState) {
+      archiveState.archives[archiveName] = {
+        ...archiveState.archives[archiveName],
+        status: 'pending',
+        error: undefined,
+      };
+      await persistArchiveHistoryState(archiveStatePath, archiveState);
+    }
   }
 
   // ── Phase 2: Normalize (wipe first for idempotency) ───────────────────────

@@ -13,6 +13,11 @@ vi.mock('node:child_process', () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
+// NOTE: tempDir is declared here so baseEnv() can reference it.
+// This ensures TRANSFER_STATE_PATH (and hence custom-paths.json) always
+// points into the disposable temp folder, never the real data/ directory.
+let tempDir: string;
+
 function baseEnv(overrides: Partial<Env> = {}): Env {
   return {
     NODE_ENV: 'test',
@@ -37,11 +42,11 @@ function baseEnv(overrides: Partial<Env> = {}): Env {
     GOOGLE_REFRESH_TOKEN: undefined,
     GOOGLE_ACCESS_TOKEN: undefined,
     GOOGLE_TOKEN_EXPIRY_DATE: undefined,
-    GOOGLE_BATCH_STATE_PATH: './data/takeout/google-api-state.json',
-    GOOGLE_BATCH_TEMP_DIR: './data/takeout/work/google-api-batches',
-    TAKEOUT_INPUT_DIR: './data/takeout/input',
-    TAKEOUT_WORK_DIR: './data/takeout/work',
-    TRANSFER_STATE_PATH: './data/takeout/state.json',
+    GOOGLE_BATCH_STATE_PATH: path.join(tempDir, 'google-api-state.json'),
+    GOOGLE_BATCH_TEMP_DIR: path.join(tempDir, 'google-api-batches'),
+    TAKEOUT_INPUT_DIR: path.join(tempDir, 'input'),
+    TAKEOUT_WORK_DIR: path.join(tempDir, 'work'),
+    TRANSFER_STATE_PATH: path.join(tempDir, 'state.json'),
     UPLOAD_CONCURRENCY: 4,
     UPLOAD_RETRY_COUNT: 5,
     ...overrides,
@@ -49,7 +54,6 @@ function baseEnv(overrides: Partial<Env> = {}): Env {
 }
 
 describe('takeout routes', () => {
-  let tempDir: string;
 
   beforeEach(async () => {
     spawnMock.mockReset();

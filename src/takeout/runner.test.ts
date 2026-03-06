@@ -89,6 +89,13 @@ describe('takeout/runner', () => {
 
       expect(result.entryCount).toBe(1);
       await expect(fs.access(result.manifestPath)).resolves.toBeUndefined();
+
+      const archiveStatePath = path.join(workDir, 'archive-state.json');
+      const archiveStateRaw = await fs.readFile(archiveStatePath, 'utf8');
+      const archiveState = JSON.parse(archiveStateRaw) as {
+        archives: Record<string, { status: string }>;
+      };
+      expect(archiveState.archives['takeout-1.zip']?.status).toBe('pending');
     });
   });
 
