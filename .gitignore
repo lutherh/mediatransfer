@@ -16,3 +16,4 @@ data/takeout/state.backup.json
 debug-output.txt
 data/takeout/state.json.pre-exif-repair.bak
 scripts/takeout-repair-exif.ts
+data/takeout/custom-paths.json
