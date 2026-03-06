@@ -38,6 +38,8 @@ const archiveCompleteDir = archiveCompleteDirArg
 const keepExtracted = args.includes('--keep-extracted');
 const maxFailures = readNumberArg(args, '--max-failures');
 const concurrency = readNumberArg(args, '--concurrency');
+const metadataDirArg = readStringArg(args, '--metadata-dir');
+const metadataDir = metadataDirArg ? path.resolve(metadataDirArg) : undefined;
 const statusOnly = args.includes('--status');
 const progressIntervalSec = readNumberArg(args, '--progress-interval-sec');
 const progressIntervalMs = progressIntervalSec !== undefined
@@ -122,6 +124,7 @@ if (moveArchive) {
   console.log(`  Completed archive dir: ${archiveCompleteDir}`);
 }
 console.log(`  Upload concurrency: ${concurrency ?? config.uploadConcurrency}`);
+console.log(`  Metadata dir: ${metadataDir ?? path.join(config.workDir, 'metadata')}`);
 console.log('');
 
 const startTime = Date.now();
@@ -132,6 +135,7 @@ const result = await runTakeoutIncremental(config, provider, {
   maxFailures,
   uploadConcurrency: concurrency,
   progressIntervalMs,
+  metadataDir,
   deleteArchiveAfterUpload: deleteArchive,
   moveArchiveAfterUpload: moveArchive,
   completedArchiveDir: moveArchive ? archiveCompleteDir : undefined,
