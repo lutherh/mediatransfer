@@ -240,11 +240,12 @@ if (deleteArchives && eligibleInputArchives.length > 0) {
 } else if (moveArchives && eligibleInputArchives.length > 0) {
   for (const archivePath of eligibleInputArchives) {
     const stat = await fs.stat(archivePath).catch(() => null);
+    const txtName = path.parse(path.basename(archivePath)).name + '.txt';
     actions.push({
       type: 'move-file',
       from: archivePath,
-      to: path.join(moveTarget, path.basename(archivePath)),
-      label: `input/${path.basename(archivePath)} → uploaded-archives/`,
+      to: path.join(moveTarget, txtName),
+      label: `input/${path.basename(archivePath)} → uploaded-archives/${txtName}`,
       size: stat?.size ?? 0,
     });
   }
@@ -311,13 +312,11 @@ for (const action of actions) {
     } else if (action.type === 'move-file') {
       console.log(`   Moving ${action.label}...`);
       await fs.mkdir(path.dirname(action.to), { recursive: true });
-      try {
-        await fs.rename(action.from, action.to);
-      } catch {
-        // Cross-device: fall back to copy+delete
-        await fs.copyFile(action.from, action.to);
-        await fs.unlink(action.from);
-      }
+      const archiveName = path.basename(action.from);
+      const sizeInfo = action.size ? ` (${action.size} bytes)` : '';
+      const content = `Archive processed and deleted to save disk space: ${archiveName}${sizeInfo}\nOriginal path: ${action.from}\nProcessed at: ${new Date().toISOString()}\n`;
+      await fs.writeFile(action.to, content, 'utf-8');
+      await fs.unlink(action.from);
       freedBytes += action.size;
     }
     actionsDone += 1;
