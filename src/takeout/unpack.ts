@@ -198,7 +198,13 @@ async function walkDirectories(
     const current = stack.pop();
     if (!current) continue;
 
-    const entries = await fs.readdir(current, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch (err) {
+      console.warn(`[unpack] Skipping unreadable directory: ${current}`, (err as Error).message);
+      continue;
+    }
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
 
@@ -214,21 +220,31 @@ async function mergeDirectory(
   targetDir: string,
   onFile?: (fileName: string) => void,
 ): Promise<void> {
-  const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+  let entries;
+  try {
+    entries = await fs.readdir(sourceDir, { withFileTypes: true });
+  } catch (err) {
+    console.warn(`[unpack] Skipping unreadable directory: ${sourceDir}`, (err as Error).message);
+    return;
+  }
 
   for (const entry of entries) {
     const sourcePath = path.join(sourceDir, entry.name);
     const targetPath = path.join(targetDir, entry.name);
 
-    if (entry.isDirectory()) {
-      await fs.mkdir(targetPath, { recursive: true });
-      await mergeDirectory(sourcePath, targetPath, onFile);
-      continue;
-    }
+    try {
+      if (entry.isDirectory()) {
+        await fs.mkdir(targetPath, { recursive: true });
+        await mergeDirectory(sourcePath, targetPath, onFile);
+        continue;
+      }
 
-    if (entry.isFile()) {
-      await moveWithCollisionHandling(sourcePath, targetPath);
-      onFile?.(entry.name);
+      if (entry.isFile()) {
+        await moveWithCollisionHandling(sourcePath, targetPath);
+        onFile?.(entry.name);
+      }
+    } catch (err) {
+      console.warn(`[unpack] Skipping file due to error: ${sourcePath}`, (err as Error).message);
     }
   }
 }
@@ -307,7 +323,13 @@ async function countFilesRecursive(dir: string): Promise<number> {
   const stack = [dir];
   while (stack.length > 0) {
     const current = stack.pop()!;
-    const entries = await fs.readdir(current, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch (err) {
+      console.warn(`[unpack] Skipping unreadable directory: ${current}`, (err as Error).message);
+      continue;
+    }
     for (const entry of entries) {
       if (entry.isDirectory()) stack.push(path.join(current, entry.name));
       else if (entry.isFile()) count++;
@@ -323,7 +345,13 @@ async function containsMediaFiles(rootDir: string): Promise<boolean> {
     const current = stack.pop();
     if (!current) continue;
 
-    const entries = await fs.readdir(current, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch (err) {
+      console.warn(`[unpack] Skipping unreadable directory: ${current}`, (err as Error).message);
+      continue;
+    }
     for (const entry of entries) {
       const fullPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
