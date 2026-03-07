@@ -331,6 +331,22 @@ export async function runTakeoutScan(
 
   onProgress?.({ phase: 'normalize', current: 1, total: 1, percent: 72, detail: 'Folders merged.' });
 
+  // ── Phase 2b: Cleanup extracted Takeout directories ───────────────────────
+  // normalizeTakeoutMediaRoot now moves (not copies) files, so the original
+  // Google Photos roots are mostly empty. Remove them and any parent Takeout
+  // directories to reclaim disk space (metadata sidecar .json files, empty dirs).
+  if (roots.length > 0) {
+    for (const root of roots) {
+      try { await fs.rm(root, { recursive: true, force: true }); } catch { /* ok */ }
+      // Also try to remove the parent Takeout/ folder if it's now empty
+      const takeoutDir = path.dirname(root);
+      try {
+        const remaining = await fs.readdir(takeoutDir);
+        if (remaining.length === 0) await fs.rmdir(takeoutDir);
+      } catch { /* ok */ }
+    }
+  }
+
   // ── Phase 3: Build manifest ────────────────────────────────────────────────
   onProgress?.({ phase: 'manifest', current: 0, total: 0, percent: 73, detail: 'Building manifest...' });
 
