@@ -235,9 +235,9 @@ export function TakeoutProgressPage() {
           {actionStatus?.action === 'scan' && actionStatus.scanProgress
             ? <ScanProgressBar progress={actionStatus.scanProgress} startedAt={actionStatus.startedAt} />
             : (actionStatus?.action === 'upload' || actionStatus?.action === 'resume')
-              ? <p className="text-xs text-slate-500">Uploading your photos — when done, they'll be moved to <code className="rounded bg-slate-100 px-1">uploaded-archives/</code> automatically.</p>
+              ? <p className="text-xs text-slate-500">Uploading your photos — when done, archives will be deleted and a note saved to <code className="rounded bg-slate-100 px-1">uploaded-archives/</code> automatically.</p>
               : actionStatus?.action === 'cleanup-move'
-                ? <p className="text-xs text-slate-500">Upload finished! Moving archive files to <code className="rounded bg-slate-100 px-1">uploaded-archives/</code> to free up your input folder.</p>
+                ? <p className="text-xs text-slate-500">Upload finished! Deleting archives and saving notes to <code className="rounded bg-slate-100 px-1">uploaded-archives/</code> to free up disk space.</p>
                 : <p className="text-xs text-slate-500">Job is running in the background. Stats refresh automatically.</p>
           }
           {(actionStatus?.action === 'upload' || actionStatus?.action === 'resume') && hasManifest && (
@@ -448,7 +448,7 @@ export function TakeoutProgressPage() {
               <CleanupOption
                 action="cleanup-move"
                 label="Move archives (recommended)"
-                description="Deletes extracted work files · moves .zip / .tgz to uploaded-archives/"
+                description="Deletes extracted work files · saves .txt note and removes .zip / .tgz"
                 variant="safe"
                 disabled={busy}
                 onRun={run}
