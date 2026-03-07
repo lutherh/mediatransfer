@@ -87,12 +87,16 @@ export async function normalizeTakeoutMediaRoot(
   workDir: string,
   onProgress?: NormalizeProgressCallback,
 ): Promise<string> {
-  const roots = await findGooglePhotosRoots(workDir);
+  const normalizedRoot = path.join(workDir, 'normalized', 'Google Photos');
+  const normalizedPrefix = path.join(workDir, 'normalized') + path.sep;
+
+  // Exclude the normalized/ directory itself so re-runs don't merge it into itself
+  const allRoots = await findGooglePhotosRoots(workDir);
+  const roots = allRoots.filter((r) => !r.startsWith(normalizedPrefix));
   if (roots.length === 0) {
     throw new Error(`No Google Photos folders found in work directory: ${workDir}`);
   }
 
-  const normalizedRoot = path.join(workDir, 'normalized', 'Google Photos');
   await fs.mkdir(normalizedRoot, { recursive: true });
 
   // Count total files across all roots for progress reporting
