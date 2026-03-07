@@ -97,7 +97,13 @@ async function listMediaFiles(rootDir: string): Promise<string[]> {
     const current = stack.pop();
     if (!current) continue;
 
-    const entries = await fs.readdir(current, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch (err) {
+      console.warn(`[manifest] Skipping unreadable directory: ${current}`, (err as Error).message);
+      continue;
+    }
     for (const entry of entries) {
       const fullPath = path.join(current, entry.name);
       if (entry.isDirectory()) {

@@ -302,8 +302,10 @@ export async function runTakeoutScan(
   // ── Phase 2: Normalize (wipe first for idempotency) ───────────────────────
   // Wipe the normalized folder so that re-runs don't accumulate __dup files.
   // This directory is derived from Takeout/ so rebuilding it is always safe.
+  // Use a safe recursive removal that skips corrupted/unreadable entries
+  // rather than fs.rm(recursive) which deletes good data before throwing.
   onProgress?.({ phase: 'normalize', current: 0, total: 1, percent: 67, detail: 'Merging extracted folders...' });
-  try { await fs.rm(normalizedDir, { recursive: true, force: true }); } catch { /* ok if absent */ }
+  await safeRmRecursive(normalizedDir);
 
   const roots = await findGooglePhotosRoots(config.workDir);
   let mediaRoot: string;
@@ -491,4 +493,39 @@ export function withDefaults(partial: Partial<TakeoutConfig>): TakeoutConfig {
   };
  }
 
+/**
+ * Recursively remove a directory tree, skipping corrupted/unreadable entries
+ * instead of aborting. Unlike fs.rm(recursive), this won't delete good data
+ * before throwing on a corrupted sibling — each entry is handled independently.
+ */
+async function safeRmRecursive(dirPath: string): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dirPath);
+  } catch {
+    // Directory doesn't exist or is unreadable — nothing to do
+    return;
+  }
+
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry);
+    try {
+      const stat = await fs.lstat(fullPath);
+      if (stat.isDirectory()) {
+        await safeRmRecursive(fullPath);
+        // Try to remove the now-empty directory
+        try { await fs.rmdir(fullPath); } catch {
+          console.warn(`[runner] Could not remove directory (corrupted?): ${fullPath} — skipping`);
+        }
+      } else {
+        await fs.unlink(fullPath);
+      }
+    } catch {
+      console.warn(`[runner] Could not remove entry (corrupted?): ${fullPath} — skipping`);
+    }
+  }
+
+  // Try to remove the directory itself if it's now empty
+  try { await fs.rmdir(dirPath); } catch { /* ok if not empty due to skipped entries */ }
+}
 

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs/promises';
+import { execSync } from 'node:child_process';
 import { describe, it, expect } from 'vitest';
 import {
   buildManifest,
@@ -385,6 +386,70 @@ describe('deduplicateManifest', () => {
       // Final call should have processed === total
       const last = progressCalls[progressCalls.length - 1];
       expect(last[0]).toBe(last[1]);
+    });
+  });
+});
+
+/**
+ * Create a directory that causes fs.readdir to throw.
+ * On Windows: create a junction pointing to a non-existent target.
+ * On POSIX: chmod 0o000 removes read permission.
+ */
+async function makeUnreadableDir(parentDir: string, name: string): Promise<string> {
+  const dirPath = path.join(parentDir, name);
+  if (process.platform === 'win32') {
+    const target = path.join(parentDir, '__nonexistent_target__');
+    execSync(`mklink /J "${dirPath}" "${target}"`, { stdio: 'ignore' });
+  } else {
+    await fs.mkdir(dirPath, { recursive: true });
+    await fs.chmod(dirPath, 0o000);
+  }
+  return dirPath;
+}
+
+async function cleanupUnreadableDir(dirPath: string): Promise<void> {
+  if (process.platform === 'win32') {
+    try { execSync(`rmdir "${dirPath}"`, { stdio: 'ignore' }); } catch { /* ok */ }
+  } else {
+    try {
+      await fs.chmod(dirPath, 0o755);
+      await fs.rm(dirPath, { recursive: true, force: true });
+    } catch { /* ok */ }
+  }
+}
+
+describe('buildManifest – corrupted directory resilience', () => {
+  it('skips unreadable subdirectories and returns files from readable ones', async () => {
+    await withTempDir(async (dir) => {
+      const mediaRoot = path.join(dir, 'Google Photos');
+      const goodAlbum = path.join(mediaRoot, 'GoodAlbum');
+      await fs.mkdir(goodAlbum, { recursive: true });
+      await fs.writeFile(path.join(goodAlbum, 'photo.jpg'), 'img-data');
+
+      const unreadable = await makeUnreadableDir(mediaRoot, 'CorruptedAlbum');
+      try {
+        const manifest = await buildManifest(mediaRoot);
+
+        expect(manifest).toHaveLength(1);
+        expect(manifest[0].relativePath).toBe('GoodAlbum/photo.jpg');
+      } finally {
+        await cleanupUnreadableDir(unreadable);
+      }
+    });
+  });
+
+  it('returns empty manifest when all subdirectories are unreadable', async () => {
+    await withTempDir(async (dir) => {
+      const mediaRoot = path.join(dir, 'Google Photos');
+      await fs.mkdir(mediaRoot, { recursive: true });
+
+      const unreadable = await makeUnreadableDir(mediaRoot, 'OnlyAlbum');
+      try {
+        const manifest = await buildManifest(mediaRoot);
+        expect(manifest).toHaveLength(0);
+      } finally {
+        await cleanupUnreadableDir(unreadable);
+      }
     });
   });
 });
