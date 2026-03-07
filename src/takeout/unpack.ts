@@ -223,21 +223,28 @@ async function mergeDirectory(
     }
 
     if (entry.isFile()) {
-      await copyWithCollisionHandling(sourcePath, targetPath);
+      await moveWithCollisionHandling(sourcePath, targetPath);
       onFile?.(entry.name);
     }
   }
 }
 
-async function copyWithCollisionHandling(sourcePath: string, targetPath: string): Promise<void> {
+/**
+ * Move a file to targetPath, handling collisions by deduplication.
+ * Uses fs.rename for same-device moves (instant, no extra disk space).
+ * Falls back to copy+delete for cross-device moves.
+ */
+async function moveWithCollisionHandling(sourcePath: string, targetPath: string): Promise<void> {
   if (!(await exists(targetPath))) {
-    await fs.copyFile(sourcePath, targetPath);
+    await moveFile(sourcePath, targetPath);
     return;
   }
 
   // Target exists — check if it's the same content (fast: size then partial hash)
   if (await isSameContent(sourcePath, targetPath)) {
-    return; // skip duplicate
+    // Duplicate — remove source instead of copying
+    await fs.unlink(sourcePath);
+    return;
   }
 
   // Different content with same name — find a free __dup slot
@@ -249,7 +256,24 @@ async function copyWithCollisionHandling(sourcePath: string, targetPath: string)
     suffix += 1;
   } while (await exists(candidate));
 
-  await fs.copyFile(sourcePath, candidate);
+  await moveFile(sourcePath, candidate);
+}
+
+/**
+ * Move a file using rename (instant on same device), falling back to copy+delete.
+ */
+async function moveFile(sourcePath: string, destPath: string): Promise<void> {
+  try {
+    await fs.rename(sourcePath, destPath);
+  } catch (err) {
+    // EXDEV = cross-device link; fall back to copy + delete
+    if ((err as NodeJS.ErrnoException).code === 'EXDEV') {
+      await fs.copyFile(sourcePath, destPath);
+      await fs.unlink(sourcePath);
+    } else {
+      throw err;
+    }
+  }
 }
 
 /** Compare two files by size then partial hash (first 64 KB). */
