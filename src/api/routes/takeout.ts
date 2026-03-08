@@ -15,7 +15,7 @@ import {
   buildPipelineSummary,
   type PipelineState,
 } from '../../takeout/pipeline-state.js';
-import { loadArchiveState, type ArchiveStateItem } from '../../takeout/incremental.js';
+import { loadArchiveState, reconcileStaleArchives, type ArchiveStateItem } from '../../takeout/incremental.js';
 import { apiError } from '../errors.js';
 import { createJob, updateJob } from '../../db/jobs.js';
 
@@ -280,6 +280,21 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     const processed = summary.uploaded + summary.skipped + summary.failed;
     const pending = Math.max(total - processed, 0);
     const progress = total > 0 ? Math.min(processed / total, 1) : 0;
+    // Auto-reconcile stale pending/extracting archives when all uploads are done
+    const isComplete = total > 0 && pending === 0 && summary.failed === 0;
+    const hasStaleArchives = Object.values(mergedArchiveState).some(
+      (a) => a.status === 'pending' || a.status === 'extracting' || a.status === 'uploading',
+    );
+    if (isComplete && hasStaleArchives) {
+      const archiveStatePath = path.join(workDir, 'archive-state.json');
+      const reconciled = await reconcileStaleArchives(archiveStatePath);
+      if (reconciled > 0) {
+        // Reload the reconciled state for display
+        const refreshed = await loadMergedArchiveState(workDir, defaultWorkDir);
+        Object.assign(mergedArchiveState, refreshed);
+      }
+    }
+
     const archiveHistory = await buildArchiveHistory(mergedArchiveState, inputDir);
 
     // Count archive files waiting in the input directory
@@ -312,7 +327,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       progress,
       stateUpdatedAt: state.updatedAt,
       recentFailures: summary.recentFailures,
-      isComplete: total > 0 && pending === 0 && summary.failed === 0,
+      isComplete,
       archivesInInput,
       archiveHistory,
       pipeline: buildPipelineSummary(pipeline),

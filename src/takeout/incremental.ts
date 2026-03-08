@@ -497,6 +497,42 @@ async function getFileSizeBestEffort(filePath: string): Promise<number | undefin
   }
 }
 
+// ─── Reconciliation ────────────────────────────────────────────────────────
+
+/**
+ * Marks stale pending/extracting/uploading archives as completed when the
+ * overall upload is done (all manifest items uploaded, none failed).
+ *
+ * This handles the case where archives were processed through the
+ * non-incremental scan→upload flow: the scan step creates archive-state
+ * entries as 'pending', but the bulk upload step doesn't update them.
+ *
+ * Returns the number of archives reconciled (0 if nothing changed).
+ */
+export async function reconcileStaleArchives(
+  archiveStatePath: string,
+): Promise<number> {
+  const state = await loadArchiveState(archiveStatePath);
+  const staleStatuses: ArchiveStatus[] = ['pending', 'extracting', 'uploading'];
+  let reconciled = 0;
+
+  for (const [name, item] of Object.entries(state.archives)) {
+    if (staleStatuses.includes(item.status)) {
+      state.archives[name] = {
+        ...item,
+        status: 'completed',
+        completedAt: item.completedAt ?? new Date().toISOString(),
+      };
+      reconciled += 1;
+    }
+  }
+
+  if (reconciled > 0) {
+    await persistArchiveState(archiveStatePath, state);
+  }
+  return reconciled;
+}
+
 // ─── Summary / progress helpers ────────────────────────────────────────────
 
 export function formatIncrementalProgress(
