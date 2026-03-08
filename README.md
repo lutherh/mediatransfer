@@ -150,6 +150,34 @@ npm run takeout:verify     # confirm everything landed
 npm run takeout:resume     # resume if interrupted
 ```
 
+### Option C — Continuous download + upload (for huge libraries)
+
+If your Google Takeout is larger than your available disk space (e.g. 1.7 TB takeout, but only 50 GB free), use the **download watcher** mode. It processes each archive as it downloads, deleting it to free space for the next one:
+
+1. Go to [takeout.google.com](https://takeout.google.com/) and request your export
+2. Start downloading all parts in your browser (they go to your Downloads folder)
+3. In a separate terminal, start the watcher:
+
+```bash
+npm run takeout:watch
+```
+
+That's it. The watcher will:
+- Detect when each ~4 GB download finishes (even from Chrome's `.crdownload` temp files)
+- Unpack it, upload all photos to your Scaleway bucket
+- Delete the archive to free space for the next download
+- Keep going until all parts are done
+
+**You only need ~15-20 GB of free space**, regardless of total takeout size.
+
+To watch a different folder or customize behavior:
+```bash
+npm run takeout:watch -- --downloads-dir "D:\My Downloads" --concurrency 8
+npm run takeout:watch -- --help     # see all options
+```
+
+> **Safe to interrupt.** Press Ctrl+C at any time. When you restart, it picks up exactly where it left off — nothing gets re-uploaded.
+
 ---
 
 ## Browsing your uploaded photos
