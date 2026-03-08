@@ -548,7 +548,10 @@ export async function preloadDestinationIndex(
   const prefixes = collectDatePrefixes(entries);
   const keys = new Set<string>();
 
-  // Fetch prefix listings in parallel, bounded to PRELOAD_CONCURRENCY
+  // Fetch prefix listings in parallel, bounded to PRELOAD_CONCURRENCY.
+  // Individual prefix failures are caught so a single transient S3 error
+  // doesn't abort the whole verify — keys from failed prefixes will be
+  // checked individually by objectExistsCached later.
   let prefixIndex = 0;
   const workers = Array.from({ length: Math.min(PRELOAD_CONCURRENCY, prefixes.length || 1) }, async () => {
     while (true) {
@@ -556,9 +559,13 @@ export async function preloadDestinationIndex(
       prefixIndex += 1;
       if (i >= prefixes.length) return;
 
-      const listed = await provider.list({ prefix: prefixes[i] });
-      for (const item of listed) {
-        keys.add(item.key);
+      try {
+        const listed = await provider.list({ prefix: prefixes[i] });
+        for (const item of listed) {
+          keys.add(item.key);
+        }
+      } catch (err) {
+        console.warn(`⚠️  preload listing failed for prefix "${prefixes[i]}", will check keys individually:`, (err as Error).message);
       }
     }
   });

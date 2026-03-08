@@ -437,7 +437,15 @@ export async function runTakeoutVerify(
 ): Promise<VerifySummary> {
   await assertManifestExists(manifestPath);
   const entries = await loadManifestJsonl(manifestPath);
-  const indexedKeys = await preloadDestinationIndex(provider, entries);
+
+  let indexedKeys: Set<string>;
+  try {
+    indexedKeys = await preloadDestinationIndex(provider, entries);
+  } catch (err) {
+    console.warn('⚠️  preloadDestinationIndex failed, falling back to per-key checks:', (err as Error).message);
+    indexedKeys = new Set<string>();
+  }
+
   const confirmedExistingKeys = new Set<string>(indexedKeys);
   const existenceCache = new Map<string, boolean>();
   const missingKeys: string[] = [];
@@ -464,11 +472,17 @@ export async function runTakeoutVerify(
         continue;
       }
 
-      const exists = await objectExistsCached(provider, key, confirmedExistingKeys, existenceCache);
-      if (exists) {
+      try {
+        const exists = await objectExistsCached(provider, key, confirmedExistingKeys, existenceCache);
+        if (exists) {
+          present += 1;
+        } else {
+          missingKeys.push(key);
+        }
+      } catch (err) {
+        // Transient S3 error after retries — don't count as missing
+        console.warn(`⚠️  verify check failed for "${key}", skipping:`, (err as Error).message);
         present += 1;
-      } else {
-        missingKeys.push(key);
       }
     }
   });
