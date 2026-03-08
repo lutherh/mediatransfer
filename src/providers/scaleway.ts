@@ -4,6 +4,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
   type ListObjectsV2CommandInput,
+  type ListObjectsV2CommandOutput,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { Readable } from 'node:stream';
@@ -184,7 +185,7 @@ export class ScalewayProvider implements CloudProvider {
         ContinuationToken: continuationToken,
       });
 
-      const response = await this.client.send(command);
+      const response = await this.sendWithRetry(command);
 
       if (response.Contents) {
         for (const obj of response.Contents) {
@@ -258,6 +259,40 @@ export class ScalewayProvider implements CloudProvider {
     });
 
     await this.client.send(command);
+  }
+
+  // ── Retry helper for transient S3 errors ──────────────────────
+
+  private static readonly S3_MAX_RETRIES = 4;
+  private static readonly S3_REQUEST_TIMEOUT_MS = 120_000;
+
+  /**
+   * Send an S3 command with per-request timeout and exponential backoff retries.
+   * Retries on AbortError (timeout), network errors, and 5xx responses.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async sendWithRetry(command: ListObjectsV2Command): Promise<ListObjectsV2CommandOutput> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < ScalewayProvider.S3_MAX_RETRIES; attempt++) {
+      try {
+        return await this.client.send(command as ListObjectsV2Command, {
+          abortSignal: AbortSignal.timeout(ScalewayProvider.S3_REQUEST_TIMEOUT_MS),
+        });
+      } catch (err) {
+        lastError = err;
+        const isRetryable =
+          err instanceof Error &&
+          (err.name === 'AbortError' || err.name === 'TimeoutError' ||
+           err.name === 'NetworkingError' || err.name === 'ECONNRESET' ||
+           ('$metadata' in err && typeof (err as Record<string, unknown>)['$metadata'] === 'object'));
+        if (!isRetryable) throw err;
+        if (attempt < ScalewayProvider.S3_MAX_RETRIES - 1) {
+          const delay = Math.min(1000 * 2 ** attempt, 15_000);
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      }
+    }
+    throw lastError;
   }
 }
 
