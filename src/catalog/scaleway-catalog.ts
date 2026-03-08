@@ -125,9 +125,9 @@ const IMAGE_EXTENSIONS = new Set([
 ]);
 const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'avi', 'm4v', '3gp', 'mkv', 'webm']);
 
-const S3_REQUEST_TIMEOUT_MS = 30_000;
+const S3_REQUEST_TIMEOUT_MS = 120_000;
 const STATS_CACHE_TTL_MS = 5 * 60_000;
-const MAX_PAGE_RETRIES = 3;
+const MAX_PAGE_RETRIES = 5;
 
 /** Retry wrapper for S3 ListObjectsV2 — retries transient / timeout errors with linear backoff. */
 async function s3ListWithRetry(
@@ -144,7 +144,7 @@ async function s3ListWithRetry(
     } catch (err) {
       lastError = err;
       if (attempt < MAX_PAGE_RETRIES - 1) {
-        const delay = 1000 * (attempt + 1);
+        const delay = Math.min(1000 * 2 ** attempt, 15_000); // 1s, 2s, 4s, 8s exponential backoff
         console.warn(
           `[catalog] S3 list page failed (attempt ${attempt + 1}/${MAX_PAGE_RETRIES}), retrying in ${delay}ms`,
           err,
