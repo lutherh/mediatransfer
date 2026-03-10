@@ -42,8 +42,21 @@ type ScanProgress = {
   detail?: string;
 };
 
+type UploadProgressInfo = {
+  speed?: string;
+  eta?: string;
+  inFlight?: number;
+  bytesTransferred?: string;
+  bytesTotal?: string;
+  bytePercent?: number;
+  currentArchive?: string;
+  currentArchiveIndex?: number;
+  totalArchives?: number;
+};
+
 type ActionStatus = {
   running: boolean;
+  paused?: boolean;
   action?: TakeoutAction;
   startedAt?: string;
   finishedAt?: string;
@@ -51,6 +64,8 @@ type ActionStatus = {
   success?: boolean;
   output: string[];
   scanProgress?: ScanProgress;
+  uploadProgress?: UploadProgressInfo;
+  lastOutputAt?: string;
 };
 
 type ActionCommand = {
@@ -104,6 +119,8 @@ const RUN_STATUS: ActionStatus = {
 
 let currentProcess: ChildProcess | null = null;
 let currentTimeout: NodeJS.Timeout | null = null;
+let pauseRequested = false;
+let lastOutputAt: string | undefined;
 
 /**
  * User-overridden paths (set via PUT /takeout/paths/:name).
@@ -354,6 +371,22 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const action = (req.params as { action?: string }).action;
+
+    // Special case: pause the currently running action
+    if (action === 'pause') {
+      if (!RUN_STATUS.running || !currentProcess) {
+        return reply.code(409).send(
+          apiError('NO_ACTION_RUNNING', 'No action is currently running to pause'),
+        );
+      }
+      pauseRequested = true;
+      currentProcess.kill();
+      return reply.code(202).send({
+        message: 'Pausing current action',
+        status: snapshotStatus(),
+      });
+    }
+
     if (!isAction(action)) {
       return reply.code(400).send({
         ...apiError('UNKNOWN_ACTION', `Unknown action: ${String(action)}`),
@@ -434,6 +467,7 @@ function runAction(action: TakeoutAction): void {
   RUN_STATUS.finishedAt = undefined;
   RUN_STATUS.exitCode = undefined;
   RUN_STATUS.success = undefined;
+  RUN_STATUS.paused = undefined;
   RUN_STATUS.output = [];
 
   // Update pipeline state
@@ -516,6 +550,20 @@ function runAction(action: TakeoutAction): void {
       if (currentTimeout) {
         clearTimeout(currentTimeout);
         currentTimeout = null;
+      }
+
+      // Handle pause: the process was killed intentionally by the user
+      if (pauseRequested) {
+        pauseRequested = false;
+        const pausedAt = new Date().toISOString();
+        RUN_STATUS.running = false;
+        RUN_STATUS.finishedAt = pausedAt;
+        RUN_STATUS.exitCode = exitCode;
+        RUN_STATUS.success = undefined;
+        RUN_STATUS.paused = true;
+        appendOutput('⏸️ Upload paused. Resume anytime to continue where you left off.');
+        finalizeTransferJob(false, 'Paused by user');
+        return;
       }
 
       if (!success && index + 1 < commands.length) {
@@ -703,6 +751,7 @@ function appendOutput(chunk: string): void {
   }
 
   RUN_STATUS.output.push(...lines);
+  lastOutputAt = new Date().toISOString();
   if (RUN_STATUS.output.length > MAX_OUTPUT_LINES) {
     RUN_STATUS.output = RUN_STATUS.output.slice(RUN_STATUS.output.length - MAX_OUTPUT_LINES);
   }
@@ -735,13 +784,58 @@ function parseScanProgress(): ScanProgress | undefined {
   return undefined;
 }
 
+function parseUploadProgress(): UploadProgressInfo | undefined {
+  const output = RUN_STATUS.output;
+  const result: Partial<UploadProgressInfo> = {};
+
+  for (let i = output.length - 1; i >= 0; i--) {
+    const line = output[i];
+
+    if (!result.speed && line.includes('items') && line.includes('speed')) {
+      const speedMatch = line.match(/speed\s+(.+?)\/s/);
+      const etaMatch = line.match(/ETA\s+(.+?)\s*\|/);
+      const inFlightMatch = line.match(/in-flight\s+(\d+)/);
+      const bytesMatch = line.match(/bytes\s+(.+?)\s*\/\s*(.+?)\s*\((\d+)%\)/);
+
+      if (speedMatch) result.speed = speedMatch[1].trim();
+      if (etaMatch) result.eta = etaMatch[1].trim();
+      if (inFlightMatch) result.inFlight = parseInt(inFlightMatch[1], 10);
+      if (bytesMatch) {
+        result.bytesTransferred = bytesMatch[1].trim();
+        result.bytesTotal = bytesMatch[2].trim();
+        result.bytePercent = parseInt(bytesMatch[3], 10);
+      }
+    }
+
+    if (!result.currentArchive && line.includes('Processing archive:')) {
+      const archiveMatch = line.match(/\[(\d+)\/(\d+)\]\s*Processing archive:\s*(.+)/);
+      if (archiveMatch) {
+        result.currentArchiveIndex = parseInt(archiveMatch[1], 10);
+        result.totalArchives = parseInt(archiveMatch[2], 10);
+        result.currentArchive = archiveMatch[3].trim();
+      }
+    }
+
+    if (result.speed && result.currentArchive) break;
+  }
+
+  if (!result.speed && !result.currentArchive) return undefined;
+  return result as UploadProgressInfo;
+}
+
 function snapshotStatus(): ActionStatus {
   const scanProgress = (RUN_STATUS.running && RUN_STATUS.action === 'scan')
     ? parseScanProgress()
     : undefined;
 
+  const isUploadLike = RUN_STATUS.action === 'upload' || RUN_STATUS.action === 'resume';
+  const uploadProgress = (RUN_STATUS.running && isUploadLike)
+    ? parseUploadProgress()
+    : undefined;
+
   return {
     running: RUN_STATUS.running,
+    paused: RUN_STATUS.paused,
     action: RUN_STATUS.action,
     startedAt: RUN_STATUS.startedAt,
     finishedAt: RUN_STATUS.finishedAt,
@@ -749,6 +843,8 @@ function snapshotStatus(): ActionStatus {
     success: RUN_STATUS.success,
     output: [...RUN_STATUS.output],
     scanProgress,
+    uploadProgress,
+    lastOutputAt: lastOutputAt,
   };
 }
 

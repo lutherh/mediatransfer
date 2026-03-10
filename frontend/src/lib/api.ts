@@ -153,6 +153,7 @@ export type TakeoutAction =
   | 'upload'
   | 'verify'
   | 'resume'
+  | 'pause'
   | 'start-services'
   | 'cleanup-move'
   | 'cleanup-delete'
@@ -167,8 +168,21 @@ export type ScanProgress = {
   detail?: string;
 };
 
+export type UploadProgressInfo = {
+  speed?: string;
+  eta?: string;
+  inFlight?: number;
+  bytesTransferred?: string;
+  bytesTotal?: string;
+  bytePercent?: number;
+  currentArchive?: string;
+  currentArchiveIndex?: number;
+  totalArchives?: number;
+};
+
 export type TakeoutActionStatus = {
   running: boolean;
+  paused?: boolean;
   action?: TakeoutAction;
   startedAt?: string;
   finishedAt?: string;
@@ -176,6 +190,8 @@ export type TakeoutActionStatus = {
   success?: boolean;
   output: string[];
   scanProgress?: ScanProgress;
+  uploadProgress?: UploadProgressInfo;
+  lastOutputAt?: string;
 };
 
 export async function fetchTransfers(): Promise<TransferJob[]> {
