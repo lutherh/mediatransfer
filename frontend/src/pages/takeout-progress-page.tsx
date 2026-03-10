@@ -507,6 +507,18 @@ export function TakeoutProgressPage() {
               onSave={async (v) => { await updateTakeoutPath('workDir', v); await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
               onReset={async ()  => { await resetTakeoutPath('workDir');     await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
             />
+            <div>
+              <EditablePathRow
+                label="Archive"
+                value={data.paths.archiveDir ?? ''}
+                disabled={disablePathEditing}
+                onSave={async (v) => { await updateTakeoutPath('archiveDir', v); await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
+                onReset={async ()  => { await resetTakeoutPath('archiveDir');     await queryClient.invalidateQueries({ queryKey: ['takeout-status'] }); }}
+              />
+              <p className="text-[10px] text-slate-400 mt-0.5 ml-[4.5rem]">
+                External HD path for archiving .tgz files after upload. When set, each archive is automatically moved here once uploaded, freeing space on the main drive.
+              </p>
+            </div>
             <PathRow label="Manifest" value={data.paths.manifestPath} />
             <PathRow label="State"    value={data.paths.statePath}    />
           </Card>

@@ -4,6 +4,8 @@ import { loadEnv, type Env } from '../config/env.js';
 export type TakeoutConfig = {
   inputDir: string;
   workDir: string;
+  /** Optional directory on a secondary drive where .tgz archives are moved after upload. */
+  archiveDir?: string;
   statePath: string;
   uploadConcurrency: number;
   uploadRetryCount: number;
@@ -17,8 +19,9 @@ export type TakeoutConfig = {
  * To make a new path overridable, just add an entry here.
  */
 export const OVERRIDABLE_PATHS = {
-  inputDir: { envKey: 'TAKEOUT_INPUT_DIR' as const, cliFlag: '--input-dir', label: 'Input' },
-  workDir:  { envKey: 'TAKEOUT_WORK_DIR' as const,  cliFlag: '--work-dir',  label: 'Work' },
+  inputDir:    { envKey: 'TAKEOUT_INPUT_DIR' as const,    cliFlag: '--input-dir',   label: 'Input' },
+  workDir:     { envKey: 'TAKEOUT_WORK_DIR' as const,    cliFlag: '--work-dir',    label: 'Work' },
+  archiveDir:  { envKey: 'TAKEOUT_ARCHIVE_DIR' as const, cliFlag: '--archive-dir', label: 'Archive' },
 } as const;
 
 /** The names that can be used as override keys (e.g. 'inputDir' | 'workDir'). */
@@ -65,9 +68,16 @@ export function loadTakeoutConfig(env?: Env, overrides?: TakeoutPathOverrides): 
     return path.resolve(source[OVERRIDABLE_PATHS[name].envKey]);
   }
 
+  const archiveDir = overrides?.archiveDir
+    ? path.resolve(overrides.archiveDir)
+    : source.TAKEOUT_ARCHIVE_DIR
+      ? path.resolve(source.TAKEOUT_ARCHIVE_DIR)
+      : undefined;
+
   return {
     inputDir: resolvePath('inputDir'),
     workDir: resolvePath('workDir'),
+    archiveDir,
     statePath: path.resolve(source.TRANSFER_STATE_PATH),
     uploadConcurrency: source.UPLOAD_CONCURRENCY,
     uploadRetryCount: source.UPLOAD_RETRY_COUNT,

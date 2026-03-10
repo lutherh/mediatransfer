@@ -15,7 +15,11 @@ import {
   buildPipelineSummary,
   type PipelineState,
 } from '../../takeout/pipeline-state.js';
-import { loadArchiveState, reconcileStaleArchives, type ArchiveStateItem } from '../../takeout/incremental.js';
+import {
+  loadArchiveState,
+  reconcileStaleArchives,
+  type ArchiveStateItem,
+} from '../../takeout/incremental.js';
 import { apiError } from '../errors.js';
 import { createJob, updateJob } from '../../db/jobs.js';
 
@@ -215,7 +219,8 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     }
     customPaths.delete(name);
     persistCustomPaths(env);
-    return { name, value: path.resolve(env[def.envKey]), reset: true };
+    const envValue = env[def.envKey];
+    return { name, value: envValue ? path.resolve(envValue) : undefined, reset: true };
   });
 
   // Legacy convenience aliases (thin wrappers around the generic endpoints)
@@ -256,16 +261,18 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
   app.get('/takeout/status', async () => {
     const inputDir = customPaths.get('inputDir') ?? path.resolve(env.TAKEOUT_INPUT_DIR);
     const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
+    const archiveDir = customPaths.get('archiveDir') ?? (env.TAKEOUT_ARCHIVE_DIR ? path.resolve(env.TAKEOUT_ARCHIVE_DIR) : undefined);
     const defaultWorkDir = path.resolve(env.TAKEOUT_WORK_DIR);
     const statePath = path.resolve(env.TRANSFER_STATE_PATH);
     const manifestPath = path.join(workDir, 'manifest.jsonl');
 
-    const [state, manifestKeys, pipeline, mergedArchiveState] = await Promise.all([
+    const [state, manifestKeys, pipeline, initialArchiveState] = await Promise.all([
       readUploadState(statePath),
       readManifestKeys(manifestPath),
       ensurePipelineState(workDir),
       loadMergedArchiveState(workDir, defaultWorkDir),
     ]);
+    let mergedArchiveState = initialArchiveState;
 
     // Count only state entries that correspond to current manifest keys.
     // This avoids inflated counts from orphaned keys left over by previous runs.
@@ -286,12 +293,16 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       (a) => a.status === 'pending' || a.status === 'extracting' || a.status === 'uploading',
     );
     if (isComplete && hasStaleArchives) {
+      const displayReconciled = reconcileArchiveEntriesForDisplay(mergedArchiveState);
+      if (displayReconciled.reconciled > 0) {
+        mergedArchiveState = displayReconciled.archives;
+      }
+
       const archiveStatePath = path.join(workDir, 'archive-state.json');
-      const reconciled = await reconcileStaleArchives(archiveStatePath);
-      if (reconciled > 0) {
-        // Reload the reconciled state for display
-        const refreshed = await loadMergedArchiveState(workDir, defaultWorkDir);
-        Object.assign(mergedArchiveState, refreshed);
+      try {
+        await reconcileStaleArchives(archiveStatePath);
+      } catch (err) {
+        app.log.warn({ err, archiveStatePath }, 'Failed to persist reconciled archive state; serving in-memory status');
       }
     }
 
@@ -313,6 +324,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       paths: {
         inputDir,
         workDir,
+        archiveDir,
         manifestPath,
         statePath,
       },
@@ -387,6 +399,28 @@ async function loadMergedArchiveState(
     ...fallback.archives,
     ...active.archives,
   };
+}
+
+function reconcileArchiveEntriesForDisplay(
+  archives: Record<string, ArchiveStateItem>,
+): { archives: Record<string, ArchiveStateItem>; reconciled: number } {
+  let reconciled = 0;
+  const next: Record<string, ArchiveStateItem> = {};
+
+  for (const [name, item] of Object.entries(archives)) {
+    if (item.status === 'pending' || item.status === 'extracting' || item.status === 'uploading') {
+      next[name] = {
+        ...item,
+        status: 'completed',
+        completedAt: item.completedAt ?? new Date().toISOString(),
+      };
+      reconciled += 1;
+    } else {
+      next[name] = item;
+    }
+  }
+
+  return { archives: next, reconciled };
 }
 
 function runAction(action: TakeoutAction): void {
@@ -562,6 +596,10 @@ function resolveActionCommands(action: TakeoutAction): ActionCommand[] {
   for (const [name, def] of Object.entries(OVERRIDABLE_PATHS)) {
     const value = customPaths.get(name);
     if (value) extraArgs.push(def.cliFlag, value);
+  }
+  // Auto-enable --move-archives for upload/resume when an archive dir is configured
+  if ((action === 'upload' || action === 'resume') && customPaths.has('archiveDir')) {
+    extraArgs.push('--move-archives');
   }
   if (extraArgs.length > 0) {
     scriptArgs = [...scriptArgs, '--', ...extraArgs];

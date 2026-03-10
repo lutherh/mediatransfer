@@ -1,4 +1,4 @@
-import path from 'node:path';
+﻿import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { CloudProvider } from '../providers/types.js';
 import type { TakeoutConfig } from './config.js';
@@ -28,7 +28,7 @@ import {
 import { extractAndPersistArchiveMetadata } from './archive-metadata.js';
 import { DEFAULT_MANIFEST_FILE } from './runner.js';
 
-// ─── Archive-level state tracking ──────────────────────────────────────────
+// ÔöÇÔöÇÔöÇ Archive-level state tracking ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 export type ArchiveStatus = 'pending' | 'extracting' | 'uploading' | 'completed' | 'failed';
 
@@ -87,7 +87,7 @@ export async function persistArchiveState(
   await fs.rename(tmpPath, statePath);
 }
 
-// ─── Incremental processing ────────────────────────────────────────────────
+// ÔöÇÔöÇÔöÇ Incremental processing ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 export type IncrementalOptions = {
   dryRun?: boolean;
@@ -314,7 +314,7 @@ export async function runTakeoutIncremental(
       // Clean up even on failure
       await cleanupDir(extractDir).catch(() => {});
 
-      // Continue to next archive — don't let one failure block everything
+      // Continue to next archive ÔÇö don't let one failure block everything
     }
   }
 
@@ -344,7 +344,7 @@ export async function runTakeoutIncremental(
   return result;
 }
 
-// ─── Internal helpers ──────────────────────────────────────────────────────
+// ÔöÇÔöÇÔöÇ Internal helpers ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 async function processArchiveEntries(
   entries: ManifestEntry[],
@@ -452,7 +452,7 @@ async function getUniqueDestinationPath(directory: string, fileName: string): Pr
     existingNames = new Set(dirEntries);
   } catch (err) {
     console.debug('[incremental] Destination directory not readable, using base file name', { directory, err });
-    // Directory doesn't exist yet — no collisions possible
+    // Directory doesn't exist yet ÔÇö no collisions possible
     return path.join(directory, fileName);
   }
 
@@ -497,14 +497,14 @@ async function getFileSizeBestEffort(filePath: string): Promise<number | undefin
   }
 }
 
-// ─── Reconciliation ────────────────────────────────────────────────────────
+// ÔöÇÔöÇÔöÇ Reconciliation ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 /**
  * Marks stale pending/extracting/uploading archives as completed when the
  * overall upload is done (all manifest items uploaded, none failed).
  *
  * This handles the case where archives were processed through the
- * non-incremental scan→upload flow: the scan step creates archive-state
+ * non-incremental scanÔåÆupload flow: the scan step creates archive-state
  * entries as 'pending', but the bulk upload step doesn't update them.
  *
  * Returns the number of archives reconciled (0 if nothing changed).
@@ -533,7 +533,7 @@ export async function reconcileStaleArchives(
   return reconciled;
 }
 
-// ─── Summary / progress helpers ────────────────────────────────────────────
+// ÔöÇÔöÇÔöÇ Summary / progress helpers ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 export function formatIncrementalProgress(
   archiveState: ArchiveState,

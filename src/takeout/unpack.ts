@@ -120,6 +120,70 @@ export async function normalizeTakeoutMediaRoot(
 }
 
 /**
+ * Merge one extracted archive into persistent normalized storage.
+ *
+ * Standard Takeout archives are merged into `${normalizedDir}/Google Photos`.
+ * Archives with media but without a `Google Photos` root are merged into
+ * `normalizedDir` preserving their relative structure.
+ */
+export async function mergeExtractedArchiveIntoNormalized(
+  extractDir: string,
+  normalizedDir: string,
+  onProgress?: NormalizeProgressCallback,
+): Promise<{ mediaRoot: string; movedMedia: boolean }> {
+  const normalizedPhotosRoot = path.join(normalizedDir, 'Google Photos');
+  const roots = await findGooglePhotosRoots(extractDir);
+
+  if (roots.length > 0) {
+    await fs.mkdir(normalizedPhotosRoot, { recursive: true });
+
+    let totalFiles = 0;
+    if (onProgress) {
+      for (const root of roots) {
+        totalFiles += await countFilesRecursive(root);
+      }
+    }
+
+    let processed = 0;
+    const progressWrapper = onProgress
+      ? (fileName: string) => { processed++; onProgress(processed, totalFiles, fileName); }
+      : undefined;
+
+    for (const root of roots) {
+      await mergeDirectory(root, normalizedPhotosRoot, progressWrapper);
+    }
+
+    return {
+      mediaRoot: normalizedPhotosRoot,
+      movedMedia: true,
+    };
+  }
+
+  const hasMediaInExtractDir = await containsMediaFiles(extractDir);
+  if (!hasMediaInExtractDir) {
+    return {
+      mediaRoot: normalizedPhotosRoot,
+      movedMedia: false,
+    };
+  }
+
+  await fs.mkdir(normalizedDir, { recursive: true });
+
+  const totalFiles = onProgress ? await countFilesRecursive(extractDir) : 0;
+  let processed = 0;
+  const progressWrapper = onProgress
+    ? (fileName: string) => { processed++; onProgress(processed, totalFiles, fileName); }
+    : undefined;
+
+  await mergeDirectory(extractDir, normalizedDir, progressWrapper);
+
+  return {
+    mediaRoot: normalizedDir,
+    movedMedia: true,
+  };
+}
+
+/**
  * One-shot helper for Step 12: discover, extract, and normalize.
  */
 export async function unpackAndNormalizeTakeout(

@@ -4,16 +4,15 @@ import type { CloudProvider } from '../providers/types.js';
 import type { TakeoutConfig } from './config.js';
 import {
   buildManifest,
-  deduplicateManifest,
   loadManifestJsonl,
   persistManifestJsonl,
+  type ManifestEntry,
 } from './manifest.js';
 import {
   containsMediaFiles,
   discoverTakeoutArchives,
   extractArchive,
   findGooglePhotosRoots,
-  normalizeTakeoutMediaRoot,
   unpackAndNormalizeTakeout,
   type ArchiveExtractor,
 } from './unpack.js';
@@ -31,65 +30,13 @@ import {
   persistReportCsv,
   persistReportJson,
 } from './report.js';
+import {
+  loadArchiveState,
+  persistArchiveState,
+  type ArchiveState,
+} from './incremental.js';
 
 export const DEFAULT_MANIFEST_FILE = 'manifest.jsonl';
-
-type ArchiveHistoryItem = {
-  status: 'pending' | 'extracting' | 'uploading' | 'completed' | 'failed';
-  entryCount: number;
-  uploadedCount: number;
-  skippedCount: number;
-  failedCount: number;
-  archiveSizeBytes?: number;
-  mediaBytes?: number;
-  startedAt?: string;
-  completedAt?: string;
-  error?: string;
-};
-
-type ArchiveHistoryState = {
-  version: 1;
-  updatedAt: string;
-  archives: Record<string, ArchiveHistoryItem>;
-};
-
-function createEmptyArchiveHistoryState(): ArchiveHistoryState {
-  return {
-    version: 1,
-    updatedAt: new Date().toISOString(),
-    archives: {},
-  };
-}
-
-async function loadArchiveHistoryState(statePath: string): Promise<ArchiveHistoryState> {
-  try {
-    const raw = (await fs.readFile(statePath, 'utf8')).replace(/^\uFEFF/, '');
-    const parsed = JSON.parse(raw) as ArchiveHistoryState;
-    if (parsed.version === 1 && typeof parsed.archives === 'object') {
-      return parsed;
-    }
-  } catch {
-    // Missing or malformed archive state is treated as empty.
-  }
-  return createEmptyArchiveHistoryState();
-}
-
-async function persistArchiveHistoryState(statePath: string, state: ArchiveHistoryState): Promise<void> {
-  state.updatedAt = new Date().toISOString();
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
-  const tmp = `${statePath}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(state, null, 2), 'utf8');
-  await fs.rename(tmp, statePath);
-}
-
-async function getFileSizeBestEffort(filePath: string): Promise<number | undefined> {
-  try {
-    const stats = await fs.stat(filePath);
-    return stats.isFile() ? stats.size : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 async function assertManifestExists(manifestPath: string): Promise<void> {
   try {
@@ -103,12 +50,12 @@ async function assertManifestExists(manifestPath: string): Promise<void> {
 
 // ─── Scan checkpoint state ────────────────────────────────────────────────────
 // Persisted at work/scan-state.json so a scan can resume after a timeout or
-// crash — only archives that have NOT yet been extracted are processed on the
-// next run.
+// crash — only archives that have NOT yet been staged into normalized storage
+// are processed on the next run.
 
 type ScanState = {
   version: 1;
-  /** Basenames of archives already fully extracted in a previous run. */
+  /** Basenames of archives already merged into normalized storage. */
   extractedArchives: string[];
   lastUpdatedAt: string;
 };
@@ -184,8 +131,9 @@ export async function runTakeoutScan(
   const manifestPath = path.join(config.workDir, DEFAULT_MANIFEST_FILE);
   const scanStatePath = path.join(config.workDir, 'scan-state.json');
   const archiveStatePath = path.join(config.workDir, 'archive-state.json');
-  const normalizedDir  = path.join(config.workDir, 'normalized');
-  const archiveState = await loadArchiveHistoryState(archiveStatePath);
+  const partialManifestPath = path.join(config.workDir, 'scan-entries.jsonl');
+  const tempExtractDir = path.join(config.workDir, 'temp-extract');
+  const archiveState = await loadArchiveState(archiveStatePath);
 
   // ── No archive files at all: fall back to direct-media / descriptive error ─
   if (allArchives.length === 0) {
@@ -193,58 +141,48 @@ export async function runTakeoutScan(
       config.inputDir, config.workDir, extractor,
     );
     onProgress?.({ phase: 'manifest', current: 0, total: 0, percent: 72, detail: 'Building manifest...' });
-    const rawEntries = await buildManifest(mediaRoot, (processed, total) => {
-      const pct = 72 + Math.round((processed / Math.max(total, 1)) * 20);
+    const entries = await buildManifest(mediaRoot, (processed, total) => {
+      const pct = 72 + Math.round((processed / Math.max(total, 1)) * 25);
       onProgress?.({ phase: 'manifest', current: processed, total, percent: pct, detail: `${processed}/${total} files` });
     });
-    onProgress?.({ phase: 'manifest', current: 0, total: 0, percent: 93, detail: 'Deduplicating manifest...' });
-    const dedup = await deduplicateManifest(rawEntries, (hashed, total) => {
-      const pct = 93 + Math.round((hashed / Math.max(total, 1)) * 5);
-      onProgress?.({ phase: 'manifest', current: hashed, total, percent: pct, detail: `Dedup: hashing ${hashed}/${total}` });
-    });
-    if (dedup.removedCount > 0) {
-      console.log(`[runner] Manifest dedup: removed ${dedup.removedCount} duplicate entries (${(dedup.removedBytes / 1e9).toFixed(2)} GB)`);
-    }
-    const entries = dedup.entries;
     await persistManifestJsonl(entries, manifestPath);
     onProgress?.({ phase: 'done', current: 1, total: 1, percent: 100, detail: 'Scan complete' });
     return { manifestPath, mediaRoot, archives, entryCount: entries.length };
   }
 
-  // ── Load checkpoint: which archives were already extracted in a prior run ──
+  // ── Load checkpoint: which archives were already scanned in a prior run ────
   const scanState = await loadScanState(scanStatePath);
-  const alreadyExtracted = new Set(scanState.extractedArchives);
-  const toExtract = allArchives.filter((a) => !alreadyExtracted.has(path.basename(a)));
+  const alreadyScanned = new Set(scanState.extractedArchives);
+  const toScan = allArchives.filter((a) => !alreadyScanned.has(path.basename(a)));
 
   onProgress?.({
     phase: 'discover',
-    current: allArchives.length - toExtract.length,
+    current: allArchives.length - toScan.length,
     total: allArchives.length,
     percent: 2,
-    detail: toExtract.length === 0
-      ? 'All archives already extracted — rebuilding manifest...'
-      : `${allArchives.length - toExtract.length} already extracted, ${toExtract.length} remaining`,
+    detail: toScan.length === 0
+      ? 'All archives already scanned — rebuilding manifest...'
+      : `${allArchives.length - toScan.length} already scanned, ${toScan.length} remaining`,
   });
 
-  // NOTE: We intentionally do NOT short-circuit when toExtract is empty.
-  // The scan-state file checkpoints extraction progress for crash-recovery.
-  // If all archives are marked as extracted, a prior run may have been
-  // interrupted after extraction but *before* normalize → manifest → clear.
-  // Always fall through so the full pipeline completes and the state is cleared.
-
-  // ── Phase 1: Extract new archives one at a time (checkpointed) ────────────
+  // ── Phase 1: Extract each archive, build manifest entries, then delete ─────
+  // Unlike the old approach which merged into a persistent `normalized/`
+  // directory (consuming disk equal to all archives), this only keeps ONE
+  // archive extracted at a time. Entries are appended to a partial manifest
+  // file for crash recovery.
   const effectiveExtractor = extractor ?? extractArchive;
-  const totalArchives  = allArchives.length;
-  const alreadyDone    = totalArchives - toExtract.length;
+  const totalArchives = allArchives.length;
+  const alreadyDone = totalArchives - toScan.length;
+  let sawMetadataOnlyArchive = false;
 
-  for (let i = 0; i < toExtract.length; i++) {
-    const archivePath = toExtract[i];
+  for (let i = 0; i < toScan.length; i++) {
+    const archivePath = toScan[i];
     const archiveName = path.basename(archivePath);
     const existing = archiveState.archives[archiveName];
-    const shouldTrackScanState = existing?.status !== 'completed';
+    const shouldTrackState = existing?.status !== 'completed';
     const archiveSizeBytes = await getFileSizeBestEffort(archivePath);
 
-    if (shouldTrackScanState) {
+    if (shouldTrackState) {
       archiveState.archives[archiveName] = {
         status: 'extracting',
         entryCount: existing?.entryCount ?? 0,
@@ -257,11 +195,10 @@ export async function runTakeoutScan(
         completedAt: existing?.completedAt,
         error: undefined,
       };
-      await persistArchiveHistoryState(archiveStatePath, archiveState);
+      await persistArchiveState(archiveStatePath, archiveState);
     }
 
-    // Weight extraction as 0‒65 % of total progress
-    const percent = Math.round(((alreadyDone + i) / Math.max(totalArchives, 1)) * 65);
+    const percent = Math.round(((alreadyDone + i) / Math.max(totalArchives, 1)) * 80);
     onProgress?.({
       phase: 'extract',
       current: alreadyDone + i + 1,
@@ -271,114 +208,125 @@ export async function runTakeoutScan(
     });
 
     try {
-      await effectiveExtractor(archivePath, config.workDir);
+      await safeRmRecursive(tempExtractDir);
+      await fs.mkdir(tempExtractDir, { recursive: true });
+      await effectiveExtractor(archivePath, tempExtractDir);
+
+      // Find media roots and build manifest entries while files are on disk
+      const roots = await findGooglePhotosRoots(tempExtractDir);
+      let archiveEntries: ManifestEntry[];
+
+      if (roots.length > 0) {
+        const perRoot = await Promise.all(roots.map((root) => buildManifest(root)));
+        archiveEntries = perRoot.flat();
+      } else if (await containsMediaFiles(tempExtractDir)) {
+        archiveEntries = await buildManifest(tempExtractDir);
+      } else if (await pathExists(path.join(tempExtractDir, 'Takeout', 'archive_browser.html'))) {
+        sawMetadataOnlyArchive = true;
+        archiveEntries = [];
+      } else {
+        archiveEntries = [];
+      }
+
+      onProgress?.({
+        phase: 'manifest',
+        current: alreadyDone + i + 1,
+        total: totalArchives,
+        percent: Math.min(percent + 5, 85),
+        detail: `${archiveName}: ${archiveEntries.length.toLocaleString()} files`,
+      });
+
+      // Persist entries before deleting temp so a crash doesn't lose them
+      if (archiveEntries.length > 0) {
+        await appendJsonl(archiveEntries, partialManifestPath);
+      }
+
+      if (shouldTrackState) {
+        const mediaBytes = archiveEntries.reduce((s, e) => s + Math.max(0, e.size ?? 0), 0);
+        archiveState.archives[archiveName] = {
+          ...archiveState.archives[archiveName],
+          status: 'pending',
+          entryCount: archiveEntries.length,
+          mediaBytes,
+          error: undefined,
+        };
+        await persistArchiveState(archiveStatePath, archiveState);
+      }
     } catch (error) {
-      if (shouldTrackScanState) {
+      if (shouldTrackState) {
         archiveState.archives[archiveName] = {
           ...archiveState.archives[archiveName],
           status: 'failed',
           completedAt: new Date().toISOString(),
           error: error instanceof Error ? error.message : String(error),
         };
-        await persistArchiveHistoryState(archiveStatePath, archiveState);
+        await persistArchiveState(archiveStatePath, archiveState);
       }
       throw error;
+    } finally {
+      // Always delete extracted files — this is the core disk-saving change
+      await safeRmRecursive(tempExtractDir);
     }
 
-    // Checkpoint immediately so a timeout / crash leaves progress intact
     scanState.extractedArchives.push(archiveName);
     await saveScanState(scanStatePath, scanState);
+  }
 
-    if (shouldTrackScanState) {
-      archiveState.archives[archiveName] = {
-        ...archiveState.archives[archiveName],
-        status: 'pending',
-        error: undefined,
-      };
-      await persistArchiveHistoryState(archiveStatePath, archiveState);
+  // ── Phase 2: Build final manifest from all scanned entries ─────────────────
+  onProgress?.({ phase: 'manifest', current: 0, total: 0, percent: 85, detail: 'Building final manifest...' });
+
+  // Load entries from both the partial manifest (previously scanned) and any
+  // legacy normalized directory left by a prior version of the scan.
+  let allEntries: ManifestEntry[] = [];
+  try {
+    allEntries = await loadManifestJsonl(partialManifestPath);
+  } catch { /* no partial manifest — first run completed without crash */ }
+
+  if (allEntries.length === 0 && toScan.length === 0) {
+    // All archives were already scanned in a prior run and the partial
+    // manifest was cleared. Reload the final manifest if it exists.
+    try {
+      allEntries = await loadManifestJsonl(manifestPath);
+    } catch { /* ok */ }
+  }
+
+  if (allEntries.length === 0 && !sawMetadataOnlyArchive) {
+    throw new Error(
+      'No media files found in any archive.\n'
+      + 'Make sure you downloaded ALL parts of the Google Takeout export (not just metadata archives).',
+    );
+  }
+
+  // Dedup by destinationKey (no file I/O needed — files are deleted)
+  const dedupMap = new Map<string, ManifestEntry>();
+  for (const entry of allEntries) {
+    if (!dedupMap.has(entry.destinationKey)) {
+      dedupMap.set(entry.destinationKey, entry);
     }
   }
+  const entries = [...dedupMap.values()].sort((a, b) =>
+    a.destinationKey.localeCompare(b.destinationKey),
+  );
 
-  // ── Phase 2: Normalize (wipe first for idempotency) ───────────────────────
-  // Wipe the normalized folder so that re-runs don't accumulate __dup files.
-  // This directory is derived from Takeout/ so rebuilding it is always safe.
-  // Use a safe recursive removal that skips corrupted/unreadable entries
-  // rather than fs.rm(recursive) which deletes good data before throwing.
-  onProgress?.({ phase: 'normalize', current: 0, total: 1, percent: 67, detail: 'Merging extracted folders...' });
-  await safeRmRecursive(normalizedDir);
-
-  const roots = await findGooglePhotosRoots(config.workDir);
-  let mediaRoot: string;
-  if (roots.length > 0) {
-    mediaRoot = await normalizeTakeoutMediaRoot(config.workDir, (processed, total, fileName) => {
-      const pct = 67 + Math.round((processed / Math.max(total, 1)) * 5);
-      onProgress?.({
-        phase: 'normalize',
-        current: processed,
-        total,
-        percent: Math.min(pct, 72),
-        detail: `${processed.toLocaleString()}/${total.toLocaleString()} files — ${fileName}`,
-      });
-    });
-  } else {
-    const hasMedia = await containsMediaFiles(config.workDir);
-    if (!hasMedia) {
-      throw new Error(
-        'No Google Photos folders or media files found after extracting archives.\n' +
-        'Make sure you downloaded ALL parts of the Google Takeout export.',
-      );
-    }
-    mediaRoot = config.workDir;
+  const removedCount = allEntries.length - entries.length;
+  if (removedCount > 0) {
+    console.log(`[runner] Manifest dedup: removed ${removedCount} duplicate entries by destination key`);
   }
 
-  onProgress?.({ phase: 'normalize', current: 1, total: 1, percent: 72, detail: 'Folders merged.' });
-
-  // ── Phase 2b: Cleanup extracted Takeout directories ───────────────────────
-  // normalizeTakeoutMediaRoot now moves (not copies) files, so the original
-  // Google Photos roots are mostly empty. Remove them and any parent Takeout
-  // directories to reclaim disk space (metadata sidecar .json files, empty dirs).
-  if (roots.length > 0) {
-    for (const root of roots) {
-      try { await fs.rm(root, { recursive: true, force: true }); } catch { /* ok */ }
-      // Also try to remove the parent Takeout/ folder if it's now empty
-      const takeoutDir = path.dirname(root);
-      try {
-        const remaining = await fs.readdir(takeoutDir);
-        if (remaining.length === 0) await fs.rmdir(takeoutDir);
-      } catch { /* ok */ }
-    }
-  }
-
-  // ── Phase 3: Build manifest ────────────────────────────────────────────────
-  onProgress?.({ phase: 'manifest', current: 0, total: 0, percent: 73, detail: 'Building manifest...' });
-
-  const rawEntries = await buildManifest(mediaRoot, (processed, total) => {
-    const pct = 73 + Math.round((processed / Math.max(total, 1)) * 18);
-    onProgress?.({ phase: 'manifest', current: processed, total, percent: pct, detail: `${processed.toLocaleString()}/${total.toLocaleString()} files` });
-  });
-
-  onProgress?.({ phase: 'manifest', current: 0, total: 0, percent: 92, detail: 'Deduplicating manifest...' });
-  const dedup = await deduplicateManifest(rawEntries, (hashed, total) => {
-    const pct = 92 + Math.round((hashed / Math.max(total, 1)) * 6);
-    onProgress?.({ phase: 'manifest', current: hashed, total, percent: pct, detail: `Dedup: hashing ${hashed.toLocaleString()}/${total.toLocaleString()}` });
-  });
-  if (dedup.removedCount > 0) {
-    console.log(`[runner] Manifest dedup: removed ${dedup.removedCount} duplicate entries (${(dedup.removedBytes / 1e9).toFixed(2)} GB)`);
-  }
-  const entries = dedup.entries;
   await persistManifestJsonl(entries, manifestPath);
 
-  // Clear scan-state — the next batch of archives starts fresh
-  try { await fs.rm(scanStatePath, { force: true }); } catch { /* ok if absent */ }
+  // Clean up intermediate files
+  try { await fs.rm(scanStatePath, { force: true }); } catch { /* ok */ }
+  try { await fs.rm(partialManifestPath, { force: true }); } catch { /* ok */ }
 
   onProgress?.({
     phase: 'done', current: 1, total: 1, percent: 100,
-    detail: `Scan complete — ${entries.length.toLocaleString()} files`,
+    detail: `Scan complete — ${entries.length.toLocaleString()} files in ${allArchives.length} archives`,
   });
 
   return {
     manifestPath,
-    mediaRoot,
+    mediaRoot: config.inputDir,
     archives: allArchives,
     entryCount: entries.length,
   };
@@ -501,6 +449,7 @@ export function withDefaults(partial: Partial<TakeoutConfig>): TakeoutConfig {
   return {
     inputDir: partial.inputDir ?? './data/takeout/input',
     workDir: partial.workDir ?? './data/takeout/work',
+    archiveDir: partial.archiveDir,
     statePath: partial.statePath ?? './data/takeout/state.json',
     uploadConcurrency: partial.uploadConcurrency ?? 4,
     uploadRetryCount: partial.uploadRetryCount ?? 5,
@@ -528,8 +477,11 @@ async function safeRmRecursive(dirPath: string): Promise<void> {
       if (stat.isDirectory()) {
         await safeRmRecursive(fullPath);
         // Try to remove the now-empty directory
-        try { await fs.rmdir(fullPath); } catch {
-          console.warn(`[runner] Could not remove directory (corrupted?): ${fullPath} — skipping`);
+        try { await fs.rmdir(fullPath); } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTEMPTY') {
+            console.warn(`[runner] Could not remove directory (corrupted?): ${fullPath} — skipping`);
+          }
         }
       } else {
         await fs.unlink(fullPath);
@@ -541,5 +493,29 @@ async function safeRmRecursive(dirPath: string): Promise<void> {
 
   // Try to remove the directory itself if it's now empty
   try { await fs.rmdir(dirPath); } catch { /* ok if not empty due to skipped entries */ }
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function getFileSizeBestEffort(filePath: string): Promise<number | undefined> {
+  try {
+    const stats = await fs.stat(filePath);
+    return stats.isFile() ? stats.size : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function appendJsonl(entries: ManifestEntry[], filePath: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const lines = entries.map((e) => JSON.stringify(e));
+  await fs.appendFile(filePath, `${lines.join('\n')}\n`, 'utf8');
 }
 

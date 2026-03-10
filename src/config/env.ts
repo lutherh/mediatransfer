@@ -61,6 +61,7 @@ const envSchema = z.object({
   // Google Takeout migration settings (full-library path)
   TAKEOUT_INPUT_DIR: z.string().min(1).default('./data/takeout/input'),
   TAKEOUT_WORK_DIR: z.string().min(1).default('./data/takeout/work'),
+  TAKEOUT_ARCHIVE_DIR: z.string().min(1).optional(),
   TRANSFER_STATE_PATH: z.string().min(1).default('./data/takeout/state.json'),
   UPLOAD_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   UPLOAD_RETRY_COUNT: z.coerce.number().int().min(0).max(20).default(5),
