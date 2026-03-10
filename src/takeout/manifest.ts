@@ -81,12 +81,27 @@ export async function persistManifestJsonl(
 }
 
 export async function loadManifestJsonl(manifestPath: string): Promise<ManifestEntry[]> {
-  const content = await fs.readFile(manifestPath, 'utf8');
-  return content
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as ManifestEntry);
+  let content: string;
+  try {
+    content = await fs.readFile(manifestPath, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return [];
+    }
+    throw err;
+  }
+
+  const entries: ManifestEntry[] = [];
+  for (const raw of content.split('\n')) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    try {
+      entries.push(JSON.parse(line) as ManifestEntry);
+    } catch {
+      console.warn(`[manifest] Skipping malformed line in ${manifestPath}: ${line.slice(0, 120)}`);
+    }
+  }
+  return entries;
 }
 
 async function listMediaFiles(rootDir: string): Promise<string[]> {

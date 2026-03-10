@@ -133,9 +133,8 @@ let uploadState: UploadState;
 try {
   const raw = await fs.readFile(statePath, 'utf8');
   uploadState = JSON.parse(raw) as UploadState;
-} catch {
-  console.error('❌ Could not read upload state from', statePath);
-  process.exit(1);
+} catch (err) {
+  throw new Error(`❌Could not read upload state from ${statePath}: ${(err as Error).message}`);
 }
 
 for (const newEntry of newEntries) {

@@ -340,7 +340,7 @@ export async function runTakeoutIncremental(
     }
   }
 
-  const entries = await loadManifestJsonl(globalManifestPath).catch(() => []);
+  const entries = await loadManifestJsonl(globalManifestPath);
   const state = await loadUploadState(config.statePath);
   const finalSummary: UploadSummary = {
     total: result.totalEntries,
