@@ -131,6 +131,12 @@ let lastOutputAt: string | undefined;
  */
 const customPaths = new Map<string, string>();
 const CUSTOM_PATHS_FILE = 'custom-paths.json';
+let autoUploadEnabled = false;
+const AUTO_UPLOAD_FILE = 'auto-upload.json';
+
+// Delay before auto-upload triggers the next action (gives the frontend time to
+// see the completed state before the next action kicks off).
+const AUTO_UPLOAD_DELAY_MS = 5_000;
 
 function customPathsFilePath(env: Env): string {
   // Store next to TRANSFER_STATE_PATH (a fixed location independent of workDir)
@@ -160,6 +166,29 @@ function persistCustomPaths(env: Env): void {
       console.debug('[takeout] Failed to persist custom paths:', err);
     });
 }
+
+function autoUploadFilePath(env: Env): string {
+  return path.join(path.dirname(path.resolve(env.TRANSFER_STATE_PATH)), AUTO_UPLOAD_FILE);
+}
+
+async function loadAutoUpload(env: Env): Promise<void> {
+  try {
+    const raw = await fs.readFile(autoUploadFilePath(env), 'utf8');
+    const parsed = JSON.parse(raw) as { enabled?: boolean };
+    autoUploadEnabled = parsed.enabled === true;
+  } catch {
+    // File missing or malformed — default off
+  }
+}
+
+function persistAutoUpload(env: Env): void {
+  const filePath = autoUploadFilePath(env);
+  fs.mkdir(path.dirname(filePath), { recursive: true })
+    .then(() => fs.writeFile(filePath, JSON.stringify({ enabled: autoUploadEnabled }, null, 2), 'utf8'))
+    .catch((err) => {
+      console.debug('[takeout] Failed to persist auto-upload setting:', err);
+    });
+}
 const manifestCountCache = new Map<string, {
   mtimeMs: number;
   size: number;
@@ -174,6 +203,7 @@ const manifestKeysCache = new Map<string, {
 
 let pipelineState: PipelineState | null = null;
 let resolvedWorkDir: string | null = null;
+let resolvedEnv: Env | null = null;
 
 /** Load pipeline state from disk (lazy, once per process). */
 async function ensurePipelineState(workDir: string): Promise<PipelineState> {
@@ -206,8 +236,10 @@ function persistPipelineState(): void {
 }
 
 export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Promise<void> {
-  // ── Load persisted custom paths from previous session ───────────────────
+  // ── Load persisted settings from previous session ──────────────────────
   await loadCustomPaths(env);
+  await loadAutoUpload(env);
+  resolvedEnv = env;
 
   // ── Override any configurable path ──────────────────────────────────────
 
@@ -360,11 +392,31 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       archivesInInput,
       archiveHistory,
       pipeline: buildPipelineSummary(pipeline),
+      autoUpload: autoUploadEnabled,
     };
   });
 
   app.get('/takeout/action-status', async () => {
     return snapshotStatus();
+  });
+
+  // ── Auto-upload toggle ──────────────────────────────────────────────────
+
+  app.get('/takeout/auto-upload', async () => {
+    return { enabled: autoUploadEnabled };
+  });
+
+  app.put('/takeout/auto-upload', async (req) => {
+    const body = req.body as { enabled?: boolean } | null;
+    autoUploadEnabled = body?.enabled === true;
+    persistAutoUpload(env);
+
+    // If just enabled and no action is running, check if we should start immediately
+    if (autoUploadEnabled && !RUN_STATUS.running) {
+      scheduleAutoUploadCheck(env);
+    }
+
+    return { enabled: autoUploadEnabled };
   });
 
   app.post('/takeout/actions/:action', {
@@ -604,10 +656,55 @@ function runAction(action: TakeoutAction): void {
         appendStartServicesFailureHints();
       }
       appendOutput(`Action finished with code ${exitCode}`);
+
+      // Auto-upload: chain next action when enabled
+      if (success && autoUploadEnabled && resolvedEnv) {
+        if (action === 'scan') {
+          // Scan finished → start upload automatically
+          appendOutput('🔄 Auto-upload enabled — starting upload automatically...');
+          setTimeout(() => {
+            if (!RUN_STATUS.running) {
+              runAction('upload');
+            }
+          }, AUTO_UPLOAD_DELAY_MS);
+        } else if (action === 'cleanup-move' || action === 'cleanup-delete') {
+          // Cleanup finished → check for new archives
+          appendOutput('🔄 Auto-upload enabled — checking for new archives...');
+          scheduleAutoUploadCheck(resolvedEnv);
+        }
+      }
     });
   };
 
   runCommand(0);
+}
+
+/**
+ * Check for actionable state and trigger the next auto-upload step.
+ * Runs after a delay so the frontend can see the completed status first.
+ */
+function scheduleAutoUploadCheck(env: Env): void {
+  setTimeout(async () => {
+    if (!autoUploadEnabled || RUN_STATUS.running) return;
+
+    const inputDir = customPaths.get('inputDir') ?? path.resolve(env.TAKEOUT_INPUT_DIR);
+    let archivesInInput = 0;
+    try {
+      const entries = await fs.readdir(inputDir, { withFileTypes: true });
+      archivesInInput = entries.filter(
+        (e) => e.isFile() && /\.(zip|tar|tgz|tar\.gz)$/i.test(e.name),
+      ).length;
+    } catch {
+      // input dir may not exist yet
+    }
+
+    if (archivesInInput > 0) {
+      appendOutput(`🔄 Auto-upload: ${archivesInInput} archive(s) found — starting scan...`);
+      runAction('scan');
+    } else {
+      appendOutput('🔄 Auto-upload: no new archives found. Waiting for new files...');
+    }
+  }, AUTO_UPLOAD_DELAY_MS);
 }
 
 function resolveActionCommands(action: TakeoutAction): ActionCommand[] {

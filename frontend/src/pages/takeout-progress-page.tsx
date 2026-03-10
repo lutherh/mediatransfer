@@ -7,6 +7,7 @@ import {
   fetchTakeoutActionStatus,
   fetchTakeoutStatus,
   runTakeoutAction,
+  setAutoUpload,
   updateTakeoutPath,
   resetTakeoutPath,
   type TakeoutAction,
@@ -60,6 +61,13 @@ export function TakeoutProgressPage() {
         queryClient.invalidateQueries({ queryKey: ['takeout-action-status'] }),
         queryClient.invalidateQueries({ queryKey: ['takeout-status'] }),
       ]);
+    },
+  });
+
+  const autoUploadMutation = useMutation({
+    mutationFn: setAutoUpload,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['takeout-status'] });
     },
   });
 
@@ -140,14 +148,21 @@ export function TakeoutProgressPage() {
           <h1 className="text-xl sm:text-2xl font-semibold text-slate-900">Google Takeout</h1>
           <p className="text-sm text-slate-500 mt-0.5">Migrate your Google Photos library to Scaleway</p>
         </div>
-        {!isLoadingActionStatus && (
-          <StatusBadge
-            running={isActionRunning}
-            paused={actionStatus?.paused}
-            action={actionStatus?.action}
-            success={actionStatus?.success}
+        <div className="flex items-center gap-3 flex-wrap">
+          <AutoUploadToggle
+            enabled={data.autoUpload ?? false}
+            disabled={autoUploadMutation.isPending}
+            onToggle={(enabled) => autoUploadMutation.mutate(enabled)}
           />
-        )}
+          {!isLoadingActionStatus && (
+            <StatusBadge
+              running={isActionRunning}
+              paused={actionStatus?.paused}
+              action={actionStatus?.action}
+              success={actionStatus?.success}
+            />
+          )}
+        </div>
       </div>
 
       {/* Mutation error */}
@@ -747,6 +762,40 @@ function PipelineStepper({
 }
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
+
+// ─── Auto-upload toggle ───────────────────────────────────────────────────────
+
+function AutoUploadToggle({
+  enabled,
+  disabled,
+  onToggle,
+}: {
+  enabled: boolean;
+  disabled: boolean;
+  onToggle: (enabled: boolean) => void;
+}): ReactElement {
+  return (
+    <label className="inline-flex items-center gap-2 cursor-pointer select-none shrink-0" title="When enabled, new archives are automatically scanned and uploaded">
+      <span className="text-xs text-slate-500">Auto</span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={enabled}
+        disabled={disabled}
+        onClick={() => onToggle(!enabled)}
+        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:opacity-40 ${
+          enabled ? 'bg-blue-600' : 'bg-slate-300'
+        }`}
+      >
+        <span
+          className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
+            enabled ? 'translate-x-[1.125rem]' : 'translate-x-0.5'
+          }`}
+        />
+      </button>
+    </label>
+  );
+}
 
 function StatusBadge({
   running,

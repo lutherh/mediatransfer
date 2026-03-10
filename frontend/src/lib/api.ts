@@ -110,6 +110,8 @@ export type TakeoutStatus = {
   archiveHistory?: TakeoutArchiveHistoryEntry[];
   /** Pipeline state: ordered step progression with per-step status */
   pipeline?: PipelineSummary;
+  /** Whether auto-upload mode is enabled */
+  autoUpload?: boolean;
 };
 
 export type TakeoutArchiveHistoryEntry = {
@@ -350,6 +352,22 @@ export async function runTakeoutAction(action: TakeoutAction): Promise<{ message
     throw new Error(message);
   }
 
+  return response.json();
+}
+
+export async function setAutoUpload(enabled: boolean): Promise<{ enabled: boolean }> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/takeout/auto-upload`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    },
+    TAKEOUT_FETCH_TIMEOUT_MS,
+  );
+  if (!response.ok) {
+    throw new Error('Failed to update auto-upload setting');
+  }
   return response.json();
 }
 
