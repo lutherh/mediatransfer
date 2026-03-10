@@ -1,5 +1,5 @@
 ﻿import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Alert } from '@/components/ui/alert';
@@ -15,12 +15,14 @@ import {
   type PipelineSummary,
   type StepRecord,
   type StepStatus,
+  type UploadProgressInfo,
 } from '@/lib/api';
 
 // ─── Page states ──────────────────────────────────────────────────────────────
 
 type PageState =
   | 'running'         // a job is actively running
+  | 'paused'          // upload was paused by user
   | 'verify-failed'   // verify found files missing from the cloud → needs upload
   | 'error'           // last job failed (non-verify)
   | 'archives-found'  // archives sitting in input/, no manifest yet
@@ -107,6 +109,8 @@ export function TakeoutProgressPage() {
   let pageState: PageState;
   if (isActionRunning) {
     pageState = 'running';
+  } else if (actionStatus?.paused) {
+    pageState = 'paused';
   } else if (lastActionFailed && actionStatus?.action === 'verify') {
     // Verify finishing with missing files is not a scary crash — it just means
     // some files still need uploading. Give a dedicated, friendly page state.
@@ -139,6 +143,7 @@ export function TakeoutProgressPage() {
         {!isLoadingActionStatus && (
           <StatusBadge
             running={isActionRunning}
+            paused={actionStatus?.paused}
             action={actionStatus?.action}
             success={actionStatus?.success}
           />
@@ -226,11 +231,23 @@ export function TakeoutProgressPage() {
       {/* Running: show progress */}
       {pageState === 'running' && (
         <Card className="space-y-3">
-          <div className="flex items-center gap-2.5">
-            <span className="h-3 w-3 rounded-full bg-blue-500 animate-pulse shrink-0" />
-            <p className="font-semibold text-slate-900">
-              {describeAction(actionStatus?.action)} running...
-            </p>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <span className="h-3 w-3 rounded-full bg-blue-500 animate-pulse shrink-0" />
+              <p className="font-semibold text-slate-900">
+                {describeAction(actionStatus?.action)} running...
+              </p>
+            </div>
+            {(actionStatus?.action === 'upload' || actionStatus?.action === 'resume') && (
+              <Button
+                className="border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 disabled:opacity-40 text-xs py-1 px-3"
+                type="button"
+                disabled={actionMutation.isPending}
+                onClick={() => run('pause')}
+              >
+                ⏸ Pause
+              </Button>
+            )}
           </div>
           {actionStatus?.action === 'scan' && actionStatus.scanProgress
             ? <ScanProgressBar progress={actionStatus.scanProgress} startedAt={actionStatus.startedAt} />
@@ -254,6 +271,47 @@ export function TakeoutProgressPage() {
               </p>
             </div>
           )}
+          {/* Live activity indicators */}
+          {(actionStatus?.action === 'upload' || actionStatus?.action === 'resume') && (
+            <UploadActivityIndicator
+              startedAt={actionStatus?.startedAt}
+              uploadProgress={actionStatus?.uploadProgress}
+              lastOutputAt={actionStatus?.lastOutputAt}
+            />
+          )}
+        </Card>
+      )}
+
+      {/* Paused: upload was paused by user */}
+      {pageState === 'paused' && (
+        <Card className="border-amber-200 bg-amber-50 space-y-3">
+          <div className="flex items-start gap-4">
+            <span className="text-3xl mt-0.5 shrink-0" aria-hidden>⏸️</span>
+            <div className="space-y-1 min-w-0">
+              <p className="font-semibold text-slate-900">Upload paused</p>
+              <p className="text-sm text-slate-600">
+                {data.counts.uploaded.toLocaleString()} of {data.counts.total.toLocaleString()} files uploaded so far.
+                Resume anytime — already uploaded files will be skipped automatically.
+              </p>
+            </div>
+          </div>
+          {hasManifest && (
+            <div className="space-y-1">
+              <div className="h-2 w-full rounded-full bg-slate-200 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-amber-500"
+                  style={{ width: `${Math.round(data.progress * 100)}%` }}
+                />
+              </div>
+              <p className="text-xs text-slate-500 tabular-nums">
+                {data.counts.uploaded.toLocaleString()} / {data.counts.total.toLocaleString()} files
+                {' '}· {Math.round(data.progress * 100)}%
+              </p>
+            </div>
+          )}
+          <Button type="button" disabled={busy} onClick={() => run('upload')}>
+            ▶ Resume upload
+          </Button>
         </Card>
       )}
 
@@ -692,10 +750,12 @@ function PipelineStepper({
 
 function StatusBadge({
   running,
+  paused,
   action,
   success,
 }: {
   running: boolean;
+  paused?: boolean;
   action?: TakeoutAction;
   success?: boolean;
 }): ReactElement {
@@ -704,6 +764,13 @@ function StatusBadge({
       <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-800 shrink-0">
         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
         {mapActionLabel(action)}...
+      </span>
+    );
+  }
+  if (paused && action) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800 shrink-0">
+        ⏸ {mapActionLabel(action)} paused
       </span>
     );
   }
@@ -1056,6 +1123,104 @@ function ScanProgressBar({
   );
 }
 
+// ─── Upload activity indicator ────────────────────────────────────────────────
+
+function useElapsedTime(startedAt?: string): string {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!startedAt) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
+
+  if (!startedAt) return '';
+  const elapsed = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+  const hours = Math.floor(elapsed / 3600);
+  const minutes = Math.floor((elapsed % 3600) / 60);
+  const seconds = elapsed % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function UploadActivityIndicator({
+  startedAt,
+  uploadProgress,
+  lastOutputAt,
+}: {
+  startedAt?: string;
+  uploadProgress?: UploadProgressInfo;
+  lastOutputAt?: string;
+}): ReactElement {
+  const elapsed = useElapsedTime(startedAt);
+
+  // Compute "last activity" relative time
+  let lastActivityText = '';
+  if (lastOutputAt) {
+    const secAgo = Math.max(0, Math.floor((Date.now() - new Date(lastOutputAt).getTime()) / 1000));
+    if (secAgo < 5) lastActivityText = 'just now';
+    else if (secAgo < 60) lastActivityText = `${secAgo}s ago`;
+    else lastActivityText = `${Math.floor(secAgo / 60)}m ago`;
+  }
+
+  const hasProgress = uploadProgress && (uploadProgress.speed || uploadProgress.currentArchive);
+
+  return (
+    <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 space-y-1.5">
+      {/* Top row: elapsed + last activity */}
+      <div className="flex items-center justify-between text-[11px] text-slate-500">
+        <span className="tabular-nums">
+          {elapsed ? <>Elapsed: <span className="font-medium text-slate-700">{elapsed}</span></> : 'Starting...'}
+        </span>
+        {lastActivityText && (
+          <span className="flex items-center gap-1">
+            <span className="h-1.5 w-1.5 rounded-full bg-green-400 animate-pulse" />
+            Activity {lastActivityText}
+          </span>
+        )}
+      </div>
+
+      {/* Progress details */}
+      {hasProgress && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-600">
+          {uploadProgress.speed && (
+            <span className="tabular-nums">
+              Speed: <span className="font-medium">{uploadProgress.speed}/s</span>
+            </span>
+          )}
+          {uploadProgress.eta && uploadProgress.eta !== '—' && (
+            <span className="tabular-nums">
+              ETA: <span className="font-medium">{uploadProgress.eta}</span>
+            </span>
+          )}
+          {uploadProgress.bytesTransferred && uploadProgress.bytesTotal && (
+            <span className="tabular-nums">
+              {uploadProgress.bytesTransferred} / {uploadProgress.bytesTotal}
+            </span>
+          )}
+          {typeof uploadProgress.inFlight === 'number' && uploadProgress.inFlight > 0 && (
+            <span className="tabular-nums">
+              In-flight: {uploadProgress.inFlight}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Current archive */}
+      {uploadProgress?.currentArchive && (
+        <p className="text-[11px] text-slate-500 truncate">
+          Archive: <span className="font-mono text-slate-700">{uploadProgress.currentArchive}</span>
+          {uploadProgress.currentArchiveIndex != null && uploadProgress.totalArchives != null && (
+            <span className="text-slate-400">
+              {' '}({uploadProgress.currentArchiveIndex}/{uploadProgress.totalArchives})
+            </span>
+          )}
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function describeAction(action?: TakeoutAction): string {
@@ -1082,6 +1247,7 @@ function mapActionLabel(action: TakeoutAction): string {
     upload:                'Upload',
     verify:                'Verify',
     resume:                'Resume',
+    pause:                 'Pause',
     'start-services':      'Start services',
     'cleanup-move':        'Cleanup (move archives)',
     'cleanup-delete':      'Cleanup (delete archives)',
