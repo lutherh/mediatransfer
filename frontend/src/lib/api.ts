@@ -83,6 +83,7 @@ export type TakeoutStatus = {
   paths: {
     inputDir: string;
     workDir: string;
+    archiveDir?: string;
     manifestPath: string;
     statePath: string;
   };

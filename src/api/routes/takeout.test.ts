@@ -46,6 +46,7 @@ function baseEnv(overrides: Partial<Env> = {}): Env {
     GOOGLE_BATCH_TEMP_DIR: path.join(tempDir, 'google-api-batches'),
     TAKEOUT_INPUT_DIR: path.join(tempDir, 'input'),
     TAKEOUT_WORK_DIR: path.join(tempDir, 'work'),
+    TAKEOUT_ARCHIVE_DIR: undefined,
     TRANSFER_STATE_PATH: path.join(tempDir, 'state.json'),
     UPLOAD_CONCURRENCY: 4,
     UPLOAD_RETRY_COUNT: 5,
@@ -137,6 +138,78 @@ describe('takeout routes', () => {
       }),
     ]);
 
+    await app.close();
+  });
+
+  it('keeps takeout status readable when archive-state reconciliation hits ENOSPC', async () => {
+    const inputDir = path.join(tempDir, 'input');
+    const workDir = path.join(tempDir, 'work');
+    const statePath = path.join(tempDir, 'state.json');
+    await fs.mkdir(inputDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workDir, 'manifest.jsonl'),
+      `${JSON.stringify({ destinationKey: 'a.jpg' })}\n`,
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        items: {
+          'a.jpg': { status: 'uploaded', attempts: 1, updatedAt: '2025-01-01T00:00:00.000Z' },
+        },
+      }),
+    );
+    await fs.writeFile(
+      path.join(workDir, 'archive-state.json'),
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        archives: {
+          'takeout-001.tgz': {
+            status: 'pending',
+            entryCount: 1,
+            uploadedCount: 1,
+            skippedCount: 0,
+            failedCount: 0,
+          },
+        },
+      }),
+    );
+
+    const originalWriteFile = fs.writeFile.bind(fs);
+    const writeSpy = vi.spyOn(fs, 'writeFile').mockImplementation(async (filePath, data, options) => {
+      if (String(filePath).includes('archive-state.json')) {
+        const error = new Error('ENOSPC: no space left on device, write') as Error & { code?: string };
+        error.code = 'ENOSPC';
+        throw error;
+      }
+
+      return originalWriteFile(filePath, data, options as never);
+    });
+
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv({
+      TAKEOUT_INPUT_DIR: inputDir,
+      TAKEOUT_WORK_DIR: workDir,
+      TRANSFER_STATE_PATH: statePath,
+    }));
+
+    const res = await app.inject({ method: 'GET', url: '/takeout/status' });
+    const body = res.json();
+
+    expect(res.statusCode).toBe(200);
+    expect(body.isComplete).toBe(true);
+    expect(body.archiveHistory).toEqual([
+      expect.objectContaining({
+        archiveName: 'takeout-001.tgz',
+        status: 'completed',
+        isFullyUploaded: true,
+      }),
+    ]);
+
+    writeSpy.mockRestore();
     await app.close();
   });
 
@@ -524,6 +597,98 @@ describe('takeout routes', () => {
     const spawnArgs = spawnMock.mock.calls[0][1] as string[];
     expect(spawnArgs).toContain('--work-dir');
     expect(spawnArgs).toContain(path.resolve(customWork));
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await app.close();
+  });
+
+  // ─── Custom archiveDir adds --move-archives for upload/resume ─────────────
+
+  it('spawned upload command includes --move-archives and --archive-dir when archiveDir is set', async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+
+    spawnMock.mockImplementation(() => {
+      queueMicrotask(() => {
+        child.stdout.emit('data', 'upload output\n');
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const archiveDir = path.join(tempDir, 'external-hd');
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    // Set custom archive dir
+    await app.inject({
+      method: 'PUT',
+      url: '/takeout/paths/archiveDir',
+      payload: { value: archiveDir },
+    });
+
+    // Trigger upload
+    const okRes = await app.inject({
+      method: 'POST',
+      url: '/takeout/actions/upload',
+    });
+    expect(okRes.statusCode).toBe(202);
+
+    expect(spawnMock).toHaveBeenCalled();
+    const spawnArgs = spawnMock.mock.calls[0][1] as string[];
+    expect(spawnArgs).toContain('--archive-dir');
+    expect(spawnArgs).toContain(path.resolve(archiveDir));
+    expect(spawnArgs).toContain('--move-archives');
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await app.close();
+  });
+
+  it('spawned scan command does NOT include --move-archives when archiveDir is set', async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+
+    spawnMock.mockImplementation(() => {
+      queueMicrotask(() => {
+        child.stdout.emit('data', 'scan output\n');
+        child.emit('close', 0);
+      });
+      return child;
+    });
+
+    const archiveDir = path.join(tempDir, 'external-hd');
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    await app.inject({
+      method: 'PUT',
+      url: '/takeout/paths/archiveDir',
+      payload: { value: archiveDir },
+    });
+
+    const okRes = await app.inject({
+      method: 'POST',
+      url: '/takeout/actions/scan',
+    });
+    expect(okRes.statusCode).toBe(202);
+
+    expect(spawnMock).toHaveBeenCalled();
+    const spawnArgs = spawnMock.mock.calls[0][1] as string[];
+    // --archive-dir is still passed (it's a path override) but --move-archives is NOT for scan
+    expect(spawnArgs).toContain('--archive-dir');
+    expect(spawnArgs).not.toContain('--move-archives');
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     await app.close();

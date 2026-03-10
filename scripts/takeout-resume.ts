@@ -1,7 +1,7 @@
 import * as dotenv from 'dotenv';
 import path from 'node:path';
 import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
-import { runTakeoutResume } from '../src/takeout/runner.js';
+import { runTakeoutIncremental } from '../src/takeout/incremental.js';
 import type { UploadProgressSnapshot } from '../src/takeout/uploader.js';
 import { validateScalewayConfig, ScalewayProvider } from '../src/providers/scaleway.js';
 import { formatDuration, formatBytes } from '../src/utils/format.js';
@@ -10,7 +10,7 @@ dotenv.config();
 
 const args = process.argv.slice(2);
 const pathOverrides = parseTakeoutPathArgs(args);
-const config = loadTakeoutConfig(undefined, { inputDir: inputDirArg, workDir: workDirArg });
+const config = loadTakeoutConfig(undefined, pathOverrides);
 const scalewayConfig = validateScalewayConfig({
   provider: 'scaleway',
   region: process.env.SCW_REGION,
@@ -23,44 +23,60 @@ const scalewayConfig = validateScalewayConfig({
 const provider = new ScalewayProvider(scalewayConfig);
 const dryRun = args.includes('--dry-run');
 const maxFailures = readNumberArg(args, '--max-failures');
-const includeFilter = readStringArg(args, '--include');
-const excludeFilter = readStringArg(args, '--exclude');
 const progressIntervalSec = readNumberArg(args, '--progress-interval-sec');
 const progressIntervalMs = progressIntervalSec !== undefined
   ? Math.max(0.5, progressIntervalSec) * 1000
   : undefined;
 
+const moveArchives = args.includes('--move-archives') || !!config.archiveDir;
+const archiveDirOverride = readStringArg(args, '--archive-dir');
+const completedArchiveDir = archiveDirOverride
+  ? path.resolve(archiveDirOverride)
+  : config.archiveDir;
+
 const progressTracker = createUploadProgressTracker();
 
-console.log('🔁 Resuming Takeout upload from checkpoint state...');
-const { summary, reportJsonPath, reportCsvPath } = await runTakeoutResume(
+console.log('🔁 Resuming Takeout upload (incremental pipeline — skips completed archives)...');
+if (completedArchiveDir) {
+  console.log(`   Archive dir: ${completedArchiveDir} (uploaded .tgz files will be moved here)`);
+}
+const result = await runTakeoutIncremental(
   config,
   provider,
-  undefined,
   {
     dryRun,
     maxFailures,
-    includeFilter,
-    excludeFilter,
+    uploadConcurrency: config.uploadConcurrency,
+    moveArchiveAfterUpload: moveArchives,
+    completedArchiveDir,
     progressIntervalMs,
-    onUploadProgress(snapshot) {
+    onArchiveStart(archiveName, index, total) {
+      console.log(`\n📦 [${index}/${total}] Resuming archive: ${archiveName}`);
+    },
+    onArchiveComplete(archiveName, summary) {
+      console.log(`   ✅ ${archiveName}: ${summary.uploaded} uploaded, ${summary.skipped} skipped, ${summary.failed} failed`);
+    },
+    onArchiveError(archiveName, error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error(`   ❌ ${archiveName}: ${msg}`);
+    },
+    onUploadProgress(_archiveName, snapshot) {
       progressTracker.render(snapshot);
     },
   },
 );
 progressTracker.complete();
-console.log('✅ Resume finished');
-console.log(`   Total: ${summary.total}`);
-console.log(`   Processed: ${summary.processed}`);
-console.log(`   Uploaded: ${summary.uploaded}`);
-console.log(`   Skipped: ${summary.skipped}`);
-console.log(`   Failed: ${summary.failed}`);
-console.log(`   Dry run: ${summary.dryRun}`);
-console.log(`   Stopped early: ${summary.stoppedEarly}`);
-console.log(`   Report JSON: ${reportJsonPath}`);
-console.log(`   Report CSV: ${reportCsvPath}`);
+console.log('\n✅ Resume finished');
+console.log(`   Archives: ${result.processedArchives}/${result.totalArchives} processed, ${result.skippedArchives} skipped, ${result.failedArchives} failed`);
+console.log(`   Total entries: ${result.totalEntries}`);
+console.log(`   Uploaded: ${result.totalUploaded}`);
+console.log(`   Skipped: ${result.totalSkipped}`);
+console.log(`   Failed: ${result.totalFailed}`);
+console.log(`   Dry run: ${dryRun}`);
+if (result.reportJsonPath) console.log(`   Report JSON: ${result.reportJsonPath}`);
+if (result.reportCsvPath) console.log(`   Report CSV: ${result.reportCsvPath}`);
 
-if (summary.failureLimitReached) {
+if (result.totalFailed > 0) {
   process.exitCode = 2;
 }
 

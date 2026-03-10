@@ -88,7 +88,11 @@ describe('takeout/runner', () => {
       });
 
       expect(result.entryCount).toBe(1);
+      expect(result.mediaRoot).toBe(inputDir);
       await expect(fs.access(result.manifestPath)).resolves.toBeUndefined();
+      // Extracted files are deleted — no normalized dir or temp-extract
+      await expect(fs.access(path.join(workDir, 'normalized'))).rejects.toThrow();
+      await expect(fs.access(path.join(workDir, 'temp-extract'))).rejects.toThrow();
 
       const archiveStatePath = path.join(workDir, 'archive-state.json');
       const archiveStateRaw = await fs.readFile(archiveStatePath, 'utf8');
@@ -113,7 +117,7 @@ describe('takeout/runner', () => {
       });
 
       // Simulate a previous interrupted scan: extraction completed and was
-      // checkpointed but the pipeline crashed before normalize/manifest/clear.
+      // checkpointed but the pipeline crashed before manifest finalization.
       const scanStatePath = path.join(workDir, 'scan-state.json');
       await fs.mkdir(workDir, { recursive: true });
       await fs.writeFile(scanStatePath, JSON.stringify({
@@ -122,16 +126,29 @@ describe('takeout/runner', () => {
         lastUpdatedAt: new Date().toISOString(),
       }));
 
-      // Also write a stale manifest from a prior batch (different content)
-      await persistManifestJsonl([], path.join(workDir, 'manifest.jsonl'));
+      // Partial manifest has entries from the checkpointed archive
+      const partialManifestPath = path.join(workDir, 'scan-entries.jsonl');
+      const entry1 = JSON.stringify({
+        sourcePath: '/tmp/old/IMG_1.jpg',
+        relativePath: 'Album1/IMG_1.jpg',
+        size: 100,
+        mtimeMs: Date.now(),
+        capturedAt: '2025-12-13T00:00:00.000Z',
+        datePath: '2025/12/13',
+        destinationKey: 'transfers/2025/12/13/Album1/IMG_1.jpg',
+      });
+      const entry2 = JSON.stringify({
+        sourcePath: '/tmp/old/IMG_2.jpg',
+        relativePath: 'Album1/IMG_2.jpg',
+        size: 200,
+        mtimeMs: Date.now(),
+        capturedAt: '2025-12-13T00:00:00.000Z',
+        datePath: '2025/12/13',
+        destinationKey: 'transfers/2025/12/13/Album1/IMG_2.jpg',
+      });
+      await fs.writeFile(partialManifestPath, `${entry1}\n${entry2}\n`);
 
-      // Put extracted content in workDir as if extraction already happened
-      const mediaDir = path.join(workDir, 'Takeout', 'Google Photos', 'Album1');
-      await fs.mkdir(mediaDir, { recursive: true });
-      await fs.writeFile(path.join(mediaDir, 'IMG_1.jpg'), 'x');
-      await fs.writeFile(path.join(mediaDir, 'IMG_2.jpg'), 'y');
-
-      // The extractor should NOT be called (archives already extracted)
+      // The extractor should NOT be called (archive already checkpointed)
       let extractorCalled = false;
       const result = await runTakeoutScan(config, async () => {
         extractorCalled = true;
@@ -139,8 +156,40 @@ describe('takeout/runner', () => {
 
       expect(extractorCalled).toBe(false);
       expect(result.entryCount).toBe(2);
-      // Scan-state should be cleared after full pipeline completes
+      // Scan-state and partial manifest should be cleared after completion
       await expect(fs.access(scanStatePath)).rejects.toThrow();
+      await expect(fs.access(partialManifestPath)).rejects.toThrow();
+    });
+  });
+
+  it('scans multiple archives without keeping extracted files on disk', async () => {
+    await withTempDir(async (dir) => {
+      const inputDir = path.join(dir, 'input');
+      const workDir = path.join(dir, 'work');
+      await fs.mkdir(inputDir, { recursive: true });
+      await fs.writeFile(path.join(inputDir, 'takeout-1.zip'), 'archive-1');
+      await fs.writeFile(path.join(inputDir, 'takeout-2.zip'), 'archive-2');
+
+      const config = withDefaults({
+        inputDir,
+        workDir,
+        statePath: path.join(dir, 'state.json'),
+      });
+
+      const result = await runTakeoutScan(config, async (archivePath, destinationDir) => {
+        const archiveId = path.basename(archivePath, '.zip');
+        const mediaDir = path.join(destinationDir, 'Takeout', 'Google Photos', archiveId);
+        await fs.mkdir(mediaDir, { recursive: true });
+        await fs.writeFile(path.join(mediaDir, `${archiveId}.jpg`), archiveId);
+      });
+
+      expect(result.entryCount).toBe(2);
+      // No files left on disk — no normalized dir or temp-extract
+      await expect(fs.access(path.join(workDir, 'normalized'))).rejects.toThrow();
+      await expect(fs.access(path.join(workDir, 'temp-extract'))).rejects.toThrow();
+      // Manifest has entries from both archives
+      const manifest = await fs.readFile(path.join(workDir, 'manifest.jsonl'), 'utf8');
+      expect(manifest.trim().split('\n')).toHaveLength(2);
     });
   });
 
