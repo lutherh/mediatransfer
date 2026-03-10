@@ -733,6 +733,8 @@ function scheduleAutoUploadAction(nextAction: 'scan' | 'upload', env: Env): void
         appendOutput('🔄 Auto-upload: scan produced no files to upload — skipping.');
         return;
       }
+      // Re-check after async gap — poll callback may have started an action
+      if (RUN_STATUS.running) return;
       appendOutput(`🔄 Auto-upload: ${keys.size} manifest entries found — starting upload...`);
       runAction('upload');
     } else {
@@ -740,6 +742,8 @@ function scheduleAutoUploadAction(nextAction: 'scan' | 'upload', env: Env): void
       const inputDir = customPaths.get('inputDir') ?? path.resolve(env.TAKEOUT_INPUT_DIR);
       const count = await countArchivesInInput(inputDir);
       if (count > 0) {
+        // Re-check after async gap — poll callback may have started an action
+        if (RUN_STATUS.running) return;
         appendOutput(`🔄 Auto-upload: ${count} archive(s) found — starting scan...`);
         runAction('scan');
       } else {
@@ -781,6 +785,8 @@ function ensureAutoUploadPoll(): void {
     const inputDir = customPaths.get('inputDir') ?? path.resolve(env.TAKEOUT_INPUT_DIR);
     const count = await countArchivesInInput(inputDir);
     if (count > 0) {
+      // Re-check after async gap — timeout callback may have started an action
+      if (RUN_STATUS.running) return;
       appendOutput(`🔄 Auto-upload poll: ${count} new archive(s) detected — starting scan...`);
       runAction('scan');
     }
