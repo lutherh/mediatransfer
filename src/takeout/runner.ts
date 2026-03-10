@@ -277,17 +277,12 @@ export async function runTakeoutScan(
 
   // Load entries from both the partial manifest (previously scanned) and any
   // legacy normalized directory left by a prior version of the scan.
-  let allEntries: ManifestEntry[] = [];
-  try {
-    allEntries = await loadManifestJsonl(partialManifestPath);
-  } catch { /* no partial manifest — first run completed without crash */ }
+  let allEntries = await loadManifestJsonl(partialManifestPath);
 
   if (allEntries.length === 0 && toScan.length === 0) {
     // All archives were already scanned in a prior run and the partial
     // manifest was cleared. Reload the final manifest if it exists.
-    try {
-      allEntries = await loadManifestJsonl(manifestPath);
-    } catch { /* ok */ }
+    allEntries = await loadManifestJsonl(manifestPath);
   }
 
   if (allEntries.length === 0 && !sawMetadataOnlyArchive) {

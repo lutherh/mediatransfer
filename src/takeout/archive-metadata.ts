@@ -96,7 +96,12 @@ export async function loadArchiveMetadata(
   const filePath = getMetadataFilePath(metadataDir, archiveName);
   try {
     const raw = await fs.readFile(filePath, 'utf8');
-    return JSON.parse(raw) as ArchiveMetadata;
+    const parsed = JSON.parse(raw);
+    if (parsed?.version !== 1 || typeof parsed.archiveName !== 'string') {
+      console.warn(`[archive-metadata] Invalid shape in ${filePath}, ignoring`);
+      return undefined;
+    }
+    return parsed as ArchiveMetadata;
   } catch {
     return undefined;
   }
@@ -115,7 +120,12 @@ export async function loadAllArchiveMetadata(
     for (const file of jsonFiles) {
       try {
         const raw = await fs.readFile(path.join(metadataDir, file), 'utf8');
-        results.push(JSON.parse(raw) as ArchiveMetadata);
+        const parsed = JSON.parse(raw);
+        if (parsed?.version !== 1 || typeof parsed.archiveName !== 'string') {
+          console.warn(`[archive-metadata] Invalid shape in ${file}, skipping`);
+          continue;
+        }
+        results.push(parsed as ArchiveMetadata);
       } catch {
         // skip malformed files
       }
