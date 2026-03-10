@@ -452,14 +452,16 @@ async function cleanupDir(dirPath: string): Promise<void> {
 async function moveArchiveToCompletedDir(archivePath: string, completedDir: string): Promise<void> {
   await fs.mkdir(completedDir, { recursive: true });
   const archiveName = path.basename(archivePath);
-  const txtFileName = path.parse(archiveName).name + '.txt';
-  const destinationPath = await getUniqueDestinationPath(completedDir, txtFileName);
+  const destinationPath = await getUniqueDestinationPath(completedDir, archiveName);
 
-  const stat = await fs.stat(archivePath).catch(() => null);
-  const sizeInfo = stat ? ` (${stat.size} bytes)` : '';
-  const content = `Archive processed and deleted to save disk space: ${archiveName}${sizeInfo}\nOriginal path: ${archivePath}\nProcessed at: ${new Date().toISOString()}\n`;
-  await fs.writeFile(destinationPath, content, 'utf-8');
-  await fs.unlink(archivePath);
+  try {
+    await fs.rename(archivePath, destinationPath);
+  } catch (error) {
+    if (!isCrossDeviceRenameError(error)) throw error;
+    // Cross-device (e.g. external HD): copy then delete
+    await fs.copyFile(archivePath, destinationPath);
+    await fs.unlink(archivePath);
+  }
 }
 
 async function getUniqueDestinationPath(directory: string, fileName: string): Promise<string> {
@@ -492,7 +494,7 @@ async function getUniqueDestinationPath(directory: string, fileName: string): Pr
   }
 }
 
-function isCrossDeviceRenameError(error: unknown): boolean {
+export function isCrossDeviceRenameError(error: unknown): boolean {
   return Boolean(
     error
     && typeof error === 'object'

@@ -155,9 +155,9 @@ describe('takeout/incremental', () => {
 
       expect(result.processedArchives).toBe(1);
       await expect(fs.access(archivePath)).rejects.toBeDefined();
-      await fs.access(path.join(config.inputDir, 'uploaded-archives', 'takeout-001.txt'));
-      const content = await fs.readFile(path.join(config.inputDir, 'uploaded-archives', 'takeout-001.txt'), 'utf-8');
-      expect(content).toContain('takeout-001.tgz');
+      await fs.access(path.join(config.inputDir, 'uploaded-archives', 'takeout-001.tgz'));
+      const content = await fs.readFile(path.join(config.inputDir, 'uploaded-archives', 'takeout-001.tgz'), 'utf-8');
+      expect(content).toBe('dummy');
 
       const archiveState = await loadArchiveState(path.join(config.workDir, 'archive-state.json'));
       const record = archiveState.archives['takeout-001.tgz'];
@@ -176,7 +176,7 @@ describe('takeout/incremental', () => {
 
       const completedDir = path.join(config.inputDir, 'uploaded-archives');
       await fs.mkdir(completedDir, { recursive: true });
-      await fs.writeFile(path.join(completedDir, 'takeout-001.txt'), 'existing');
+      await fs.writeFile(path.join(completedDir, 'takeout-001.tgz'), 'existing');
 
       const provider = new MockProvider();
 
@@ -194,8 +194,8 @@ describe('takeout/incremental', () => {
       );
 
       expect(result.processedArchives).toBe(1);
-      await fs.access(path.join(completedDir, 'takeout-001.txt'));
-      await fs.access(path.join(completedDir, 'takeout-001-1.txt'));
+      await fs.access(path.join(completedDir, 'takeout-001.tgz'));
+      await fs.access(path.join(completedDir, 'takeout-001-1.tgz'));
     });
   });
 

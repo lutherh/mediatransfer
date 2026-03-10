@@ -29,6 +29,7 @@ import { loadUploadState } from '../src/takeout/uploader.js';
 import { discoverTakeoutArchives } from '../src/takeout/unpack.js';
 import {
   createEmptyArchiveState,
+  isCrossDeviceRenameError,
   loadArchiveState,
   persistArchiveState,
 } from '../src/takeout/incremental.js';
@@ -48,7 +49,7 @@ const includeUnscanned = args.includes('--include-unscanned'); // also handle ar
 const moveTargetArg = readStringArg(args, '--move-dir');
 const moveTarget = moveTargetArg
   ? path.resolve(moveTargetArg)
-  : path.join(config.inputDir, 'uploaded-archives');
+  : config.archiveDir ?? path.join(config.inputDir, 'uploaded-archives');
 
 if (deleteArchives && moveArchives) {
   console.error('Choose only one: --delete-archives OR --move-archives');
@@ -118,7 +119,12 @@ if (missing > 0) {
     }
   }
 
-  if (!force) {
+  // For archive operations (move/delete), archive-state.json is the real safety gate —
+  // only archives marked completed are eligible. Manifest key mismatches (e.g. from
+  // re-scanning) shouldn't block moving/deleting archives that are confirmed complete.
+  const archiveOpsRelaxed = (moveArchives || deleteArchives) && !force;
+
+  if (!force && !archiveOpsRelaxed) {
     console.error(`❌ Cannot clean up safely: ${missing} manifest entries have no upload record.`);
     console.error('   This means upload state is incomplete or the manifest was rebuilt after upload.');
     console.error('');
@@ -136,8 +142,12 @@ if (missing > 0) {
     process.exit(1);
   }
 
-  console.warn(`⚠️  Missing state records: ${missing} — continuing because --force was passed.`);
-  console.warn('   Archive safety guard (archive-state.json) is still active.');
+  if (archiveOpsRelaxed) {
+    console.warn(`⚠️  ${missing} manifest entries have no upload record — archive-state.json will be used as safety gate.`);
+  } else {
+    console.warn(`⚠️  Missing state records: ${missing} — continuing because --force was passed.`);
+  }
+  console.warn('   Only archives marked completed in archive-state.json will be touched.');
   console.warn('');
 }
 
@@ -161,10 +171,10 @@ const completedArchiveNames = new Set(
     .map(([name]) => name),
 );
 
-// When --include-unscanned is set AND all files are safely uploaded (missing=0, failed=0),
-// treat archives not tracked in archive-state.json as eligible too — they were added after
-// the last scan and contain nothing new (everything already uploaded).
-const allSafe = missing === 0 && failed === 0;
+// When --include-unscanned is set AND uploads are confirmed safe, treat archives not
+// tracked in archive-state.json as eligible too. For archive operations (move/delete),
+// manifest key mismatches don't invalidate archive-level safety.
+const allSafe = failed === 0 && (missing === 0 || moveArchives || deleteArchives || force);
 const unscannedArchives = includeUnscanned && allSafe
   ? inputArchives.filter((a) => !completedArchiveNames.has(path.basename(a)))
   : [];
@@ -240,12 +250,12 @@ if (deleteArchives && eligibleInputArchives.length > 0) {
 } else if (moveArchives && eligibleInputArchives.length > 0) {
   for (const archivePath of eligibleInputArchives) {
     const stat = await fs.stat(archivePath).catch(() => null);
-    const txtName = path.parse(path.basename(archivePath)).name + '.txt';
+    const archiveName = path.basename(archivePath);
     actions.push({
       type: 'move-file',
       from: archivePath,
-      to: path.join(moveTarget, txtName),
-      label: `input/${path.basename(archivePath)} → uploaded-archives/${txtName}`,
+      to: path.join(moveTarget, archiveName),
+      label: `input/${archiveName} → ${path.basename(moveTarget)}/${archiveName}`,
       size: stat?.size ?? 0,
     });
   }
@@ -312,11 +322,14 @@ for (const action of actions) {
     } else if (action.type === 'move-file') {
       console.log(`   Moving ${action.label}...`);
       await fs.mkdir(path.dirname(action.to), { recursive: true });
-      const archiveName = path.basename(action.from);
-      const sizeInfo = action.size ? ` (${action.size} bytes)` : '';
-      const content = `Archive processed and deleted to save disk space: ${archiveName}${sizeInfo}\nOriginal path: ${action.from}\nProcessed at: ${new Date().toISOString()}\n`;
-      await fs.writeFile(action.to, content, 'utf-8');
-      await fs.unlink(action.from);
+      try {
+        await fs.rename(action.from, action.to);
+      } catch (error) {
+        if (!isCrossDeviceRenameError(error)) throw error;
+        // Cross-device (e.g. external HD): copy then delete
+        await fs.copyFile(action.from, action.to);
+        await fs.unlink(action.from);
+      }
       freedBytes += action.size;
     }
     actionsDone += 1;
