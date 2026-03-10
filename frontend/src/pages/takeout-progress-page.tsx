@@ -160,6 +160,7 @@ export function TakeoutProgressPage() {
               paused={actionStatus?.paused}
               action={actionStatus?.action}
               success={actionStatus?.success}
+              autoUploadPending={actionStatus?.autoUploadPending}
             />
           )}
         </div>
@@ -802,12 +803,23 @@ function StatusBadge({
   paused,
   action,
   success,
+  autoUploadPending,
 }: {
   running: boolean;
   paused?: boolean;
   action?: TakeoutAction;
   success?: boolean;
+  autoUploadPending?: 'scan' | 'upload' | null;
 }): ReactElement {
+  if (autoUploadPending && !running) {
+    const label = autoUploadPending === 'scan' ? 'Scan' : 'Upload';
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 shrink-0">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-400" />
+        Auto: {label} queued
+      </span>
+    );
+  }
   if (running && action) {
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-800 shrink-0">

@@ -194,6 +194,8 @@ export type TakeoutActionStatus = {
   scanProgress?: ScanProgress;
   uploadProgress?: UploadProgressInfo;
   lastOutputAt?: string;
+  /** When auto-upload has scheduled a next action, indicates what it is. */
+  autoUploadPending?: 'scan' | 'upload' | null;
 };
 
 export async function fetchTransfers(): Promise<TransferJob[]> {

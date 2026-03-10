@@ -66,6 +66,8 @@ type ActionStatus = {
   scanProgress?: ScanProgress;
   uploadProgress?: UploadProgressInfo;
   lastOutputAt?: string;
+  /** When auto-upload has scheduled a next action, indicates what it is. */
+  autoUploadPending?: 'scan' | 'upload' | null;
 };
 
 type ActionCommand = {
@@ -137,6 +139,15 @@ const AUTO_UPLOAD_FILE = 'auto-upload.json';
 // Delay before auto-upload triggers the next action (gives the frontend time to
 // see the completed state before the next action kicks off).
 const AUTO_UPLOAD_DELAY_MS = 5_000;
+// How often to poll the input directory for new archives when auto-upload is
+// enabled and the system is idle (no action running, nothing queued).
+const AUTO_UPLOAD_POLL_INTERVAL_MS = 30_000;
+
+// Track pending auto-upload timeouts so we can cancel them and prevent stacking.
+let autoUploadTimeout: NodeJS.Timeout | null = null;
+let autoUploadPollInterval: NodeJS.Timeout | null = null;
+// Tracks whether auto-upload has queued a next action (so the UI can show it).
+let autoUploadPending: 'scan' | 'upload' | null = null;
 
 function customPathsFilePath(env: Env): string {
   // Store next to TRANSFER_STATE_PATH (a fixed location independent of workDir)
@@ -240,6 +251,14 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
   await loadCustomPaths(env);
   await loadAutoUpload(env);
   resolvedEnv = env;
+
+  // If auto-upload was enabled in a previous session, start the poll so
+  // archives dropped while the server was down are picked up automatically.
+  if (autoUploadEnabled) {
+    ensureAutoUploadPoll();
+    // Delayed initial check — give routes time to finish registering
+    scheduleAutoUploadAction('scan', env);
+  }
 
   // ── Override any configurable path ──────────────────────────────────────
 
@@ -411,9 +430,16 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     autoUploadEnabled = body?.enabled === true;
     persistAutoUpload(env);
 
-    // If just enabled and no action is running, check if we should start immediately
-    if (autoUploadEnabled && !RUN_STATUS.running) {
-      scheduleAutoUploadCheck(env);
+    if (autoUploadEnabled) {
+      // Start the recurring poll and do an immediate check
+      ensureAutoUploadPoll();
+      if (!RUN_STATUS.running) {
+        scheduleAutoUploadAction('scan', env);
+      }
+    } else {
+      // Disabled — cancel any pending auto-action and stop polling
+      clearAutoUploadTimeout();
+      stopAutoUploadPoll();
     }
 
     return { enabled: autoUploadEnabled };
@@ -660,18 +686,17 @@ function runAction(action: TakeoutAction): void {
       // Auto-upload: chain next action when enabled
       if (success && autoUploadEnabled && resolvedEnv) {
         if (action === 'scan') {
-          // Scan finished → start upload automatically
-          appendOutput('🔄 Auto-upload enabled — starting upload automatically...');
-          setTimeout(() => {
-            if (!RUN_STATUS.running) {
-              runAction('upload');
-            }
-          }, AUTO_UPLOAD_DELAY_MS);
+          // Scan finished → start upload if there are pending files
+          scheduleAutoUploadAction('upload', resolvedEnv);
         } else if (action === 'cleanup-move' || action === 'cleanup-delete') {
           // Cleanup finished → check for new archives
-          appendOutput('🔄 Auto-upload enabled — checking for new archives...');
-          scheduleAutoUploadCheck(resolvedEnv);
+          scheduleAutoUploadAction('scan', resolvedEnv);
         }
+      }
+      // When auto-upload is on and we just finished any action, ensure the
+      // recurring poll is alive so we keep watching for new archives.
+      if (autoUploadEnabled) {
+        ensureAutoUploadPoll();
       }
     });
   };
@@ -680,31 +705,106 @@ function runAction(action: TakeoutAction): void {
 }
 
 /**
- * Check for actionable state and trigger the next auto-upload step.
- * Runs after a delay so the frontend can see the completed status first.
+ * Schedule the next auto-upload action after a short delay.
+ * Cancels any previously pending auto-upload timeout to prevent stacking.
  */
-function scheduleAutoUploadCheck(env: Env): void {
-  setTimeout(async () => {
+function scheduleAutoUploadAction(nextAction: 'scan' | 'upload', env: Env): void {
+  clearAutoUploadTimeout();
+  autoUploadPending = nextAction;
+
+  if (nextAction === 'upload') {
+    appendOutput('🔄 Auto-upload: starting upload shortly...');
+  } else {
+    appendOutput('🔄 Auto-upload: checking for new archives shortly...');
+  }
+
+  autoUploadTimeout = setTimeout(async () => {
+    autoUploadTimeout = null;
+    autoUploadPending = null;
+
     if (!autoUploadEnabled || RUN_STATUS.running) return;
 
-    const inputDir = customPaths.get('inputDir') ?? path.resolve(env.TAKEOUT_INPUT_DIR);
-    let archivesInInput = 0;
-    try {
-      const entries = await fs.readdir(inputDir, { withFileTypes: true });
-      archivesInInput = entries.filter(
-        (e) => e.isFile() && /\.(zip|tar|tgz|tar\.gz)$/i.test(e.name),
-      ).length;
-    } catch {
-      // input dir may not exist yet
-    }
-
-    if (archivesInInput > 0) {
-      appendOutput(`🔄 Auto-upload: ${archivesInInput} archive(s) found — starting scan...`);
-      runAction('scan');
+    if (nextAction === 'upload') {
+      // Verify there's actually something to upload before firing
+      const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
+      const manifestPath = path.join(workDir, 'manifest.jsonl');
+      const keys = await readManifestKeys(manifestPath);
+      if (keys.size === 0) {
+        appendOutput('🔄 Auto-upload: scan produced no files to upload — skipping.');
+        return;
+      }
+      appendOutput(`🔄 Auto-upload: ${keys.size} manifest entries found — starting upload...`);
+      runAction('upload');
     } else {
-      appendOutput('🔄 Auto-upload: no new archives found. Waiting for new files...');
+      // Check input directory for archives
+      const inputDir = customPaths.get('inputDir') ?? path.resolve(env.TAKEOUT_INPUT_DIR);
+      const count = await countArchivesInInput(inputDir);
+      if (count > 0) {
+        appendOutput(`🔄 Auto-upload: ${count} archive(s) found — starting scan...`);
+        runAction('scan');
+      } else {
+        appendOutput('🔄 Auto-upload: no new archives found. Polling will continue...');
+      }
     }
   }, AUTO_UPLOAD_DELAY_MS);
+}
+
+/** Cancel a pending auto-upload timeout. */
+function clearAutoUploadTimeout(): void {
+  if (autoUploadTimeout) {
+    clearTimeout(autoUploadTimeout);
+    autoUploadTimeout = null;
+  }
+  autoUploadPending = null;
+}
+
+/**
+ * Ensure a recurring poll is running that watches the input directory for new
+ * archives when auto-upload is enabled and the system is idle.
+ * This closes the gap where the one-shot check finds nothing and stops.
+ */
+function ensureAutoUploadPoll(): void {
+  // Already running
+  if (autoUploadPollInterval) return;
+  if (!autoUploadEnabled || !resolvedEnv) return;
+
+  const env = resolvedEnv;
+  autoUploadPollInterval = setInterval(async () => {
+    // Stop polling if auto-upload was disabled
+    if (!autoUploadEnabled) {
+      stopAutoUploadPoll();
+      return;
+    }
+    // Don't interfere if an action is already running or queued
+    if (RUN_STATUS.running || autoUploadTimeout) return;
+
+    const inputDir = customPaths.get('inputDir') ?? path.resolve(env.TAKEOUT_INPUT_DIR);
+    const count = await countArchivesInInput(inputDir);
+    if (count > 0) {
+      appendOutput(`🔄 Auto-upload poll: ${count} new archive(s) detected — starting scan...`);
+      runAction('scan');
+    }
+  }, AUTO_UPLOAD_POLL_INTERVAL_MS);
+}
+
+/** Stop the recurring auto-upload poll. */
+function stopAutoUploadPoll(): void {
+  if (autoUploadPollInterval) {
+    clearInterval(autoUploadPollInterval);
+    autoUploadPollInterval = null;
+  }
+}
+
+/** Count archive files in a directory (returns 0 if dir doesn't exist). */
+async function countArchivesInInput(inputDir: string): Promise<number> {
+  try {
+    const entries = await fs.readdir(inputDir, { withFileTypes: true });
+    return entries.filter(
+      (e) => e.isFile() && /\.(zip|tar|tgz|tar\.gz)$/i.test(e.name),
+    ).length;
+  } catch {
+    return 0;
+  }
 }
 
 function resolveActionCommands(action: TakeoutAction): ActionCommand[] {
@@ -942,6 +1042,7 @@ function snapshotStatus(): ActionStatus {
     scanProgress,
     uploadProgress,
     lastOutputAt: lastOutputAt,
+    autoUploadPending: autoUploadPending,
   };
 }
 
