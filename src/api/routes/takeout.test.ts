@@ -257,7 +257,7 @@ describe('takeout routes', () => {
     await app.close();
   });
 
-  // ─── PUT /takeout/input-dir ───────────────────────────────────────────────
+  // â”€â”€â”€ PUT /takeout/input-dir â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('PUT /takeout/input-dir sets custom input dir and returns it resolved', async () => {
     const app = Fastify();
@@ -305,7 +305,7 @@ describe('takeout routes', () => {
     await app.close();
   });
 
-  // ─── DELETE /takeout/input-dir ────────────────────────────────────────────
+  // â”€â”€â”€ DELETE /takeout/input-dir â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('DELETE /takeout/input-dir resets to env default', async () => {
     const customEnvInput = path.join(tempDir, 'env-input');
@@ -332,7 +332,7 @@ describe('takeout routes', () => {
     await app.close();
   });
 
-  // ─── Custom inputDir affects /takeout/status ──────────────────────────────
+  // â”€â”€â”€ Custom inputDir affects /takeout/status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('custom inputDir is reflected in /takeout/status paths', async () => {
     const customInput = path.join(tempDir, 'custom-input');
@@ -359,7 +359,7 @@ describe('takeout routes', () => {
     await app.close();
   });
 
-  // ─── Custom inputDir is passed to spawned scripts ─────────────────────────
+  // â”€â”€â”€ Custom inputDir is passed to spawned scripts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('spawned action commands include --input-dir when custom dir is set', async () => {
     const child = new EventEmitter() as EventEmitter & {
@@ -407,7 +407,7 @@ describe('takeout routes', () => {
     await app.close();
   });
 
-  // ─── PUT /takeout/work-dir ────────────────────────────────────────────────
+  // â”€â”€â”€ PUT /takeout/work-dir â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('PUT /takeout/work-dir sets custom work dir and returns it resolved', async () => {
     const app = Fastify();
@@ -455,7 +455,7 @@ describe('takeout routes', () => {
     await app.close();
   });
 
-  // ─── DELETE /takeout/work-dir ─────────────────────────────────────────────
+  // â”€â”€â”€ DELETE /takeout/work-dir â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('DELETE /takeout/work-dir resets to env default', async () => {
     const envWorkDir = path.join(tempDir, 'env-work');
@@ -480,7 +480,7 @@ describe('takeout routes', () => {
     await app.close();
   });
 
-  // ─── Custom workDir affects /takeout/status ───────────────────────────────
+  // â”€â”€â”€ Custom workDir affects /takeout/status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('custom workDir is reflected in /takeout/status paths', async () => {
     const customWork = path.join(tempDir, 'custom-work');
@@ -557,7 +557,7 @@ describe('takeout routes', () => {
     await app.close();
   });
 
-  // ─── Custom workDir is passed to spawned scripts ──────────────────────────
+  // â”€â”€â”€ Custom workDir is passed to spawned scripts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('spawned action commands include --work-dir when custom dir is set', async () => {
     const child = new EventEmitter() as EventEmitter & {
@@ -602,7 +602,7 @@ describe('takeout routes', () => {
     await app.close();
   });
 
-  // ─── Custom archiveDir adds --move-archives for upload/resume ─────────────
+  // â”€â”€â”€ Custom archiveDir adds --move-archives for upload/resume â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('spawned upload command includes --move-archives and --archive-dir when archiveDir is set', async () => {
     const child = new EventEmitter() as EventEmitter & {
@@ -694,7 +694,7 @@ describe('takeout routes', () => {
     await app.close();
   });
 
-  // ─── Generic PUT /takeout/paths/:name ─────────────────────────────────────
+  // â”€â”€â”€ Generic PUT /takeout/paths/:name â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('PUT /takeout/paths/:name sets custom path and returns resolved value', async () => {
     const app = Fastify();
@@ -744,7 +744,7 @@ describe('takeout routes', () => {
     await app.close();
   });
 
-  // ─── Generic DELETE /takeout/paths/:name ──────────────────────────────────
+  // â”€â”€â”€ Generic DELETE /takeout/paths/:name â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('DELETE /takeout/paths/:name resets to env default', async () => {
     const envInput = path.join(tempDir, 'env-default');
@@ -785,7 +785,7 @@ describe('takeout routes', () => {
     await app.close();
   });
 
-  // ─── Generic endpoint state is shared with legacy endpoints ───────────────
+  // â”€â”€â”€ Generic endpoint state is shared with legacy endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('generic and legacy endpoints share the same state', async () => {
     const customInput = path.join(tempDir, 'shared-input');
@@ -816,4 +816,275 @@ describe('takeout routes', () => {
 
     await app.close();
   });
+
+  // ─── Auto-upload ────────────────────────────────────────────────────────
+
+  describe('auto-upload', () => {
+    const tick = () => new Promise((r) => setTimeout(r, 50));
+    let autoApp: ReturnType<typeof Fastify>;
+
+    afterEach(async () => {
+      // Always disable auto-upload to clear timers, even if an assertion threw
+      try {
+        await autoApp.inject({
+          method: 'PUT',
+          url: '/takeout/auto-upload',
+          payload: { enabled: false },
+        });
+      } catch { /* app may already be closed */ }
+      try { await autoApp.close(); } catch { /* ignore */ }
+    });
+
+    /** Creates a mock child process. Each spawn invocation returns a fresh child. */
+    function setupSpawnMock(exitCode = 0) {
+      spawnMock.mockImplementation(() => {
+        const c = new EventEmitter() as EventEmitter & {
+          stdout: EventEmitter;
+          stderr: EventEmitter;
+          kill: ReturnType<typeof vi.fn>;
+        };
+        c.stdout = new EventEmitter();
+        c.stderr = new EventEmitter();
+        c.kill = vi.fn();
+        queueMicrotask(() => {
+          c.stdout.emit('data', 'output\n');
+          c.emit('close', exitCode);
+        });
+        return c;
+      });
+    }
+
+    it('GET /takeout/auto-upload defaults to disabled', async () => {
+      autoApp = Fastify();
+      await registerTakeoutRoutes(autoApp, baseEnv());
+
+      const res = await autoApp.inject({ method: 'GET', url: '/takeout/auto-upload' });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ enabled: false });
+    });
+
+    it('PUT /takeout/auto-upload enables and persists to disk', async () => {
+      autoApp = Fastify();
+      await registerTakeoutRoutes(autoApp, baseEnv());
+
+      const res = await autoApp.inject({
+        method: 'PUT',
+        url: '/takeout/auto-upload',
+        payload: { enabled: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ enabled: true });
+
+      // wait for async persist
+      await tick();
+
+      const filePath = path.join(tempDir, 'auto-upload.json');
+      const raw = await fs.readFile(filePath, 'utf8');
+      expect(JSON.parse(raw)).toEqual({ enabled: true });
+    });
+
+    it('PUT /takeout/auto-upload disables and persists to disk', async () => {
+      autoApp = Fastify();
+      await registerTakeoutRoutes(autoApp, baseEnv());
+
+      // Enable first
+      await autoApp.inject({
+        method: 'PUT',
+        url: '/takeout/auto-upload',
+        payload: { enabled: true },
+      });
+      await tick();
+
+      // Now disable
+      const res = await autoApp.inject({
+        method: 'PUT',
+        url: '/takeout/auto-upload',
+        payload: { enabled: false },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ enabled: false });
+      await tick();
+
+      const filePath = path.join(tempDir, 'auto-upload.json');
+      const raw = await fs.readFile(filePath, 'utf8');
+      expect(JSON.parse(raw)).toEqual({ enabled: false });
+    });
+
+    it('GET /takeout/status includes autoUpload field', async () => {
+      const inputDir = path.join(tempDir, 'input');
+      const workDir = path.join(tempDir, 'work');
+      await fs.mkdir(inputDir, { recursive: true });
+      await fs.mkdir(workDir, { recursive: true });
+
+      autoApp = Fastify();
+      await registerTakeoutRoutes(autoApp, baseEnv({
+        TAKEOUT_INPUT_DIR: inputDir,
+        TAKEOUT_WORK_DIR: workDir,
+      }));
+
+      // Default: disabled
+      const res1 = await autoApp.inject({ method: 'GET', url: '/takeout/status' });
+      expect(res1.json().autoUpload).toBe(false);
+
+      // Enable
+      await autoApp.inject({
+        method: 'PUT',
+        url: '/takeout/auto-upload',
+        payload: { enabled: true },
+      });
+
+      const res2 = await autoApp.inject({ method: 'GET', url: '/takeout/status' });
+      expect(res2.json().autoUpload).toBe(true);
+    });
+
+    it('scan completion sets autoUploadPending to upload', async () => {
+      setupSpawnMock(0);
+
+      autoApp = Fastify();
+      await registerTakeoutRoutes(autoApp, baseEnv());
+
+      await autoApp.inject({
+        method: 'PUT',
+        url: '/takeout/auto-upload',
+        payload: { enabled: true },
+      });
+
+      const scanRes = await autoApp.inject({
+        method: 'POST',
+        url: '/takeout/actions/scan',
+      });
+      expect(scanRes.statusCode).toBe(202);
+
+      await tick();
+
+      const statusRes = await autoApp.inject({ method: 'GET', url: '/takeout/action-status' });
+      expect(statusRes.json().autoUploadPending).toBe('upload');
+    });
+
+    it('cleanup-move completion sets autoUploadPending to scan', async () => {
+      setupSpawnMock(0);
+
+      autoApp = Fastify();
+      await registerTakeoutRoutes(autoApp, baseEnv());
+
+      await autoApp.inject({
+        method: 'PUT',
+        url: '/takeout/auto-upload',
+        payload: { enabled: true },
+      });
+
+      const res = await autoApp.inject({
+        method: 'POST',
+        url: '/takeout/actions/cleanup-move',
+      });
+      expect(res.statusCode).toBe(202);
+
+      await tick();
+
+      const statusRes = await autoApp.inject({ method: 'GET', url: '/takeout/action-status' });
+      expect(statusRes.json().autoUploadPending).toBe('scan');
+    });
+
+    it('disabling auto-upload clears pending state', async () => {
+      setupSpawnMock(0);
+
+      autoApp = Fastify();
+      await registerTakeoutRoutes(autoApp, baseEnv());
+
+      await autoApp.inject({
+        method: 'PUT',
+        url: '/takeout/auto-upload',
+        payload: { enabled: true },
+      });
+
+      await autoApp.inject({ method: 'POST', url: '/takeout/actions/scan' });
+      await tick();
+
+      const before = await autoApp.inject({ method: 'GET', url: '/takeout/action-status' });
+      expect(before.json().autoUploadPending).toBe('upload');
+
+      // Disable → should clear pending
+      await autoApp.inject({
+        method: 'PUT',
+        url: '/takeout/auto-upload',
+        payload: { enabled: false },
+      });
+
+      const after = await autoApp.inject({ method: 'GET', url: '/takeout/action-status' });
+      expect(after.json().autoUploadPending).toBeNull();
+    });
+
+    it('failed action does not chain to next step', async () => {
+      setupSpawnMock(1); // exit code 1 — failure
+
+      autoApp = Fastify();
+      await registerTakeoutRoutes(autoApp, baseEnv());
+
+      await autoApp.inject({
+        method: 'PUT',
+        url: '/takeout/auto-upload',
+        payload: { enabled: true },
+      });
+
+      await autoApp.inject({ method: 'POST', url: '/takeout/actions/scan' });
+      await tick();
+
+      const statusRes = await autoApp.inject({ method: 'GET', url: '/takeout/action-status' });
+      // Failed scan should NOT chain to upload — pending stays 'scan'
+      // (from the initial enable schedule), not 'upload'
+      expect(statusRes.json().autoUploadPending).not.toBe('upload');
+    });
+
+    it('action does not chain when auto-upload is disabled', async () => {
+      setupSpawnMock(0);
+
+      autoApp = Fastify();
+      await registerTakeoutRoutes(autoApp, baseEnv());
+
+      // Do NOT enable auto-upload — leave it disabled
+
+      await autoApp.inject({ method: 'POST', url: '/takeout/actions/scan' });
+      await tick();
+
+      const statusRes = await autoApp.inject({ method: 'GET', url: '/takeout/action-status' });
+      expect(statusRes.json().autoUploadPending).toBeNull();
+    });
+
+    it('persisted auto-upload setting is restored on restart', async () => {
+      // Write the persisted file directly so loadAutoUpload picks it up
+      const filePath = path.join(tempDir, 'auto-upload.json');
+      await fs.writeFile(filePath, JSON.stringify({ enabled: true }), 'utf8');
+
+      autoApp = Fastify();
+      await registerTakeoutRoutes(autoApp, baseEnv());
+
+      const res = await autoApp.inject({ method: 'GET', url: '/takeout/auto-upload' });
+      expect(res.json()).toEqual({ enabled: true });
+    });
+
+    it('cleanup-delete completion also sets autoUploadPending to scan', async () => {
+      setupSpawnMock(0);
+
+      autoApp = Fastify();
+      await registerTakeoutRoutes(autoApp, baseEnv());
+
+      await autoApp.inject({
+        method: 'PUT',
+        url: '/takeout/auto-upload',
+        payload: { enabled: true },
+      });
+
+      const res = await autoApp.inject({
+        method: 'POST',
+        url: '/takeout/actions/cleanup-delete',
+      });
+      expect(res.statusCode).toBe(202);
+
+      await tick();
+
+      const statusRes = await autoApp.inject({ method: 'GET', url: '/takeout/action-status' });
+      expect(statusRes.json().autoUploadPending).toBe('scan');
+    });
+  });
 });
+
