@@ -1,4 +1,4 @@
-﻿import path from 'node:path';
+import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { CloudProvider } from '../providers/types.js';
 import type { TakeoutConfig } from './config.js';
@@ -28,7 +28,7 @@ import {
 import { extractAndPersistArchiveMetadata } from './archive-metadata.js';
 import { DEFAULT_MANIFEST_FILE } from './runner.js';
 
-// ÔöÇÔöÇÔöÇ Archive-level state tracking ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+// ─── Archive-level state tracking ──────────────────────────────────────────
 
 export type ArchiveStatus = 'pending' | 'extracting' | 'uploading' | 'completed' | 'failed';
 
@@ -83,11 +83,33 @@ export async function persistArchiveState(
   const dir = path.dirname(statePath);
   await fs.mkdir(dir, { recursive: true });
   const tmpPath = `${statePath}.tmp`;
-  await fs.writeFile(tmpPath, JSON.stringify(state, null, 2), 'utf8');
-  await fs.rename(tmpPath, statePath);
+  const serialized = JSON.stringify(state, null, 2);
+
+  try {
+    await fs.writeFile(tmpPath, serialized, 'utf8');
+    await fs.rename(tmpPath, statePath);
+    return;
+  } catch (error) {
+    try {
+      await fs.rm(tmpPath, { force: true });
+    } catch {
+      // best-effort cleanup
+    }
+
+    if (!isNoSpaceLeftError(error)) {
+      throw error;
+    }
+
+    console.warn('[incremental] Low disk space while writing archive state tmp file; retrying in-place', {
+      statePath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  await fs.writeFile(statePath, serialized, 'utf8');
 }
 
-// ÔöÇÔöÇÔöÇ Incremental processing ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+// ─── Incremental processing ────────────────────────────────────────────────
 
 export type IncrementalOptions = {
   dryRun?: boolean;
@@ -314,7 +336,7 @@ export async function runTakeoutIncremental(
       // Clean up even on failure
       await cleanupDir(extractDir).catch(() => {});
 
-      // Continue to next archive ÔÇö don't let one failure block everything
+      // Continue to next archive — don't let one failure block everything
     }
   }
 
@@ -344,7 +366,7 @@ export async function runTakeoutIncremental(
   return result;
 }
 
-// ÔöÇÔöÇÔöÇ Internal helpers ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+// ─── Internal helpers ──────────────────────────────────────────────────────
 
 async function processArchiveEntries(
   entries: ManifestEntry[],
@@ -452,7 +474,7 @@ async function getUniqueDestinationPath(directory: string, fileName: string): Pr
     existingNames = new Set(dirEntries);
   } catch (err) {
     console.debug('[incremental] Destination directory not readable, using base file name', { directory, err });
-    // Directory doesn't exist yet ÔÇö no collisions possible
+    // Directory doesn't exist yet — no collisions possible
     return path.join(directory, fileName);
   }
 
@@ -488,6 +510,15 @@ function isFileNotFoundError(error: unknown): boolean {
   );
 }
 
+function isNoSpaceLeftError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && (error as { code?: string }).code === 'ENOSPC',
+  );
+}
+
 async function getFileSizeBestEffort(filePath: string): Promise<number | undefined> {
   try {
     const stats = await fs.stat(filePath);
@@ -497,14 +528,14 @@ async function getFileSizeBestEffort(filePath: string): Promise<number | undefin
   }
 }
 
-// ÔöÇÔöÇÔöÇ Reconciliation ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+// ─── Reconciliation ────────────────────────────────────────────────────────
 
 /**
  * Marks stale pending/extracting/uploading archives as completed when the
  * overall upload is done (all manifest items uploaded, none failed).
  *
  * This handles the case where archives were processed through the
- * non-incremental scanÔåÆupload flow: the scan step creates archive-state
+ * non-incremental scan→upload flow: the scan step creates archive-state
  * entries as 'pending', but the bulk upload step doesn't update them.
  *
  * Returns the number of archives reconciled (0 if nothing changed).
@@ -513,19 +544,8 @@ export async function reconcileStaleArchives(
   archiveStatePath: string,
 ): Promise<number> {
   const state = await loadArchiveState(archiveStatePath);
-  const staleStatuses: ArchiveStatus[] = ['pending', 'extracting', 'uploading'];
-  let reconciled = 0;
-
-  for (const [name, item] of Object.entries(state.archives)) {
-    if (staleStatuses.includes(item.status)) {
-      state.archives[name] = {
-        ...item,
-        status: 'completed',
-        completedAt: item.completedAt ?? new Date().toISOString(),
-      };
-      reconciled += 1;
-    }
-  }
+  const { archives, reconciled } = reconcileArchiveEntries(state.archives);
+  state.archives = archives;
 
   if (reconciled > 0) {
     await persistArchiveState(archiveStatePath, state);
@@ -533,7 +553,30 @@ export async function reconcileStaleArchives(
   return reconciled;
 }
 
-// ÔöÇÔöÇÔöÇ Summary / progress helpers ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+export function reconcileArchiveEntries(
+  archives: Record<string, ArchiveStateItem>,
+): { archives: Record<string, ArchiveStateItem>; reconciled: number } {
+  const staleStatuses: ArchiveStatus[] = ['pending', 'extracting', 'uploading'];
+  let reconciled = 0;
+  const nextArchives: Record<string, ArchiveStateItem> = {};
+
+  for (const [name, item] of Object.entries(archives)) {
+    if (staleStatuses.includes(item.status)) {
+      nextArchives[name] = {
+        ...item,
+        status: 'completed',
+        completedAt: item.completedAt ?? new Date().toISOString(),
+      };
+      reconciled += 1;
+    } else {
+      nextArchives[name] = item;
+    }
+  }
+
+  return { archives: nextArchives, reconciled };
+}
+
+// ─── Summary / progress helpers ────────────────────────────────────────────
 
 export function formatIncrementalProgress(
   archiveState: ArchiveState,
