@@ -189,6 +189,7 @@ async function loadAutoUpload(env: Env): Promise<void> {
     autoUploadEnabled = parsed.enabled === true;
   } catch {
     // File missing or malformed — default off
+    autoUploadEnabled = false;
   }
 }
 
