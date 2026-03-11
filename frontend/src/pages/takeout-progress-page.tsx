@@ -465,21 +465,34 @@ export function TakeoutProgressPage() {
               )}
             </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" disabled={busy} onClick={() => run('upload')}>
-              Start upload
-            </Button>
-            {hasFailed && (
-              <Button
-                className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-                type="button"
-                disabled={busy}
-                onClick={() => run('resume')}
-              >
-                Resume (skip failed)
+          {archivesInInput === 0 ? (
+            <Alert variant="error" className="text-sm space-y-1">
+              <p className="font-medium">No archives in input folder</p>
+              <p className="text-xs text-slate-600">
+                {data.counts.pending.toLocaleString()} files are still pending but all archive
+                files have been moved out of the input directory. Move <code className="rounded bg-slate-100 px-1">.tgz</code> /{' '}
+                <code className="rounded bg-slate-100 px-1">.zip</code> files back into the input
+                folder and re-scan before uploading.
+              </p>
+              <p className="text-xs font-mono text-slate-400 pt-1 break-all">{data.paths.inputDir}</p>
+            </Alert>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" disabled={busy} onClick={() => run('upload')}>
+                Start upload
               </Button>
-            )}
-          </div>
+              {hasFailed && (
+                <Button
+                  className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => run('resume')}
+                >
+                  Resume (skip failed)
+                </Button>
+              )}
+            </div>
+          )}
         </Card>
       )}
 

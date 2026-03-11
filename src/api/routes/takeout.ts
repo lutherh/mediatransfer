@@ -595,6 +595,22 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       });
     }
 
+    // Guard: prevent upload/resume when there are no archives to process.
+    // Without archives the script exits instantly (0 pending), which looks
+    // like an infinite start-then-idle loop to the user.
+    if (action === 'upload' || action === 'resume') {
+      const inputDir = customPaths.get('inputDir') ?? path.resolve(env.TAKEOUT_INPUT_DIR);
+      const archiveCount = await countArchivesInInput(inputDir);
+      if (archiveCount === 0) {
+        return reply.code(409).send(
+          apiError(
+            'NO_ARCHIVES',
+            'No archive files found in the input directory. Move .tgz/.zip archives into the input folder and re-scan before uploading.',
+          ),
+        );
+      }
+    }
+
     runAction(action);
 
     return reply.code(202).send({
