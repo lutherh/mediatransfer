@@ -1,5 +1,6 @@
 ﻿import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Alert } from '@/components/ui/alert';
@@ -614,7 +615,12 @@ export function TakeoutProgressPage() {
         <Card className="space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <p className="text-sm font-semibold text-slate-900">Archive Upload History</p>
-            <p className="text-xs text-slate-500">{archiveHistory.length.toLocaleString()} archive records</p>
+            <div className="flex items-center gap-3">
+              <Link to="/takeout/sequences" className="text-xs text-blue-600 hover:text-blue-800 underline">
+                Sequence Analysis
+              </Link>
+              <p className="text-xs text-slate-500">{archiveHistory.length.toLocaleString()} archive records</p>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-full text-xs">
