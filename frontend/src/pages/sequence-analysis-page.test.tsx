@@ -28,7 +28,7 @@ const COMPLETE_ANALYSIS = {
   groups: [
     {
       prefix: 'takeout-20260308T081854Z',
-      declaredTotal: 3,
+      exportNumber: 3,
       extension: '.tgz',
       present: [1, 2, 3],
       missing: [],
@@ -56,7 +56,7 @@ const INCOMPLETE_ANALYSIS = {
   groups: [
     {
       prefix: 'takeout-20260308T081854Z',
-      declaredTotal: 4,
+      exportNumber: 4,
       extension: '.tgz',
       present: [1, 3, 4],
       missing: [2],
@@ -72,7 +72,7 @@ const INCOMPLETE_ANALYSIS = {
     },
     {
       prefix: 'takeout-20260310T120000Z',
-      declaredTotal: 2,
+      exportNumber: 2,
       extension: '.tgz',
       present: [1, 2],
       missing: [],
@@ -222,12 +222,12 @@ describe('SequenceAnalysisPage', () => {
     expect(squares.length).toBeGreaterThanOrEqual(3);
   });
 
-  it('displays group metadata (extension, declared total, found count)', async () => {
+  it('displays group metadata (extension, export number, found count)', async () => {
     mockFetchSequenceAnalysis.mockResolvedValue(INCOMPLETE_ANALYSIS);
     renderPage();
-    // The incomplete group displays ".tgz · Declared: 4 parts · Found: 3/4"
+    // The incomplete group displays ".tgz · Export #4 · Found: 3/4"
     await waitFor(() => {
-      expect(screen.getByText(/Declared: 4 parts/)).toBeInTheDocument();
+      expect(screen.getByText(/Export #4/)).toBeInTheDocument();
     });
     expect(screen.getByText(/Found: 3\/4/)).toBeInTheDocument();
   });

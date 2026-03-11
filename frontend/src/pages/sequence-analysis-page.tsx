@@ -7,8 +7,8 @@ import { fetchSequenceAnalysis, type SequenceGroup, type SequenceAnalysis, type 
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function formatArchiveName(prefix: string, declaredTotal: number, seq: number, ext: string): string {
-  return `${prefix}-${declaredTotal}-${String(seq).padStart(3, '0')}${ext}`;
+function formatArchiveName(prefix: string, exportNumber: number, seq: number, ext: string): string {
+  return `${prefix}-${exportNumber}-${String(seq).padStart(3, '0')}${ext}`;
 }
 
 function formatBytes(bytes: number): string {
@@ -79,15 +79,14 @@ function SummaryCards({ analysis }: { analysis: SequenceAnalysis }) {
 // ── Sequence number visualisation ──────────────────────────────────────────
 
 function SequenceGrid({ group, archiveDetails }: { group: SequenceGroup; archiveDetails: Record<string, ArchiveDetail> }) {
-  const expectedMax = Math.max(group.declaredTotal, group.maxSeen);
   const presentSet = new Set(group.present);
 
   return (
     <div className="flex flex-wrap gap-1.5">
-      {Array.from({ length: expectedMax }, (_, i) => {
+      {Array.from({ length: group.maxSeen }, (_, i) => {
         const seq = i + 1;
         const isPresent = presentSet.has(seq);
-        const archiveName = formatArchiveName(group.prefix, group.declaredTotal, seq, group.extension);
+        const archiveName = formatArchiveName(group.prefix, group.exportNumber, seq, group.extension);
         const detail = archiveDetails[archiveName];
         const status = detail?.status;
 
@@ -135,8 +134,6 @@ function SequenceGrid({ group, archiveDetails }: { group: SequenceGroup; archive
 // ── Group card ─────────────────────────────────────────────────────────────
 
 function GroupCard({ group, archiveDetails }: { group: SequenceGroup; archiveDetails: Record<string, ArchiveDetail> }) {
-  const expectedMax = Math.max(group.declaredTotal, group.maxSeen);
-
   return (
     <Card className="space-y-3">
       {/* Header row */}
@@ -146,7 +143,7 @@ function GroupCard({ group, archiveDetails }: { group: SequenceGroup; archiveDet
             {group.prefix}
           </h3>
           <p className="text-xs text-slate-500 mt-0.5">
-            {group.extension} &middot; Declared: {group.declaredTotal} parts &middot; Found: {group.present.length}/{expectedMax}
+            {group.extension} &middot; Export #{group.exportNumber} &middot; Found: {group.present.length}/{group.maxSeen}
           </p>
         </div>
         <div>
@@ -193,7 +190,7 @@ function GroupCard({ group, archiveDetails }: { group: SequenceGroup; archiveDet
           <div className="flex flex-wrap gap-1">
             {group.missing.map((seq) => (
               <code key={seq} className="rounded bg-red-100 px-1.5 py-0.5 text-xs text-red-700">
-                {formatArchiveName(group.prefix, group.declaredTotal, seq, group.extension)}
+                {formatArchiveName(group.prefix, group.exportNumber, seq, group.extension)}
               </code>
             ))}
           </div>
@@ -263,7 +260,7 @@ export function SequenceAnalysisPage(): ReactElement {
       </div>
       <p className="text-sm text-slate-600">
         Checks whether any parts are missing from your Google Takeout archive sets.
-        Each set shares a timestamp prefix and an expected part count.
+        Each set shares a timestamp prefix and export number.
       </p>
 
       {isLoading && (
@@ -298,7 +295,7 @@ export function SequenceAnalysisPage(): ReactElement {
                 .filter((g) => !g.isComplete)
                 .map((g) => (
                   <GroupCard
-                    key={`${g.prefix}-${g.declaredTotal}`}
+                    key={`${g.prefix}-${g.exportNumber}`}
                     group={g}
                     archiveDetails={data.archiveDetails}
                   />
@@ -314,7 +311,7 @@ export function SequenceAnalysisPage(): ReactElement {
                 .filter((g) => g.isComplete)
                 .map((g) => (
                   <GroupCard
-                    key={`${g.prefix}-${g.declaredTotal}`}
+                    key={`${g.prefix}-${g.exportNumber}`}
                     group={g}
                     archiveDetails={data.archiveDetails}
                   />

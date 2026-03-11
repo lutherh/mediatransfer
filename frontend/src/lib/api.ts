@@ -214,7 +214,7 @@ export type ArchiveDetail = {
 
 export type SequenceGroup = {
   prefix: string;
-  declaredTotal: number;
+  exportNumber: number;
   extension: string;
   present: number[];
   missing: number[];

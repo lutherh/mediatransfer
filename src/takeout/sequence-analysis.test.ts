@@ -1,5 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { analyseArchiveSequences, type SequenceAnalysis } from './sequence-analysis.js';
+import { analyseArchiveSequences, normaliseArchiveName, type SequenceAnalysis } from './sequence-analysis.js';
+
+describe('normaliseArchiveName', () => {
+  it('strips browser duplicate suffix', () => {
+    expect(normaliseArchiveName('takeout-20260308T081854Z-3-109 (1).tgz'))
+      .toBe('takeout-20260308T081854Z-3-109.tgz');
+  });
+
+  it('strips higher duplicate numbers', () => {
+    expect(normaliseArchiveName('takeout-20260308T081854Z-3-042 (12).tgz'))
+      .toBe('takeout-20260308T081854Z-3-042.tgz');
+  });
+
+  it('leaves names without suffix unchanged', () => {
+    expect(normaliseArchiveName('takeout-20260308T081854Z-3-001.tgz'))
+      .toBe('takeout-20260308T081854Z-3-001.tgz');
+  });
+});
 
 describe('analyseArchiveSequences', () => {
   it('detects a complete sequence', () => {
@@ -14,7 +31,7 @@ describe('analyseArchiveSequences', () => {
     expect(result.groups[0].isComplete).toBe(true);
     expect(result.groups[0].missing).toEqual([]);
     expect(result.groups[0].present).toEqual([1, 2, 3]);
-    expect(result.groups[0].declaredTotal).toBe(3);
+    expect(result.groups[0].exportNumber).toBe(3);
   });
 
   it('detects missing parts in a sequence', () => {
@@ -28,7 +45,7 @@ describe('analyseArchiveSequences', () => {
     expect(result.groups[0].isComplete).toBe(false);
     expect(result.groups[0].missing).toEqual([2]);
     expect(result.groups[0].present).toEqual([1, 3, 4]);
-    expect(result.groups[0].declaredTotal).toBe(4);
+    expect(result.groups[0].exportNumber).toBe(4);
   });
 
   it('handles multiple groups independently', () => {
@@ -37,7 +54,7 @@ describe('analyseArchiveSequences', () => {
       'takeout-20260308T081854Z-3-002.tgz',
       'takeout-20260308T081854Z-3-003.tgz',
       'takeout-20260310T120000Z-2-001.tgz',
-      // #002 missing from second group
+      'takeout-20260310T120000Z-2-002.tgz',
     ];
     const result = analyseArchiveSequences(names);
     expect(result.groups).toHaveLength(2);
@@ -47,8 +64,8 @@ describe('analyseArchiveSequences', () => {
     expect(first.missing).toEqual([]);
 
     const second = result.groups.find((g) => g.prefix === 'takeout-20260310T120000Z')!;
-    expect(second.isComplete).toBe(false);
-    expect(second.missing).toEqual([2]);
+    expect(second.isComplete).toBe(true);
+    expect(second.missing).toEqual([]);
   });
 
   it('reports unrecognised archive names', () => {
@@ -69,16 +86,19 @@ describe('analyseArchiveSequences', () => {
     expect(result.unrecognised).toEqual([]);
   });
 
-  it('handles sequence numbers exceeding declared total', () => {
+  it('handles parts with high sequence numbers (export number is not the total)', () => {
     const names = [
-      'takeout-20260308T081854Z-2-001.tgz',
-      'takeout-20260308T081854Z-2-002.tgz',
-      'takeout-20260308T081854Z-2-003.tgz', // exceeds declared total of 2
+      'takeout-20260308T081854Z-3-001.tgz',
+      'takeout-20260308T081854Z-3-002.tgz',
+      'takeout-20260308T081854Z-3-003.tgz',
+      'takeout-20260308T081854Z-3-004.tgz',
+      'takeout-20260308T081854Z-3-005.tgz',
     ];
     const result = analyseArchiveSequences(names);
-    expect(result.groups[0].declaredTotal).toBe(2);
-    expect(result.groups[0].maxSeen).toBe(3);
-    expect(result.groups[0].isComplete).toBe(false); // declared total ≠ count
+    expect(result.groups[0].exportNumber).toBe(3);
+    expect(result.groups[0].maxSeen).toBe(5);
+    expect(result.groups[0].isComplete).toBe(true); // 1-5 all present
+    expect(result.groups[0].missing).toEqual([]);
   });
 
   it('handles .txt extension (uploaded-archives naming)', () => {
@@ -104,7 +124,7 @@ describe('analyseArchiveSequences', () => {
     expect(result.groups[0].isComplete).toBe(false);
   });
 
-  it('treats same prefix with different declared totals as separate groups', () => {
+  it('treats same prefix with different export numbers as separate groups', () => {
     const names = [
       'takeout-20260308T081854Z-3-001.tgz',
       'takeout-20260308T081854Z-3-002.tgz',
@@ -115,12 +135,11 @@ describe('analyseArchiveSequences', () => {
     const result = analyseArchiveSequences(names);
     expect(result.groups).toHaveLength(2);
 
-    const threePartGroup = result.groups.find((g) => g.declaredTotal === 3)!;
-    expect(threePartGroup.isComplete).toBe(true);
+    const threeGroup = result.groups.find((g) => g.exportNumber === 3)!;
+    expect(threeGroup.isComplete).toBe(true);
 
-    const fivePartGroup = result.groups.find((g) => g.declaredTotal === 5)!;
-    expect(fivePartGroup.isComplete).toBe(false);
-    expect(fivePartGroup.missing).toEqual([3, 4, 5]);
+    const fiveGroup = result.groups.find((g) => g.exportNumber === 5)!;
+    expect(fiveGroup.isComplete).toBe(true);
   });
 
   it('treats same prefix with different extensions as separate groups', () => {
@@ -128,6 +147,7 @@ describe('analyseArchiveSequences', () => {
       'takeout-20260308T081854Z-2-001.tgz',
       'takeout-20260308T081854Z-2-002.tgz',
       'takeout-20260308T081854Z-2-001.zip',
+      'takeout-20260308T081854Z-2-003.zip',
       // .zip group is missing #2
     ];
     const result = analyseArchiveSequences(names);
@@ -154,7 +174,7 @@ describe('analyseArchiveSequences', () => {
     expect(result.groups[0].isComplete).toBe(true);
   });
 
-  it('sorts groups by prefix then by declared total', () => {
+  it('sorts groups by prefix then by export number', () => {
     const names = [
       'takeout-20260310T120000Z-2-001.tgz',
       'takeout-20260308T081854Z-5-001.tgz',
@@ -163,18 +183,18 @@ describe('analyseArchiveSequences', () => {
     const result = analyseArchiveSequences(names);
     expect(result.groups).toHaveLength(3);
     expect(result.groups[0].prefix).toBe('takeout-20260308T081854Z');
-    expect(result.groups[0].declaredTotal).toBe(3);
+    expect(result.groups[0].exportNumber).toBe(3);
     expect(result.groups[1].prefix).toBe('takeout-20260308T081854Z');
-    expect(result.groups[1].declaredTotal).toBe(5);
+    expect(result.groups[1].exportNumber).toBe(5);
     expect(result.groups[2].prefix).toBe('takeout-20260310T120000Z');
   });
 
-  it('handles single-part archive (declared total = 1)', () => {
+  it('handles single-part archive', () => {
     const names = ['takeout-20260308T081854Z-1-001.tgz'];
     const result = analyseArchiveSequences(names);
     expect(result.groups).toHaveLength(1);
     expect(result.groups[0].isComplete).toBe(true);
-    expect(result.groups[0].declaredTotal).toBe(1);
+    expect(result.groups[0].exportNumber).toBe(1);
     expect(result.groups[0].present).toEqual([1]);
     expect(result.groups[0].missing).toEqual([]);
   });
@@ -190,8 +210,7 @@ describe('analyseArchiveSequences', () => {
     expect(result.groups[0].isComplete).toBe(true);
   });
 
-  it('returns maxSeen = 0 for empty group (should not occur in practice)', () => {
-    // Edge case: no valid archives, only unrecognised
+  it('returns no groups for only unrecognised archives', () => {
     const result = analyseArchiveSequences(['not-a-takeout.zip']);
     expect(result.groups).toHaveLength(0);
     expect(result.unrecognised).toEqual(['not-a-takeout.zip']);
@@ -201,18 +220,18 @@ describe('analyseArchiveSequences', () => {
     const names = [
       'takeout-20260308T081854Z-3-001.tgz',
       'takeout-20260308T081854Z-3-002.tgz',
-      // #003 missing
+      // #003 missing — but maxSeen is 2, so this is actually complete through 2
     ];
     const result = analyseArchiveSequences(names);
-    expect(result.groups[0].isComplete).toBe(false);
-    expect(result.groups[0].missing).toEqual([3]);
+    expect(result.groups[0].isComplete).toBe(true); // 1 and 2 present, maxSeen=2
+    expect(result.groups[0].missing).toEqual([]);
     expect(result.groups[0].maxSeen).toBe(2);
   });
 
   it('large sequence with scattered gaps', () => {
-    // Simulate 20-part archive with parts 1, 5, 10, 15, 20 present
+    // Simulate parts 1, 5, 10, 15, 20 present out of a sequence up to 20
     const names = [1, 5, 10, 15, 20].map(
-      (n) => `takeout-20260308T081854Z-20-${String(n).padStart(3, '0')}.tgz`,
+      (n) => `takeout-20260308T081854Z-3-${String(n).padStart(3, '0')}.tgz`,
     );
     const result = analyseArchiveSequences(names);
     expect(result.groups[0].present).toEqual([1, 5, 10, 15, 20]);
@@ -220,6 +239,31 @@ describe('analyseArchiveSequences', () => {
     expect(result.groups[0].missing).toContain(2);
     expect(result.groups[0].missing).toContain(19);
     expect(result.groups[0].isComplete).toBe(false);
-    expect(result.groups[0].declaredTotal).toBe(20);
+    expect(result.groups[0].exportNumber).toBe(3);
+  });
+
+  it('handles browser duplicate suffix " (1)" in filenames', () => {
+    const names = [
+      'takeout-20260308T081854Z-3-001.tgz',
+      'takeout-20260308T081854Z-3-002 (1).tgz', // browser re-download
+      'takeout-20260308T081854Z-3-003.tgz',
+    ];
+    const result = analyseArchiveSequences(names);
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0].present).toEqual([1, 2, 3]);
+    expect(result.groups[0].isComplete).toBe(true);
+    expect(result.unrecognised).toEqual([]);
+  });
+
+  it('deduplicates original and " (1)" variant of same part', () => {
+    const names = [
+      'takeout-20260308T081854Z-3-001.tgz',
+      'takeout-20260308T081854Z-3-001 (1).tgz', // duplicate of part 1
+      'takeout-20260308T081854Z-3-002.tgz',
+    ];
+    const result = analyseArchiveSequences(names);
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0].present).toEqual([1, 2]);
+    expect(result.groups[0].isComplete).toBe(true);
   });
 });
