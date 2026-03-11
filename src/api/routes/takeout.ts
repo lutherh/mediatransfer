@@ -20,7 +20,7 @@ import {
   reconcileStaleArchives,
   type ArchiveStateItem,
 } from '../../takeout/incremental.js';
-import { analyseArchiveSequences } from '../../takeout/sequence-analysis.js';
+import { analyseArchiveSequences, normaliseArchiveName } from '../../takeout/sequence-analysis.js';
 import { apiError } from '../errors.js';
 import { createJob, updateJob } from '../../db/jobs.js';
 
@@ -473,7 +473,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       error?: string;
     }> = {};
     for (const [name, item] of Object.entries(archiveState)) {
-      archiveDetails[name] = {
+      const detail = {
         status: item.status,
         entryCount: item.entryCount,
         uploadedCount: item.uploadedCount,
@@ -484,6 +484,12 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
         completedAt: item.completedAt,
         error: item.error,
       };
+      archiveDetails[name] = detail;
+      // Also index by normalised name so lookups work for " (1)" duplicates
+      const normalised = normaliseArchiveName(name);
+      if (normalised !== name && !archiveDetails[normalised]) {
+        archiveDetails[normalised] = detail;
+      }
     }
 
     // Compute group-level aggregates
@@ -496,9 +502,8 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       let totalFailed = 0;
       const errors: string[] = [];
 
-      const expectedMax = Math.max(g.declaredTotal, g.maxSeen);
-      for (let seq = 1; seq <= expectedMax; seq++) {
-        const archiveName = `${g.prefix}-${g.declaredTotal}-${String(seq).padStart(3, '0')}${g.extension}`;
+      for (let seq = 1; seq <= g.maxSeen; seq++) {
+        const archiveName = `${g.prefix}-${g.exportNumber}-${String(seq).padStart(3, '0')}${g.extension}`;
         const detail = archiveDetails[archiveName];
         if (detail) {
           totalSizeBytes += detail.archiveSizeBytes ?? 0;
