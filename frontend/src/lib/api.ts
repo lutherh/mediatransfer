@@ -198,6 +198,44 @@ export type TakeoutActionStatus = {
   autoUploadPending?: 'scan' | 'upload' | null;
 };
 
+// ── Sequence analysis types ────────────────────────────────────────────────
+
+export type ArchiveDetail = {
+  status: string;
+  entryCount?: number;
+  uploadedCount?: number;
+  skippedCount?: number;
+  failedCount?: number;
+  archiveSizeBytes?: number;
+  mediaBytes?: number;
+  completedAt?: string;
+  error?: string;
+};
+
+export type SequenceGroup = {
+  prefix: string;
+  declaredTotal: number;
+  extension: string;
+  present: number[];
+  missing: number[];
+  isComplete: boolean;
+  maxSeen: number;
+  totalSizeBytes: number;
+  totalMediaBytes: number;
+  totalEntries: number;
+  totalUploaded: number;
+  totalSkipped: number;
+  totalFailed: number;
+  errors: string[];
+};
+
+export type SequenceAnalysis = {
+  groups: SequenceGroup[];
+  totalArchives: number;
+  unrecognised: string[];
+  archiveDetails: Record<string, ArchiveDetail>;
+};
+
 export async function fetchTransfers(): Promise<TransferJob[]> {
   const response = await fetch(`${API_BASE_URL}/transfers`);
   if (!response.ok) {
@@ -334,6 +372,19 @@ export async function fetchTakeoutActionStatus(): Promise<TakeoutActionStatus> {
   );
   if (!response.ok) {
     throw new Error('Failed to fetch takeout action status');
+  }
+
+  return response.json();
+}
+
+export async function fetchSequenceAnalysis(): Promise<SequenceAnalysis> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/takeout/sequence-analysis`,
+    undefined,
+    TAKEOUT_FETCH_TIMEOUT_MS,
+  );
+  if (!response.ok) {
+    throw new Error('Failed to fetch sequence analysis');
   }
 
   return response.json();

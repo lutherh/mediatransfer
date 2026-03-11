@@ -11,6 +11,7 @@ import { CostsPage } from '@/pages/costs-page';
 import { CatalogPage } from '@/pages/catalog-page';
 import { CatalogDedupPage } from '@/pages/catalog-dedup-page';
 import { UploadPage } from '@/pages/upload-page';
+import { SequenceAnalysisPage } from '@/pages/sequence-analysis-page';
 
 const queryClient = new QueryClient();
 
@@ -29,6 +30,7 @@ export function App() {
             <Route element={<CatalogPage />} path="catalog" />
             <Route element={<CatalogDedupPage />} path="catalog/dedup" />
             <Route element={<CostsPage />} path="costs" />
+            <Route element={<SequenceAnalysisPage />} path="takeout/sequences" />
             <Route element={<NewTransferPage />} path="transfers/new" />
             <Route element={<TransferDetailPage />} path="transfers/:id" />
           </Route>

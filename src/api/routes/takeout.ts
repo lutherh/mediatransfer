@@ -20,6 +20,7 @@ import {
   reconcileStaleArchives,
   type ArchiveStateItem,
 } from '../../takeout/incremental.js';
+import { analyseArchiveSequences } from '../../takeout/sequence-analysis.js';
 import { apiError } from '../errors.js';
 import { createJob, updateJob } from '../../db/jobs.js';
 
@@ -418,6 +419,115 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
 
   app.get('/takeout/action-status', async () => {
     return snapshotStatus();
+  });
+
+  // ── Archive sequence gap analysis ───────────────────────────────────────
+
+  app.get('/takeout/sequence-analysis', async () => {
+    const inputDir = customPaths.get('inputDir') ?? path.resolve(env.TAKEOUT_INPUT_DIR);
+    const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
+    const defaultWorkDir = path.resolve(env.TAKEOUT_WORK_DIR);
+
+    // Collect archive names from archive-state (completed/verified), input dir, and uploaded-archives
+    const archiveState = await loadMergedArchiveState(workDir, defaultWorkDir);
+    const stateNames = Object.keys(archiveState);
+
+    // Also scan uploaded-archives dir for moved archives
+    const uploadedArchiveDir = path.join(inputDir, 'uploaded-archives');
+    let uploadedArchiveNames: string[] = [];
+    try {
+      const entries = await fs.readdir(uploadedArchiveDir, { withFileTypes: true });
+      uploadedArchiveNames = entries
+        .filter((e) => e.isFile())
+        .map((e) => e.name);
+    } catch {
+      // Directory may not exist
+    }
+
+    // Also scan input dir for pending archives
+    let inputArchiveNames: string[] = [];
+    try {
+      const entries = await fs.readdir(inputDir, { withFileTypes: true });
+      inputArchiveNames = entries
+        .filter((e) => e.isFile() && /\.(zip|tar|tgz|tar\.gz)$/i.test(e.name))
+        .map((e) => e.name);
+    } catch {
+      // Directory may not exist
+    }
+
+    // Deduplicate all names
+    const allNames = [...new Set([...stateNames, ...uploadedArchiveNames, ...inputArchiveNames])];
+
+    const analysis = analyseArchiveSequences(allNames);
+
+    // Build per-archive detail from archive-state
+    const archiveDetails: Record<string, {
+      status: string;
+      entryCount?: number;
+      uploadedCount?: number;
+      skippedCount?: number;
+      failedCount?: number;
+      archiveSizeBytes?: number;
+      mediaBytes?: number;
+      completedAt?: string;
+      error?: string;
+    }> = {};
+    for (const [name, item] of Object.entries(archiveState)) {
+      archiveDetails[name] = {
+        status: item.status,
+        entryCount: item.entryCount,
+        uploadedCount: item.uploadedCount,
+        skippedCount: item.skippedCount,
+        failedCount: item.failedCount,
+        archiveSizeBytes: item.archiveSizeBytes,
+        mediaBytes: item.mediaBytes,
+        completedAt: item.completedAt,
+        error: item.error,
+      };
+    }
+
+    // Compute group-level aggregates
+    const groupStats = analysis.groups.map((g) => {
+      let totalSizeBytes = 0;
+      let totalMediaBytes = 0;
+      let totalEntries = 0;
+      let totalUploaded = 0;
+      let totalSkipped = 0;
+      let totalFailed = 0;
+      const errors: string[] = [];
+
+      const expectedMax = Math.max(g.declaredTotal, g.maxSeen);
+      for (let seq = 1; seq <= expectedMax; seq++) {
+        const archiveName = `${g.prefix}-${g.declaredTotal}-${String(seq).padStart(3, '0')}${g.extension}`;
+        const detail = archiveDetails[archiveName];
+        if (detail) {
+          totalSizeBytes += detail.archiveSizeBytes ?? 0;
+          totalMediaBytes += detail.mediaBytes ?? 0;
+          totalEntries += detail.entryCount ?? 0;
+          totalUploaded += detail.uploadedCount ?? 0;
+          totalSkipped += detail.skippedCount ?? 0;
+          totalFailed += detail.failedCount ?? 0;
+          if (detail.error) errors.push(`Part ${seq}: ${detail.error}`);
+        }
+      }
+
+      return {
+        ...g,
+        totalSizeBytes,
+        totalMediaBytes,
+        totalEntries,
+        totalUploaded,
+        totalSkipped,
+        totalFailed,
+        errors,
+      };
+    });
+
+    return {
+      ...analysis,
+      groups: groupStats,
+      archiveDetails,
+    };
   });
 
   // ── Auto-upload toggle ──────────────────────────────────────────────────
