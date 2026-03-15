@@ -752,6 +752,8 @@ function createCatalogServiceFromEnv(env: Env): ScalewayCatalogService | undefin
 		accessKey,
 		secretKey,
 		prefix,
+		s3RequestTimeoutMs: env.SCW_S3_REQUEST_TIMEOUT_MS,
+		s3ListMaxRetries: env.SCW_S3_LIST_MAX_RETRIES,
 	});
 }
 

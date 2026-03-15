@@ -123,12 +123,16 @@ describe('loadEnv', () => {
       SCW_REGION: 'nl-ams',
       SCW_BUCKET: 'my-photos',
       SCW_PREFIX: 'backup',
+      SCW_S3_REQUEST_TIMEOUT_MS: '450000',
+      SCW_S3_LIST_MAX_RETRIES: '7',
     });
     expect(env.SCW_ACCESS_KEY).toBe('SCWXXXXXXXXXXXXXXXXX');
     expect(env.SCW_SECRET_KEY).toBe('secret-key');
     expect(env.SCW_REGION).toBe('nl-ams');
     expect(env.SCW_BUCKET).toBe('my-photos');
     expect(env.SCW_PREFIX).toBe('backup');
+    expect(env.SCW_S3_REQUEST_TIMEOUT_MS).toBe(450000);
+    expect(env.SCW_S3_LIST_MAX_RETRIES).toBe(7);
   });
 
   it('should default SCW_REGION to fr-par and leave other Scaleway vars undefined', () => {
@@ -137,11 +141,23 @@ describe('loadEnv', () => {
     expect(env.SCW_ACCESS_KEY).toBeUndefined();
     expect(env.SCW_SECRET_KEY).toBeUndefined();
     expect(env.SCW_BUCKET).toBeUndefined();
+    expect(env.SCW_S3_REQUEST_TIMEOUT_MS).toBe(300000);
+    expect(env.SCW_S3_LIST_MAX_RETRIES).toBe(5);
   });
 
   it('should treat empty SCW_ACCESS_KEY as undefined', () => {
     const env = loadEnv({ ...validEnv, SCW_ACCESS_KEY: '' });
     expect(env.SCW_ACCESS_KEY).toBeUndefined();
+  });
+
+  it('should reject invalid SCW_S3_REQUEST_TIMEOUT_MS range', () => {
+    expect(() => loadEnv({ ...validEnv, SCW_S3_REQUEST_TIMEOUT_MS: '999' })).toThrow();
+    expect(() => loadEnv({ ...validEnv, SCW_S3_REQUEST_TIMEOUT_MS: '900001' })).toThrow();
+  });
+
+  it('should reject invalid SCW_S3_LIST_MAX_RETRIES range', () => {
+    expect(() => loadEnv({ ...validEnv, SCW_S3_LIST_MAX_RETRIES: '0' })).toThrow();
+    expect(() => loadEnv({ ...validEnv, SCW_S3_LIST_MAX_RETRIES: '11' })).toThrow();
   });
 
   // ── Google Photos vars ────────────────────────────────────

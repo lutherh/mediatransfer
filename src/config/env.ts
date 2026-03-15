@@ -50,6 +50,8 @@ const envSchema = z.object({
   SCW_REGION: z.string().min(1).default('fr-par'),
   SCW_BUCKET: optionalString,
   SCW_PREFIX: emptyToUndefined.pipe(z.string().optional()),
+  SCW_S3_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(900_000).default(300_000),
+  SCW_S3_LIST_MAX_RETRIES: z.coerce.number().int().min(1).max(10).default(5),
 
   // Google Photos OAuth2 (optional — only needed when using Google Photos provider)
   GOOGLE_CLIENT_ID: optionalString,

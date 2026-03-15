@@ -118,6 +118,10 @@ export type ScalewayCatalogConfig = {
   accessKey: string;
   secretKey: string;
   prefix?: string;
+  /** Per-request timeout for S3 operations in milliseconds. */
+  s3RequestTimeoutMs?: number;
+  /** Max retries for ListObjectsV2 page requests. */
+  s3ListMaxRetries?: number;
 };
 
 const IMAGE_EXTENSIONS = new Set([
@@ -125,28 +129,29 @@ const IMAGE_EXTENSIONS = new Set([
 ]);
 const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'avi', 'm4v', '3gp', 'mkv', 'webm']);
 
-const S3_REQUEST_TIMEOUT_MS = 120_000;
+const DEFAULT_S3_REQUEST_TIMEOUT_MS = 300_000;
 const STATS_CACHE_TTL_MS = 5 * 60_000;
-const MAX_PAGE_RETRIES = 5;
+const DEFAULT_MAX_PAGE_RETRIES = 5;
 
 /** Retry wrapper for S3 ListObjectsV2 — retries transient / timeout errors with linear backoff. */
 async function s3ListWithRetry(
   client: S3Client,
   params: ConstructorParameters<typeof ListObjectsV2Command>[0],
+  options: { timeoutMs: number; maxRetries: number },
 ): Promise<ListObjectsV2CommandOutput> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < MAX_PAGE_RETRIES; attempt++) {
+  for (let attempt = 0; attempt < options.maxRetries; attempt++) {
     try {
       return await client.send(
         new ListObjectsV2Command(params),
-        { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
+        { abortSignal: AbortSignal.timeout(options.timeoutMs) },
       );
     } catch (err) {
       lastError = err;
-      if (attempt < MAX_PAGE_RETRIES - 1) {
+      if (attempt < options.maxRetries - 1) {
         const delay = Math.min(1000 * 2 ** attempt, 15_000); // 1s, 2s, 4s, 8s exponential backoff
         console.warn(
-          `[catalog] S3 list page failed (attempt ${attempt + 1}/${MAX_PAGE_RETRIES}), retrying in ${delay}ms`,
+          `[catalog] S3 list page failed (attempt ${attempt + 1}/${options.maxRetries}), retrying in ${delay}ms`,
           err,
         );
         await new Promise((r) => setTimeout(r, delay));
@@ -160,11 +165,15 @@ export class ScalewayCatalogService implements CatalogService {
   private readonly client: S3Client;
   private readonly bucket: string;
   private readonly prefix: string;
+  private readonly s3RequestTimeoutMs: number;
+  private readonly s3ListMaxRetries: number;
   private statsCache: { data: CatalogStats; expiresAt: number } | null = null;
 
   constructor(config: ScalewayCatalogConfig, client?: S3Client) {
     this.bucket = config.bucket;
     this.prefix = config.prefix ?? '';
+    this.s3RequestTimeoutMs = normalizePositiveInteger(config.s3RequestTimeoutMs, DEFAULT_S3_REQUEST_TIMEOUT_MS);
+    this.s3ListMaxRetries = normalizePositiveInteger(config.s3ListMaxRetries, DEFAULT_MAX_PAGE_RETRIES);
     this.client =
       client ??
       new S3Client({
@@ -193,6 +202,9 @@ export class ScalewayCatalogService implements CatalogService {
         Prefix: prefix || undefined,
         ContinuationToken: continuationToken,
         MaxKeys: listMax,
+      }, {
+        timeoutMs: this.s3RequestTimeoutMs,
+        maxRetries: this.s3ListMaxRetries,
       });
 
       const mediaItems = (result.Contents ?? [])
@@ -277,7 +289,7 @@ export class ScalewayCatalogService implements CatalogService {
         Key: fullKey,
         Range: `bytes=0-${maxBytes - 1}`,
       }),
-      { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
+      { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
     );
 
     if (!response.Body) {
@@ -320,6 +332,9 @@ export class ScalewayCatalogService implements CatalogService {
         Prefix: this.prefix ? `${this.prefix}/` : undefined,
         ContinuationToken: continuationToken,
         MaxKeys: 1000,
+      }, {
+        timeoutMs: this.s3RequestTimeoutMs,
+        maxRetries: this.s3ListMaxRetries,
       });
 
       for (const obj of result.Contents ?? []) {
@@ -364,6 +379,9 @@ export class ScalewayCatalogService implements CatalogService {
         Prefix: this.fullPrefix(prefix),
         ContinuationToken: continuationToken,
         MaxKeys: 1000,
+      }, {
+        timeoutMs: this.s3RequestTimeoutMs,
+        maxRetries: this.s3ListMaxRetries,
       });
 
       const mediaItems = (result.Contents ?? [])
@@ -413,7 +431,7 @@ export class ScalewayCatalogService implements CatalogService {
             Bucket: this.bucket,
             Delete: { Objects: objects, Quiet: false },
           }),
-          { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
+          { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
         );
 
         for (const d of result.Deleted ?? []) {
@@ -453,7 +471,7 @@ export class ScalewayCatalogService implements CatalogService {
         CopySource: `${this.bucket}/${fullOldKey}`,
         Key: fullNewKey,
       }),
-      { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
+      { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
     );
 
     // Delete original
@@ -462,7 +480,7 @@ export class ScalewayCatalogService implements CatalogService {
         Bucket: this.bucket,
         Key: fullOldKey,
       }),
-      { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
+      { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
     );
 
     // Invalidate stats cache
@@ -475,7 +493,7 @@ export class ScalewayCatalogService implements CatalogService {
     try {
       const result = await this.client.send(
         new GetObjectCommand({ Bucket: this.bucket, Key: key }),
-        { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
+        { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
       );
       if (!result.Body) return { albums: [] };
       const body = await streamToString(result.Body);
@@ -497,7 +515,7 @@ export class ScalewayCatalogService implements CatalogService {
         Body: JSON.stringify(manifest, null, 2),
         ContentType: 'application/json',
       }),
-      { abortSignal: AbortSignal.timeout(S3_REQUEST_TIMEOUT_MS) },
+      { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
     );
   }
 
@@ -511,6 +529,9 @@ export class ScalewayCatalogService implements CatalogService {
         Prefix: this.prefix ? `${this.prefix}/` : undefined,
         ContinuationToken: continuationToken,
         MaxKeys: 1000,
+      }, {
+        timeoutMs: this.s3RequestTimeoutMs,
+        maxRetries: this.s3ListMaxRetries,
       });
 
       for (const obj of result.Contents ?? []) {
@@ -687,6 +708,14 @@ function clamp(value: number, min: number, max: number): number {
     return max;
   }
   return value;
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const rounded = Math.floor(value);
+  return rounded >= 1 ? rounded : fallback;
 }
 
 function inferContentType(key: string): string | undefined {
