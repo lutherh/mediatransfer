@@ -510,7 +510,17 @@ async function getFileSizeBestEffort(filePath: string): Promise<number | undefin
 
 async function appendJsonl(entries: ManifestEntry[], filePath: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
+  let existing = '';
+  try {
+    existing = await fs.readFile(filePath, 'utf8');
+  } catch {
+    // File may not exist yet on first append.
+  }
+
   const lines = entries.map((e) => JSON.stringify(e));
-  await fs.appendFile(filePath, `${lines.join('\n')}\n`, 'utf8');
+  const next = `${existing}${lines.join('\n')}\n`;
+  const tmpPath = `${filePath}.tmp`;
+  await fs.writeFile(tmpPath, next, 'utf8');
+  await fs.rename(tmpPath, filePath);
 }
 
