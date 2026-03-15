@@ -156,6 +156,7 @@ function customPathsFilePath(env: Env): string {
 }
 
 async function loadCustomPaths(env: Env): Promise<void> {
+  customPaths.clear();
   try {
     const raw = await fs.readFile(customPathsFilePath(env), 'utf8');
     const parsed = JSON.parse(raw) as Record<string, string>;
@@ -169,14 +170,11 @@ async function loadCustomPaths(env: Env): Promise<void> {
   }
 }
 
-function persistCustomPaths(env: Env): void {
+async function persistCustomPaths(env: Env): Promise<void> {
   const obj = Object.fromEntries(customPaths);
   const filePath = customPathsFilePath(env);
-  fs.mkdir(path.dirname(filePath), { recursive: true })
-    .then(() => fs.writeFile(filePath, JSON.stringify(obj, null, 2), 'utf8'))
-    .catch((err) => {
-      console.debug('[takeout] Failed to persist custom paths:', err);
-    });
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(obj, null, 2), 'utf8');
 }
 
 function autoUploadFilePath(env: Env): string {
@@ -194,13 +192,10 @@ async function loadAutoUpload(env: Env): Promise<void> {
   }
 }
 
-function persistAutoUpload(env: Env): void {
+async function persistAutoUpload(env: Env): Promise<void> {
   const filePath = autoUploadFilePath(env);
-  fs.mkdir(path.dirname(filePath), { recursive: true })
-    .then(() => fs.writeFile(filePath, JSON.stringify({ enabled: autoUploadEnabled }, null, 2), 'utf8'))
-    .catch((err) => {
-      console.debug('[takeout] Failed to persist auto-upload setting:', err);
-    });
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify({ enabled: autoUploadEnabled }, null, 2), 'utf8');
 }
 const manifestCountCache = new Map<string, {
   mtimeMs: number;
@@ -277,7 +272,12 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     }
     const resolved = path.resolve(value);
     customPaths.set(name, resolved);
-    persistCustomPaths(env);
+    try {
+      await persistCustomPaths(env);
+    } catch (err) {
+      customPaths.delete(name);
+      return reply.code(500).send(apiError('INTERNAL_ERROR', 'Failed to persist custom path override'));
+    }
     return { name, value: resolved };
   });
 
@@ -288,7 +288,11 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       return reply.code(400).send(apiError('INVALID_INPUT', `Unknown path name: ${name}`));
     }
     customPaths.delete(name);
-    persistCustomPaths(env);
+    try {
+      await persistCustomPaths(env);
+    } catch {
+      return reply.code(500).send(apiError('INTERNAL_ERROR', 'Failed to persist custom path override reset'));
+    }
     const envValue = env[def.envKey];
     return { name, value: envValue ? path.resolve(envValue) : undefined, reset: true };
   });
@@ -301,13 +305,22 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       return reply.code(400).send(apiError('INVALID_INPUT', 'inputDir is required'));
     }
     customPaths.set('inputDir', path.resolve(dir));
-    persistCustomPaths(env);
+    try {
+      await persistCustomPaths(env);
+    } catch {
+      customPaths.delete('inputDir');
+      return reply.code(500).send(apiError('INTERNAL_ERROR', 'Failed to persist input directory override'));
+    }
     return { inputDir: customPaths.get('inputDir') };
   });
 
-  app.delete('/takeout/input-dir', async () => {
+  app.delete('/takeout/input-dir', async (_req, reply) => {
     customPaths.delete('inputDir');
-    persistCustomPaths(env);
+    try {
+      await persistCustomPaths(env);
+    } catch {
+      return reply.code(500).send(apiError('INTERNAL_ERROR', 'Failed to persist input directory override reset'));
+    }
     return { inputDir: path.resolve(env.TAKEOUT_INPUT_DIR), reset: true };
   });
 
@@ -318,13 +331,22 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       return reply.code(400).send(apiError('INVALID_INPUT', 'workDir is required'));
     }
     customPaths.set('workDir', path.resolve(dir));
-    persistCustomPaths(env);
+    try {
+      await persistCustomPaths(env);
+    } catch {
+      customPaths.delete('workDir');
+      return reply.code(500).send(apiError('INTERNAL_ERROR', 'Failed to persist work directory override'));
+    }
     return { workDir: customPaths.get('workDir') };
   });
 
-  app.delete('/takeout/work-dir', async () => {
+  app.delete('/takeout/work-dir', async (_req, reply) => {
     customPaths.delete('workDir');
-    persistCustomPaths(env);
+    try {
+      await persistCustomPaths(env);
+    } catch {
+      return reply.code(500).send(apiError('INTERNAL_ERROR', 'Failed to persist work directory override reset'));
+    }
     return { workDir: path.resolve(env.TAKEOUT_WORK_DIR), reset: true };
   });
 
@@ -541,10 +563,18 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     return { enabled: autoUploadEnabled };
   });
 
-  app.put('/takeout/auto-upload', async (req) => {
+  app.put('/takeout/auto-upload', async (req, reply) => {
     const body = req.body as { enabled?: boolean } | null;
     autoUploadEnabled = body?.enabled === true;
-    persistAutoUpload(env);
+    try {
+      await persistAutoUpload(env);
+    } catch {
+      autoUploadEnabled = false;
+      return reply.code(500).send({
+        ...apiError('INTERNAL_ERROR', 'Failed to persist auto-upload setting'),
+        enabled: false,
+      });
+    }
 
     if (autoUploadEnabled) {
       // Start the recurring poll and do an immediate check

@@ -436,8 +436,20 @@ async function appendManifestJsonl(
   manifestPath: string,
 ): Promise<void> {
   await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+  let existing = '';
+  try {
+    existing = await fs.readFile(manifestPath, 'utf8');
+  } catch (error) {
+    if (!isFileNotFoundError(error)) {
+      throw error;
+    }
+  }
+
   const lines = entries.map((entry) => JSON.stringify(entry));
-  await fs.appendFile(manifestPath, `${lines.join('\n')}\n`, 'utf8');
+  const appended = `${existing}${lines.join('\n')}\n`;
+  const tmpPath = `${manifestPath}.tmp`;
+  await fs.writeFile(tmpPath, appended, 'utf8');
+  await fs.rename(tmpPath, manifestPath);
 }
 
 async function cleanupDir(dirPath: string): Promise<void> {

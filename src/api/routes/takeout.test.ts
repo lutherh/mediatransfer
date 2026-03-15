@@ -633,6 +633,10 @@ describe('takeout routes', () => {
       payload: { value: archiveDir },
     });
 
+    const inputDir = path.join(tempDir, 'input');
+    await fs.mkdir(inputDir, { recursive: true });
+    await fs.writeFile(path.join(inputDir, 'takeout-001.tgz'), 'archive');
+
     // Trigger upload
     const okRes = await app.inject({
       method: 'POST',
