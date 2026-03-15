@@ -139,8 +139,9 @@ describe('loadEnv', () => {
     expect(env.SCW_BUCKET).toBeUndefined();
   });
 
-  it('should reject empty SCW_ACCESS_KEY when provided', () => {
-    expect(() => loadEnv({ ...validEnv, SCW_ACCESS_KEY: '' })).toThrow();
+  it('should treat empty SCW_ACCESS_KEY as undefined', () => {
+    const env = loadEnv({ ...validEnv, SCW_ACCESS_KEY: '' });
+    expect(env.SCW_ACCESS_KEY).toBeUndefined();
   });
 
   // ── Google Photos vars ────────────────────────────────────
