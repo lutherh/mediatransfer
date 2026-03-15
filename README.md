@@ -83,6 +83,10 @@ Now open the `.env` file in any text editor (Notepad, VS Code, etc.) and fill in
 | `GOOGLE_CLIENT_ID=` | Your Google OAuth Client ID |
 | `GOOGLE_CLIENT_SECRET=` | Your Google OAuth Client Secret |
 
+Optional tuning for very large buckets or slower links:
+- `SCW_S3_REQUEST_TIMEOUT_MS=300000`
+- `SCW_S3_LIST_MAX_RETRIES=5`
+
 > **Leave everything else as-is.** The defaults work for local development. The setup script will auto-generate a secure encryption key for you.
 
 ---
