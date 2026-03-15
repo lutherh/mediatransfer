@@ -12,6 +12,7 @@
 import http from 'node:http';
 import { exec } from 'node:child_process';
 import { Readable } from 'node:stream';
+import os from 'node:os';
 import * as dotenv from 'dotenv';
 import {
   createOAuth2Client,
@@ -49,7 +50,7 @@ const authUrl = getAuthUrlForScopes(oauthClient, [GOOGLE_PHOTOS_PICKER_SCOPE]);
 
 console.log('\n🔗 Opening Google consent page for Picker API scope...\n');
 console.log(`   ${authUrl}\n`);
-exec(`start "" "${authUrl}"`);
+openUrl(authUrl);
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', callbackConfig.origin);
@@ -89,7 +90,7 @@ const server = http.createServer(async (req, res) => {
     console.log(`   Session ID: ${session.id}`);
     console.log(`   Open picker: ${pickerUri}\n`);
 
-    exec(`start "" "${pickerUri}"`);
+    openUrl(pickerUri);
     console.log('⏳ Waiting for you to finish selecting media in Google Photos...');
 
     const readySession = await waitForSelectionComplete(pickerClient, session.id);
@@ -146,6 +147,17 @@ const server = http.createServer(async (req, res) => {
 server.listen(callbackConfig.port, callbackConfig.hostname, () => {
   console.log(`⏳ Waiting for OAuth callback on ${callbackConfig.origin}${callbackConfig.pathname} ...\n`);
 });
+
+function openUrl(url: string): void {
+  const platform = os.platform();
+  if (platform === 'win32') {
+    exec(`start "" "${url}"`);
+  } else if (platform === 'darwin') {
+    exec(`open "${url}"`);
+  } else {
+    exec(`xdg-open "${url}"`);
+  }
+}
 
 function resolveCallbackConfig(uri: string): {
   origin: string;

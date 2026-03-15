@@ -1,6 +1,9 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+/** Treat empty strings from dotenv (e.g. `VAR=`) as undefined so optional fields pass validation. */
+const emptyToUndefined = z.string().transform((v) => (v.trim() === '' ? undefined : v));
+const optionalString = emptyToUndefined.pipe(z.string().min(1).optional());
 /**
  * Schema for all environment variables used by MediaTransfer.
  * Parsed and validated at startup — app will fail fast if config is invalid.
@@ -42,18 +45,18 @@ const envSchema = z.object({
   ),
 
   // Scaleway Object Storage (optional — only needed when using Scaleway provider)
-  SCW_ACCESS_KEY: z.string().min(1).optional(),
-  SCW_SECRET_KEY: z.string().min(1).optional(),
+  SCW_ACCESS_KEY: optionalString,
+  SCW_SECRET_KEY: optionalString,
   SCW_REGION: z.string().min(1).default('fr-par'),
-  SCW_BUCKET: z.string().min(1).optional(),
-  SCW_PREFIX: z.string().optional(),
+  SCW_BUCKET: optionalString,
+  SCW_PREFIX: emptyToUndefined.pipe(z.string().optional()),
 
   // Google Photos OAuth2 (optional — only needed when using Google Photos provider)
-  GOOGLE_CLIENT_ID: z.string().min(1).optional(),
-  GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
+  GOOGLE_CLIENT_ID: optionalString,
+  GOOGLE_CLIENT_SECRET: optionalString,
   GOOGLE_REDIRECT_URI: z.string().url().default('http://localhost:5173/auth/google/callback'),
-  GOOGLE_REFRESH_TOKEN: z.string().min(1).optional(),
-  GOOGLE_ACCESS_TOKEN: z.string().min(1).optional(),
+  GOOGLE_REFRESH_TOKEN: optionalString,
+  GOOGLE_ACCESS_TOKEN: optionalString,
   GOOGLE_TOKEN_EXPIRY_DATE: z.coerce.number().optional(),
   GOOGLE_BATCH_STATE_PATH: z.string().min(1).default('./data/takeout/google-api-state.json'),
   GOOGLE_BATCH_TEMP_DIR: z.string().min(1).default('./data/takeout/work/google-api-batches'),
@@ -61,7 +64,7 @@ const envSchema = z.object({
   // Google Takeout migration settings (full-library path)
   TAKEOUT_INPUT_DIR: z.string().min(1).default('./data/takeout/input'),
   TAKEOUT_WORK_DIR: z.string().min(1).default('./data/takeout/work'),
-  TAKEOUT_ARCHIVE_DIR: z.string().min(1).optional(),
+  TAKEOUT_ARCHIVE_DIR: optionalString,
   TRANSFER_STATE_PATH: z.string().min(1).default('./data/takeout/state.json'),
   UPLOAD_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   UPLOAD_RETRY_COUNT: z.coerce.number().int().min(0).max(20).default(5),

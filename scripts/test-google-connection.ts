@@ -11,6 +11,7 @@
 import http from 'node:http';
 import { exec } from 'node:child_process';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import * as dotenv from 'dotenv';
 import {
@@ -42,8 +43,8 @@ const authUrl = getAuthUrl(oauthClient);
 console.log('\n🔗  Opening Google consent page in your browser...\n');
 console.log(`   If it doesn't open automatically, visit:\n   ${authUrl}\n`);
 
-// Open URL in default browser (Windows)
-exec(`start "" "${authUrl}"`);
+// Open URL in default browser
+openUrl(authUrl);
 
 // Tiny HTTP server to catch the OAuth2 callback
 const server = http.createServer(async (req, res) => {
@@ -146,6 +147,17 @@ const server = http.createServer(async (req, res) => {
 
   shutdown(0);
 });
+
+function openUrl(url: string): void {
+  const platform = os.platform();
+  if (platform === 'win32') {
+    exec(`start "" "${url}"`);
+  } else if (platform === 'darwin') {
+    exec(`open "${url}"`);
+  } else {
+    exec(`xdg-open "${url}"`);
+  }
+}
 
 function shutdown(code: number) {
   setTimeout(() => {

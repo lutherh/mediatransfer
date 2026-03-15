@@ -33,6 +33,9 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "engines": {
+    "node": "^20.19 || ^22.12 || >=24.0"
+  },
   "bugs": {
     "url": "https://github.com/lutherh/mediatransfer/issues"
   },
