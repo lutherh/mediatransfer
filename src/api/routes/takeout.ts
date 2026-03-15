@@ -18,6 +18,7 @@ import {
 import {
   loadArchiveState,
   reconcileStaleArchives,
+  reconcileArchiveEntries,
   type ArchiveStateItem,
 } from '../../takeout/incremental.js';
 import { analyseArchiveSequences, normaliseArchiveName } from '../../takeout/sequence-analysis.js';
@@ -677,23 +678,8 @@ async function loadMergedArchiveState(
 function reconcileArchiveEntriesForDisplay(
   archives: Record<string, ArchiveStateItem>,
 ): { archives: Record<string, ArchiveStateItem>; reconciled: number } {
-  let reconciled = 0;
-  const next: Record<string, ArchiveStateItem> = {};
-
-  for (const [name, item] of Object.entries(archives)) {
-    if (item.status === 'pending' || item.status === 'extracting' || item.status === 'uploading') {
-      next[name] = {
-        ...item,
-        status: 'completed',
-        completedAt: item.completedAt ?? new Date().toISOString(),
-      };
-      reconciled += 1;
-    } else {
-      next[name] = item;
-    }
-  }
-
-  return { archives: next, reconciled };
+  // Delegate to the shared reconciliation logic so display matches persistence
+  return reconcileArchiveEntries(archives);
 }
 
 function runAction(action: TakeoutAction): void {

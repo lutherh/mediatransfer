@@ -5,7 +5,7 @@ import { Readable } from 'node:stream';
 import { describe, it, expect } from 'vitest';
 import type { CloudProvider, ObjectInfo } from '../providers/types.js';
 import type { TakeoutConfig } from './config.js';
-import { runTakeoutIncremental, loadArchiveState } from './incremental.js';
+import { runTakeoutIncremental, loadArchiveState, reconcileArchiveEntries } from './incremental.js';
 import { loadArchiveMetadata } from './archive-metadata.js';
 
 class MockProvider implements CloudProvider {
@@ -278,5 +278,163 @@ describe('takeout/incremental', () => {
       expect(result.processedArchives).toBe(1);
       expect(result.failedArchives).toBe(0);
     });
+  });
+});
+
+describe('reconcileArchiveEntries', () => {
+  it('drops extracting archives with 0 entries from state', () => {
+    const { archives, reconciled } = reconcileArchiveEntries({
+      'takeout-001.tgz': {
+        status: 'extracting',
+        entryCount: 0,
+        uploadedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        archiveSizeBytes: 4_000_000_000,
+        startedAt: '2026-03-01T00:00:00Z',
+      },
+    });
+    expect(reconciled).toBe(1);
+    expect(archives['takeout-001.tgz']).toBeUndefined();
+  });
+
+  it('drops pending archives with 0 entries from state', () => {
+    const { archives, reconciled } = reconcileArchiveEntries({
+      'takeout-002.tgz': {
+        status: 'pending',
+        entryCount: 0,
+        uploadedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        archiveSizeBytes: 50_000_000_000,
+        startedAt: '2026-03-01T00:00:00Z',
+      },
+    });
+    expect(reconciled).toBe(1);
+    expect(archives['takeout-002.tgz']).toBeUndefined();
+  });
+
+  it('marks pending archives with entries as failed for retry', () => {
+    const { archives, reconciled } = reconcileArchiveEntries({
+      'takeout-003.tgz': {
+        status: 'pending',
+        entryCount: 150,
+        uploadedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        archiveSizeBytes: 4_000_000_000,
+        startedAt: '2026-03-01T00:00:00Z',
+      },
+    });
+    expect(reconciled).toBe(1);
+    expect(archives['takeout-003.tgz']?.status).toBe('failed');
+    expect(archives['takeout-003.tgz']?.entryCount).toBe(150);
+  });
+
+  it('marks interrupted uploading archives as failed', () => {
+    const { archives, reconciled } = reconcileArchiveEntries({
+      'takeout-004.tgz': {
+        status: 'uploading',
+        entryCount: 200,
+        uploadedCount: 50,
+        skippedCount: 0,
+        failedCount: 0,
+        archiveSizeBytes: 4_000_000_000,
+        startedAt: '2026-03-01T00:00:00Z',
+      },
+    });
+    expect(reconciled).toBe(1);
+    expect(archives['takeout-004.tgz']?.status).toBe('failed');
+    expect(archives['takeout-004.tgz']?.error).toContain('upload');
+  });
+
+  it('marks uploading archive as completed when all items were handled', () => {
+    const { archives, reconciled } = reconcileArchiveEntries({
+      'takeout-005.tgz': {
+        status: 'uploading',
+        entryCount: 100,
+        uploadedCount: 90,
+        skippedCount: 10,
+        failedCount: 0,
+        archiveSizeBytes: 4_000_000_000,
+        startedAt: '2026-03-01T00:00:00Z',
+      },
+    });
+    expect(reconciled).toBe(1);
+    expect(archives['takeout-005.tgz']?.status).toBe('completed');
+  });
+
+  it('does not touch already-completed archives', () => {
+    const { archives, reconciled } = reconcileArchiveEntries({
+      'takeout-006.tgz': {
+        status: 'completed',
+        entryCount: 300,
+        uploadedCount: 300,
+        skippedCount: 0,
+        failedCount: 0,
+        archiveSizeBytes: 4_000_000_000,
+        startedAt: '2026-03-01T00:00:00Z',
+        completedAt: '2026-03-01T01:00:00Z',
+      },
+    });
+    expect(reconciled).toBe(0);
+    expect(archives['takeout-006.tgz']?.status).toBe('completed');
+  });
+
+  it('does not touch already-failed archives', () => {
+    const { archives, reconciled } = reconcileArchiveEntries({
+      'takeout-007.tgz': {
+        status: 'failed',
+        entryCount: 10,
+        uploadedCount: 5,
+        skippedCount: 0,
+        failedCount: 5,
+        archiveSizeBytes: 4_000_000_000,
+        startedAt: '2026-03-01T00:00:00Z',
+        error: 'upload failure',
+      },
+    });
+    expect(reconciled).toBe(0);
+    expect(archives['takeout-007.tgz']?.status).toBe('failed');
+  });
+
+  it('handles mixed archive states correctly', () => {
+    const { archives, reconciled } = reconcileArchiveEntries({
+      'completed.tgz': {
+        status: 'completed',
+        entryCount: 100,
+        uploadedCount: 100,
+        skippedCount: 0,
+        failedCount: 0,
+      },
+      'unprocessed.tgz': {
+        status: 'extracting',
+        entryCount: 0,
+        uploadedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        archiveSizeBytes: 4_000_000_000,
+      },
+      'partial-upload.tgz': {
+        status: 'uploading',
+        entryCount: 200,
+        uploadedCount: 50,
+        skippedCount: 0,
+        failedCount: 0,
+      },
+      'fully-uploaded.tgz': {
+        status: 'uploading',
+        entryCount: 80,
+        uploadedCount: 80,
+        skippedCount: 0,
+        failedCount: 0,
+      },
+    });
+
+    expect(reconciled).toBe(3);
+    expect(archives['completed.tgz']?.status).toBe('completed');
+    expect(archives['unprocessed.tgz']).toBeUndefined();
+    expect(archives['partial-upload.tgz']?.status).toBe('failed');
+    expect(archives['fully-uploaded.tgz']?.status).toBe('completed');
   });
 });

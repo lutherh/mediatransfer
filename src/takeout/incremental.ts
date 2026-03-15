@@ -570,17 +570,41 @@ export async function reconcileStaleArchives(
 export function reconcileArchiveEntries(
   archives: Record<string, ArchiveStateItem>,
 ): { archives: Record<string, ArchiveStateItem>; reconciled: number } {
-  const staleStatuses: ArchiveStatus[] = ['pending', 'extracting', 'uploading'];
   let reconciled = 0;
   const nextArchives: Record<string, ArchiveStateItem> = {};
 
   for (const [name, item] of Object.entries(archives)) {
-    if (staleStatuses.includes(item.status)) {
+    if (item.status === 'extracting' || item.status === 'pending') {
+      if (item.entryCount === 0 && item.uploadedCount === 0) {
+        // Never processed — drop from state so the archive gets reprocessed
+        reconciled += 1;
+        continue;
+      }
+      // Had entries scanned/partially processed — mark failed for retry
       nextArchives[name] = {
         ...item,
-        status: 'completed',
+        status: 'failed',
         completedAt: item.completedAt ?? new Date().toISOString(),
+        error: 'Interrupted during ' + item.status,
       };
+      reconciled += 1;
+    } else if (item.status === 'uploading') {
+      if (item.uploadedCount > 0 && item.failedCount === 0 && item.uploadedCount + item.skippedCount >= item.entryCount) {
+        // All items were actually uploaded/skipped — safe to mark completed
+        nextArchives[name] = {
+          ...item,
+          status: 'completed',
+          completedAt: item.completedAt ?? new Date().toISOString(),
+        };
+      } else {
+        // Upload was interrupted — mark failed for retry
+        nextArchives[name] = {
+          ...item,
+          status: 'failed',
+          completedAt: item.completedAt ?? new Date().toISOString(),
+          error: 'Interrupted during upload',
+        };
+      }
       reconciled += 1;
     } else {
       nextArchives[name] = item;
