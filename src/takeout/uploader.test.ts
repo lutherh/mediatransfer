@@ -157,8 +157,10 @@ describe('takeout/uploader', () => {
       expect(summary.uploaded).toBe(0);
       expect(summary.skipped).toBe(1);
       expect(summary.failed).toBe(0);
+      expect(summary.skipReasons?.already_exists_in_destination).toBe(1);
       const state = await loadUploadState(statePath);
       expect(state.items[entry.destinationKey]?.status).toBe('skipped');
+      expect(state.items[entry.destinationKey]?.skipReason).toBe('already_exists_in_destination');
     });
   });
 
@@ -432,6 +434,143 @@ describe('takeout/uploader', () => {
       const state = await loadUploadState(statePath);
       expect(state.items[entry.destinationKey]?.status).toBe('failed');
       expect(state.items[entry.destinationKey]?.error).toContain('ENOENT');
+    });
+  });
+
+  it('reports already_uploaded_in_state skip reason on re-upload', async () => {
+    await withTempDir(async (dir) => {
+      const provider = new MockProvider();
+      const entry = await createEntry(dir, 'Album/IMG_RS1.jpg', '2025/12/13/Album/IMG_RS1.jpg');
+      const statePath = path.join(dir, 'state.json');
+
+      // First upload succeeds
+      await uploadManifest({
+        provider,
+        entries: [entry],
+        statePath,
+        retryCount: 0,
+        sleep: async () => {},
+      });
+
+      // Second upload — same entry, already uploaded in state
+      const summary = await uploadManifest({
+        provider,
+        entries: [entry],
+        statePath,
+        retryCount: 0,
+        sleep: async () => {},
+      });
+
+      expect(summary.skipped).toBe(1);
+      expect(summary.uploaded).toBe(0);
+      expect(summary.skipReasons?.already_uploaded_in_state).toBe(1);
+      expect(summary.skipReasons?.already_skipped_in_state).toBe(0);
+      expect(summary.skipReasons?.already_exists_in_destination).toBe(0);
+    });
+  });
+
+  it('reports already_skipped_in_state skip reason when entry was previously skipped', async () => {
+    await withTempDir(async (dir) => {
+      const provider = new MockProvider();
+      const entry = await createEntry(dir, 'Album/IMG_RS2.jpg', '2025/12/13/Album/IMG_RS2.jpg');
+      const statePath = path.join(dir, 'state.json');
+
+      // Pre-populate state with a 'skipped' item (as if S3 duplicate was found before)
+      provider.objects.add(entry.destinationKey);
+      await uploadManifest({
+        provider,
+        entries: [entry],
+        statePath,
+        retryCount: 0,
+        sleep: async () => {},
+      });
+
+      // Verify first run detected S3 duplicate
+      const stateAfterFirst = await loadUploadState(statePath);
+      expect(stateAfterFirst.items[entry.destinationKey]?.status).toBe('skipped');
+
+      // Second upload — entry is already 'skipped' in state
+      const summary = await uploadManifest({
+        provider,
+        entries: [entry],
+        statePath,
+        retryCount: 0,
+        sleep: async () => {},
+      });
+
+      expect(summary.skipped).toBe(1);
+      expect(summary.skipReasons?.already_skipped_in_state).toBe(1);
+      expect(summary.skipReasons?.already_exists_in_destination).toBe(0);
+      expect(summary.skipReasons?.already_uploaded_in_state).toBe(0);
+    });
+  });
+
+  it('aggregates mixed skip reasons across multiple entries', async () => {
+    await withTempDir(async (dir) => {
+      const provider = new MockProvider();
+      const statePath = path.join(dir, 'state.json');
+
+      // Entry 1: will be a fresh upload
+      const fresh = await createEntry(dir, 'Album/Fresh.jpg', '2025/12/13/Album/Fresh.jpg');
+      // Entry 2: already exists in S3
+      const s3Dup = await createEntry(dir, 'Album/S3Dup.jpg', '2025/12/13/Album/S3Dup.jpg');
+      provider.objects.add(s3Dup.destinationKey);
+
+      // First pass: uploads fresh, skips s3Dup
+      const firstSummary = await uploadManifest({
+        provider,
+        entries: [fresh, s3Dup],
+        statePath,
+        retryCount: 0,
+        sleep: async () => {},
+      });
+
+      expect(firstSummary.uploaded).toBe(1);
+      expect(firstSummary.skipped).toBe(1);
+      expect(firstSummary.skipReasons?.already_exists_in_destination).toBe(1);
+
+      // Entry 3: new entry that also exists in S3
+      const s3Dup2 = await createEntry(dir, 'Album/S3Dup2.jpg', '2025/12/13/Album/S3Dup2.jpg');
+      provider.objects.add(s3Dup2.destinationKey);
+
+      // Second pass: fresh & s3Dup are now in state, s3Dup2 hits S3 check
+      const secondSummary = await uploadManifest({
+        provider,
+        entries: [fresh, s3Dup, s3Dup2],
+        statePath,
+        retryCount: 0,
+        sleep: async () => {},
+      });
+
+      expect(secondSummary.skipped).toBe(3);
+      expect(secondSummary.uploaded).toBe(0);
+      expect(secondSummary.skipReasons?.already_uploaded_in_state).toBe(1); // fresh
+      expect(secondSummary.skipReasons?.already_skipped_in_state).toBe(1);  // s3Dup
+      expect(secondSummary.skipReasons?.already_exists_in_destination).toBe(1); // s3Dup2
+    });
+  });
+
+  it('returns zero skip reasons on a clean first upload', async () => {
+    await withTempDir(async (dir) => {
+      const provider = new MockProvider();
+      const entry = await createEntry(dir, 'Album/IMG_Z.jpg', '2025/12/13/Album/IMG_Z.jpg');
+      const statePath = path.join(dir, 'state.json');
+
+      const summary = await uploadManifest({
+        provider,
+        entries: [entry],
+        statePath,
+        retryCount: 0,
+        sleep: async () => {},
+      });
+
+      expect(summary.uploaded).toBe(1);
+      expect(summary.skipped).toBe(0);
+      expect(summary.skipReasons).toEqual({
+        already_uploaded_in_state: 0,
+        already_skipped_in_state: 0,
+        already_exists_in_destination: 0,
+      });
     });
   });
 });

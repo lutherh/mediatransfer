@@ -17,6 +17,7 @@ import {
 import {
   loadUploadState,
   uploadManifest,
+  type UploadSkipReason,
   type UploadProgressSnapshot,
   type UploadSummary,
 } from './uploader.js';
@@ -38,6 +39,7 @@ export type ArchiveStateItem = {
   uploadedCount: number;
   skippedCount: number;
   failedCount: number;
+  skipReasons?: Partial<Record<UploadSkipReason, number>>;
   archiveSizeBytes?: number;
   mediaBytes?: number;
   startedAt?: string;
@@ -294,17 +296,24 @@ export async function runTakeoutIncremental(
 
       const archiveUploadSucceeded = (archiveSummary?.failed ?? 0) === 0;
 
-      // 7. Clean up extracted files
-      if (!options.dryRun && options.deleteExtractedAfterUpload !== false && archiveUploadSucceeded) {
-        await cleanupDir(extractDir);
-      }
+      // Post-upload operations: cleanup and archive move/delete.
+      // These must NOT affect the archive status — data is already safely in the cloud.
+      try {
+        // 7. Clean up extracted files
+        if (!options.dryRun && options.deleteExtractedAfterUpload !== false && archiveUploadSucceeded) {
+          await cleanupDir(extractDir);
+        }
 
-      // Optionally delete the source archive to free download space
-      if (!options.dryRun && archiveUploadSucceeded && options.deleteArchiveAfterUpload) {
-        await fs.unlink(archivePath);
-      } else if (!options.dryRun && archiveUploadSucceeded && options.moveArchiveAfterUpload) {
-        const completedArchiveDir = options.completedArchiveDir ?? path.join(config.inputDir, 'uploaded-archives');
-        await moveArchiveToCompletedDir(archivePath, completedArchiveDir);
+        // Optionally delete the source archive to free download space
+        if (!options.dryRun && archiveUploadSucceeded && options.deleteArchiveAfterUpload) {
+          await fs.unlink(archivePath);
+        } else if (!options.dryRun && archiveUploadSucceeded && options.moveArchiveAfterUpload) {
+          const completedArchiveDir = options.completedArchiveDir ?? path.join(config.inputDir, 'uploaded-archives');
+          await moveArchiveToCompletedDir(archivePath, completedArchiveDir);
+        }
+      } catch (postUploadError) {
+        // Log but don't change archive status — upload data is safe
+        console.warn(`[incremental] Post-upload operation failed for ${archiveName}:`, postUploadError);
       }
 
       options.onArchiveComplete?.(archiveName, {
@@ -320,15 +329,21 @@ export async function runTakeoutIncremental(
         failureLimitReached: false,
       });
     } catch (error) {
-      const wasAlreadyFailed = archiveState.archives[archiveName]?.status === 'failed';
-      archiveState.archives[archiveName] = {
-        ...archiveState.archives[archiveName],
-        status: 'failed',
-        error: error instanceof Error ? error.message : String(error),
-      };
-      await persistArchiveState(archiveStatePath, archiveState);
-      if (!wasAlreadyFailed) {
-        result.failedArchives += 1;
+      const currentStatus = archiveState.archives[archiveName]?.status;
+      if (currentStatus === 'completed') {
+        // Upload already succeeded and was persisted — don't overwrite to 'failed'
+        console.warn(`[incremental] Post-upload error for ${archiveName}, keeping completed status:`, error);
+      } else {
+        const wasAlreadyFailed = currentStatus === 'failed';
+        archiveState.archives[archiveName] = {
+          ...archiveState.archives[archiveName],
+          status: 'failed',
+          error: error instanceof Error ? error.message : String(error),
+        };
+        await persistArchiveState(archiveStatePath, archiveState);
+        if (!wasAlreadyFailed) {
+          result.failedArchives += 1;
+        }
       }
 
       options.onArchiveError?.(archiveName, error);
@@ -414,6 +429,7 @@ async function processArchiveEntries(
     uploadedCount: summary.uploaded,
     skippedCount: summary.skipped,
     failedCount: summary.failed,
+    skipReasons: summary.skipReasons,
     mediaBytes: entries.reduce((sum, entry) => sum + Math.max(0, entry.size ?? 0), 0),
     completedAt: new Date().toISOString(),
     error: failed ? `${summary.failed} item(s) failed in archive upload` : undefined,
@@ -589,7 +605,7 @@ export function reconcileArchiveEntries(
       };
       reconciled += 1;
     } else if (item.status === 'uploading') {
-      if (item.uploadedCount > 0 && item.failedCount === 0 && item.uploadedCount + item.skippedCount >= item.entryCount) {
+      if (item.failedCount === 0 && (item.uploadedCount + item.skippedCount) >= item.entryCount && item.entryCount > 0) {
         // All items were actually uploaded/skipped — safe to mark completed
         nextArchives[name] = {
           ...item,
@@ -605,6 +621,17 @@ export function reconcileArchiveEntries(
           error: 'Interrupted during upload',
         };
       }
+      reconciled += 1;
+    } else if (item.status === 'failed' && item.failedCount === 0 && item.entryCount > 0
+      && (item.uploadedCount + item.skippedCount) >= item.entryCount) {
+      // Upload succeeded but post-upload operation (e.g. archive move) caused 'failed' status.
+      // All items were actually handled — safe to mark completed.
+      nextArchives[name] = {
+        ...item,
+        status: 'completed',
+        error: undefined,
+        completedAt: item.completedAt ?? new Date().toISOString(),
+      };
       reconciled += 1;
     } else {
       nextArchives[name] = item;

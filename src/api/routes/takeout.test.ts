@@ -99,9 +99,12 @@ describe('takeout routes', () => {
           'takeout-001.tgz': {
             status: 'completed',
             entryCount: 2,
-            uploadedCount: 2,
-            skippedCount: 0,
+            uploadedCount: 1,
+            skippedCount: 1,
             failedCount: 0,
+            skipReasons: {
+              already_exists_in_destination: 1,
+            },
             archiveSizeBytes: 1073741824,
             mediaBytes: 2147483648,
             startedAt: '2025-01-01T01:00:00.000Z',
@@ -135,6 +138,13 @@ describe('takeout routes', () => {
         handledPercent: 100,
         isFullyUploaded: true,
         status: 'completed',
+        notUploadedReasons: [
+          {
+            code: 'already_exists_in_destination',
+            label: 'Already exists in S3',
+            count: 1,
+          },
+        ],
       }),
     ]);
 
@@ -1089,6 +1099,185 @@ describe('takeout routes', () => {
       const statusRes = await autoApp.inject({ method: 'GET', url: '/takeout/action-status' });
       expect(statusRes.json().autoUploadPending).toBe('scan');
     });
+  });
+
+  // ─── notUploadedReasons in archive history ────────────────────────────────
+
+  it('returns notUploadedReasons with mixed skip reasons and failures', async () => {
+    const inputDir = path.join(tempDir, 'input');
+    const workDir = path.join(tempDir, 'work');
+    const statePath = path.join(tempDir, 'state.json');
+    await fs.mkdir(inputDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workDir, 'manifest.jsonl'),
+      `${JSON.stringify({ destinationKey: 'a.jpg' })}\n`,
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        items: {},
+      }),
+    );
+    await fs.writeFile(
+      path.join(workDir, 'archive-state.json'),
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        archives: {
+          'takeout-mixed.tgz': {
+            status: 'failed',
+            entryCount: 100,
+            uploadedCount: 80,
+            skippedCount: 15,
+            failedCount: 5,
+            skipReasons: {
+              already_exists_in_destination: 10,
+              already_uploaded_in_state: 3,
+              already_skipped_in_state: 2,
+            },
+            archiveSizeBytes: 500_000_000,
+            startedAt: '2025-01-01T01:00:00.000Z',
+            completedAt: '2025-01-01T02:00:00.000Z',
+            error: '5 item(s) failed in archive upload',
+          },
+        },
+      }),
+    );
+
+    const env = baseEnv({ TAKEOUT_INPUT_DIR: inputDir, TAKEOUT_WORK_DIR: workDir, TRANSFER_STATE_PATH: statePath });
+    const app = Fastify();
+    await registerTakeoutRoutes(app, env);
+
+    const res = await app.inject({ method: 'GET', url: '/takeout/status' });
+    const body = res.json();
+    expect(res.statusCode).toBe(200);
+
+    const archive = body.archiveHistory[0];
+    expect(archive.archiveName).toBe('takeout-mixed.tgz');
+    expect(archive.notUploadedReasons).toEqual([
+      { code: 'already_exists_in_destination', label: 'Already exists in S3', count: 10 },
+      { code: 'already_uploaded_in_state', label: 'Already uploaded in previous run', count: 3 },
+      { code: 'already_skipped_in_state', label: 'Already skipped in previous run', count: 2 },
+      { code: 'upload_failed', label: 'Upload failed', count: 5 },
+    ]);
+
+    await app.close();
+  });
+
+  it('returns notUploadedReasons as undefined when archive has no skips or failures', async () => {
+    const inputDir = path.join(tempDir, 'input');
+    const workDir = path.join(tempDir, 'work');
+    const statePath = path.join(tempDir, 'state.json');
+    await fs.mkdir(inputDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workDir, 'manifest.jsonl'),
+      `${JSON.stringify({ destinationKey: 'a.jpg' })}\n`,
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        items: {
+          'a.jpg': { status: 'uploaded', attempts: 1, updatedAt: '2025-01-01T00:00:00.000Z' },
+        },
+      }),
+    );
+    await fs.writeFile(
+      path.join(workDir, 'archive-state.json'),
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        archives: {
+          'takeout-clean.tgz': {
+            status: 'completed',
+            entryCount: 50,
+            uploadedCount: 50,
+            skippedCount: 0,
+            failedCount: 0,
+            archiveSizeBytes: 200_000_000,
+            startedAt: '2025-01-01T01:00:00.000Z',
+            completedAt: '2025-01-01T01:05:00.000Z',
+          },
+        },
+      }),
+    );
+
+    const env = baseEnv({ TAKEOUT_INPUT_DIR: inputDir, TAKEOUT_WORK_DIR: workDir, TRANSFER_STATE_PATH: statePath });
+    const app = Fastify();
+    await registerTakeoutRoutes(app, env);
+
+    const res = await app.inject({ method: 'GET', url: '/takeout/status' });
+    const body = res.json();
+    expect(res.statusCode).toBe(200);
+
+    const archive = body.archiveHistory[0];
+    expect(archive.archiveName).toBe('takeout-clean.tgz');
+    expect(archive.notUploadedReasons).toBeUndefined();
+
+    await app.close();
+  });
+
+  it('returns notUploadedReasons for legacy archives without skipReasons field', async () => {
+    const inputDir = path.join(tempDir, 'input');
+    const workDir = path.join(tempDir, 'work');
+    const statePath = path.join(tempDir, 'state.json');
+    await fs.mkdir(inputDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workDir, 'manifest.jsonl'),
+      `${JSON.stringify({ destinationKey: 'a.jpg' })}\n`,
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        items: {},
+      }),
+    );
+    // Legacy archive-state: has failedCount but no skipReasons field
+    await fs.writeFile(
+      path.join(workDir, 'archive-state.json'),
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        archives: {
+          'takeout-legacy.tgz': {
+            status: 'failed',
+            entryCount: 20,
+            uploadedCount: 15,
+            skippedCount: 2,
+            failedCount: 3,
+            archiveSizeBytes: 100_000_000,
+            startedAt: '2025-01-01T01:00:00.000Z',
+            completedAt: '2025-01-01T01:05:00.000Z',
+            error: '3 item(s) failed',
+          },
+        },
+      }),
+    );
+
+    const env = baseEnv({ TAKEOUT_INPUT_DIR: inputDir, TAKEOUT_WORK_DIR: workDir, TRANSFER_STATE_PATH: statePath });
+    const app = Fastify();
+    await registerTakeoutRoutes(app, env);
+
+    const res = await app.inject({ method: 'GET', url: '/takeout/status' });
+    const body = res.json();
+    expect(res.statusCode).toBe(200);
+
+    const archive = body.archiveHistory[0];
+    expect(archive.archiveName).toBe('takeout-legacy.tgz');
+    // Legacy archives have no skipReasons, so only failedCount is shown
+    expect(archive.notUploadedReasons).toEqual([
+      { code: 'upload_failed', label: 'Upload failed', count: 3 },
+    ]);
+
+    await app.close();
   });
 });
 
