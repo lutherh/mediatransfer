@@ -33,6 +33,8 @@ export type TakeoutPathOverrides = Partial<Record<OverridablePathName, string>>;
 /** @deprecated — Use TakeoutPathOverrides instead. */
 export type TakeoutConfigOverrides = TakeoutPathOverrides;
 
+type RequiredPathName = Exclude<OverridablePathName, 'archiveDir'>;
+
 /**
  * Parse CLI arguments for all overridable path flags.
  * Returns a TakeoutPathOverrides with values found in argv.
@@ -62,7 +64,7 @@ export function parseTakeoutPathArgs(argv: string[]): TakeoutPathOverrides {
 export function loadTakeoutConfig(env?: Env, overrides?: TakeoutPathOverrides): TakeoutConfig {
   const source = env ?? loadEnv();
 
-  function resolvePath(name: OverridablePathName): string {
+  function resolvePath(name: RequiredPathName): string {
     const override = overrides?.[name];
     if (override) return path.resolve(override);
     return path.resolve(source[OVERRIDABLE_PATHS[name].envKey]);

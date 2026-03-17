@@ -254,7 +254,7 @@ function Lightbox({
   const [showInfo, setShowInfo] = useState(false);
   // ── Toolbar auto-hide ──
   const [toolbarVisible, setToolbarVisible] = useState(true);
-  const hideTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /** Reset transient lightbox state whenever the viewed item changes. */
   useEffect(() => {
