@@ -86,7 +86,7 @@ function formatSectionDate(dateStr: string): string {
   }
   // Same year → omit year for brevity; otherwise include it
   if (year === now.getFullYear()) {
-    return `${SHORT_MONTHS[month]} ${day}, ${year}`;
+    return `${SHORT_MONTHS[month]} ${day}`;
   }
   return `${SHORT_MONTHS[month]} ${day}, ${year}`;
 }
@@ -506,7 +506,14 @@ function Thumbnail({
       onClick={handleClick}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenLightbox(lightboxIndex); } }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          if (e.shiftKey) onShiftClick(lightboxIndex);
+          else if (selectionMode) onToggleSelect();
+          else onOpenLightbox(lightboxIndex);
+        }
+      }}
       title={item.capturedAt.slice(0, 10)}
     >
       {/* Skeleton placeholder – pulsing gray shown until image loads */}
@@ -514,15 +521,17 @@ function Thumbnail({
         <div className="absolute inset-0 animate-pulse bg-slate-300" />
       )}
 
-      {/* Actual thumbnail image – fades in once loaded */}
+      {/* Actual thumbnail image – fades in once loaded; select-none prevents
+          accidental text selection during multi-select drag (Immich pattern) */}
       <img
         src={catalogMediaUrl(item.encodedKey, apiToken)}
         loading="lazy"
-        className={`h-full w-full object-cover transition-all duration-300 ${
+        className={`h-full w-full select-none object-cover transition-all duration-300 ${
           loaded ? 'opacity-100' : 'opacity-0'
         } ${!selectionMode ? 'group-hover:scale-105' : ''} ${selected ? 'brightness-75' : ''}`}
         onLoad={() => setLoaded(true)}
         onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; setLoaded(true); }}
+        draggable={false}
       />
 
       {/* Video play icon overlay */}
@@ -784,13 +793,20 @@ export function CatalogPage() {
 
   // ── Selection callbacks ──
 
-  /** Toggle a single item's selection state. Updates the lastSelectedIndex ref. */
+  /**
+   * Toggle a single item's selection state. Only updates lastSelectedIndex
+   * when selecting (adding), not when deselecting — so shift-click ranges
+   * anchor from the last *selected* item, not the last *toggled* item.
+   */
   const toggleSelect = useCallback((encodedKey: string, flatIndex: number) => {
-    lastSelectedIndexRef.current = flatIndex;
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(encodedKey)) next.delete(encodedKey);
-      else next.add(encodedKey);
+      if (next.has(encodedKey)) {
+        next.delete(encodedKey);
+      } else {
+        next.add(encodedKey);
+        lastSelectedIndexRef.current = flatIndex;
+      }
       return next;
     });
   }, []);
@@ -978,12 +994,11 @@ export function CatalogPage() {
                 onToggleAll={toggleSection}
               />
               {/*
-                Grid container uses `select-none` to prevent accidental text
-                selection during multi-select drag operations (Immich pattern).
                 Larger tiles: 3/4/6/8 cols (Google Photos style) with rounded-lg
-                and gap-1.5 for breathing room.
+                and gap-1.5 for breathing room. select-none is applied per-image
+                to prevent drag selection while keeping dates accessible.
               */}
-              <div className="grid select-none grid-cols-3 gap-1.5 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
+              <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
                 {items.map((item, i) => (
                   <Thumbnail
                     key={item.encodedKey}
