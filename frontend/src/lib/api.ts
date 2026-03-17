@@ -125,6 +125,15 @@ export type TakeoutArchiveHistoryEntry = {
   failedCount: number;
   handledPercent: number;
   isFullyUploaded: boolean;
+  notUploadedReasons?: Array<{
+    code:
+      | 'already_exists_in_destination'
+      | 'already_uploaded_in_state'
+      | 'already_skipped_in_state'
+      | 'upload_failed';
+    label: string;
+    count: number;
+  }>;
   startedAt?: string;
   completedAt?: string;
   error?: string;

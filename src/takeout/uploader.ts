@@ -9,8 +9,14 @@ export type UploadStateItem = {
   status: 'uploaded' | 'skipped' | 'failed';
   attempts: number;
   updatedAt: string;
+  skipReason?: UploadSkipReason;
   error?: string;
 };
+
+export type UploadSkipReason =
+  | 'already_uploaded_in_state'
+  | 'already_skipped_in_state'
+  | 'already_exists_in_destination';
 
 export type UploadState = {
   version: 1;
@@ -24,6 +30,7 @@ export type UploadSummary = {
   uploaded: number;
   skipped: number;
   failed: number;
+  skipReasons?: Record<UploadSkipReason, number>;
   dryRun: boolean;
   stoppedEarly: boolean;
   failureLimitReached: boolean;
@@ -153,6 +160,11 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
     uploaded: 0,
     skipped: 0,
     failed: 0,
+    skipReasons: {
+      already_uploaded_in_state: 0,
+      already_skipped_in_state: 0,
+      already_exists_in_destination: 0,
+    },
     dryRun,
     stoppedEarly: false,
     failureLimitReached: false,
@@ -208,7 +220,22 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
 
   const processEntry = async (entry: ManifestEntry): Promise<void> => {
     const existingState = state.items[entry.destinationKey];
-    if (existingState?.status === 'uploaded' || existingState?.status === 'skipped') {
+    if (existingState?.status === 'uploaded') {
+      summary.skipReasons!.already_uploaded_in_state += 1;
+      summary.skipped += 1;
+      summary.processed += 1;
+      emitSnapshot('running', true, {
+        key: entry.destinationKey,
+        sourcePath: entry.sourcePath,
+        sizeBytes: entry.size,
+        attempt: existingState.attempts,
+        status: 'skipped',
+      });
+      return;
+    }
+
+    if (existingState?.status === 'skipped') {
+      summary.skipReasons!.already_skipped_in_state += 1;
       summary.skipped += 1;
       summary.processed += 1;
       emitSnapshot('running', true, {
@@ -235,10 +262,12 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
     }
 
     if (destinationExists) {
+      summary.skipReasons!.already_exists_in_destination += 1;
       state.items[entry.destinationKey] = {
         status: 'skipped',
         attempts: existingState?.attempts ?? 0,
         updatedAt: new Date().toISOString(),
+        skipReason: 'already_exists_in_destination',
       };
       checkpointManager.markDirty();
       summary.skipped += 1;

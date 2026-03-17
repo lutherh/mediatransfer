@@ -429,12 +429,158 @@ describe('reconcileArchiveEntries', () => {
         skippedCount: 0,
         failedCount: 0,
       },
+      'all-skipped-uploading.tgz': {
+        status: 'uploading',
+        entryCount: 100,
+        uploadedCount: 0,
+        skippedCount: 100,
+        failedCount: 0,
+      },
+      'failed-but-all-handled.tgz': {
+        status: 'failed',
+        entryCount: 591,
+        uploadedCount: 0,
+        skippedCount: 591,
+        failedCount: 0,
+        error: 'ENOENT: no such file or directory, mkdir \'\\\\?\'',
+      },
+      'failed-with-real-failures.tgz': {
+        status: 'failed',
+        entryCount: 200,
+        uploadedCount: 190,
+        skippedCount: 5,
+        failedCount: 5,
+        error: '5 item(s) failed in archive upload',
+      },
     });
 
-    expect(reconciled).toBe(3);
+    expect(reconciled).toBe(5);
     expect(archives['completed.tgz']?.status).toBe('completed');
     expect(archives['unprocessed.tgz']).toBeUndefined();
     expect(archives['partial-upload.tgz']?.status).toBe('failed');
     expect(archives['fully-uploaded.tgz']?.status).toBe('completed');
+    expect(archives['all-skipped-uploading.tgz']?.status).toBe('completed');
+    expect(archives['failed-but-all-handled.tgz']?.status).toBe('completed');
+    expect(archives['failed-but-all-handled.tgz']?.error).toBeUndefined();
+    expect(archives['failed-with-real-failures.tgz']?.status).toBe('failed');
+  });
+});
+
+describe('post-upload error does not overwrite completed status', () => {
+  it('keeps completed status when moveArchive fails after successful upload', async () => {
+    await withTempDir(async (root) => {
+      const config = configFrom(root);
+      await fs.mkdir(config.inputDir, { recursive: true });
+
+      const archivePath = path.join(config.inputDir, 'takeout-move-fail.zip');
+      await fs.writeFile(archivePath, 'dummy');
+
+      const provider = new MockProvider();
+
+      const extractor = async (_archive: string, destinationDir: string) => {
+        const media = path.join(destinationDir, 'Google Photos', 'Album', 'IMG_1.jpg');
+        await fs.mkdir(path.dirname(media), { recursive: true });
+        await fs.writeFile(media, 'img-content');
+      };
+
+      // Use moveArchiveAfterUpload with an invalid completedArchiveDir to trigger error
+      const result = await runTakeoutIncremental(config, provider, {
+        moveArchiveAfterUpload: true,
+        completedArchiveDir: path.join(root, 'non', 'existent', '\0invalid'),
+      }, extractor);
+
+      // The upload itself succeeded — data is in the provider
+      expect(provider.objects.size).toBe(1);
+
+      // Archive status must remain 'completed' despite the post-upload error
+      const archiveStatePath = path.join(config.workDir, 'archive-state.json');
+      const archiveState = await loadArchiveState(archiveStatePath);
+      const record = archiveState.archives['takeout-move-fail.zip'];
+      expect(record).toBeDefined();
+      expect(record.status).toBe('completed');
+      expect(record.failedCount).toBe(0);
+      expect(record.uploadedCount).toBe(1);
+
+      // Should count as processed, not failed
+      expect(result.processedArchives).toBe(1);
+      expect(result.failedArchives).toBe(0);
+    });
+  });
+});
+
+describe('skipReasons propagation to archive-state', () => {
+  it('stores skipReasons in archive-state when S3 duplicates are detected', async () => {
+    await withTempDir(async (root) => {
+      const config = configFrom(root);
+      await fs.mkdir(config.inputDir, { recursive: true });
+
+      const archivePath = path.join(config.inputDir, 'takeout-dup.zip');
+      await fs.writeFile(archivePath, 'dummy');
+
+      const provider = new MockProvider();
+
+      const extractor = async (_archive: string, destinationDir: string) => {
+        const media = path.join(destinationDir, 'Google Photos', 'Album', 'IMG_1.jpg');
+        await fs.mkdir(path.dirname(media), { recursive: true });
+        await fs.writeFile(media, 'img-content');
+      };
+
+      // First run: upload succeeds
+      const firstResult = await runTakeoutIncremental(config, provider, {}, extractor);
+      expect(firstResult.totalUploaded).toBe(1);
+
+      // Reset archive state AND global upload state to force re-processing
+      // while keeping S3 objects intact — this simulates starting fresh with
+      // files already present in the destination bucket.
+      const archiveStatePath = path.join(config.workDir, 'archive-state.json');
+      await fs.unlink(archiveStatePath);
+      await fs.unlink(config.statePath).catch(() => {});
+      // Also clean up the manifest so the incremental flow rebuilds it
+      await fs.unlink(path.join(config.workDir, 'manifest.jsonl')).catch(() => {});
+
+      // Re-create archive so it gets picked up again
+      await fs.writeFile(archivePath, 'dummy');
+
+      // Second run: entry already exists in S3 from first run
+      const secondResult = await runTakeoutIncremental(config, provider, {}, extractor);
+      expect(secondResult.totalSkipped).toBeGreaterThanOrEqual(1);
+
+      const archiveState = await loadArchiveState(archiveStatePath);
+      const record = archiveState.archives['takeout-dup.zip'];
+      expect(record).toBeDefined();
+      expect(record.status).toBe('completed');
+      expect(record.skipReasons).toBeDefined();
+      expect(record.skipReasons?.already_exists_in_destination).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it('stores zero-count skipReasons when no duplicates exist', async () => {
+    await withTempDir(async (root) => {
+      const config = configFrom(root);
+      await fs.mkdir(config.inputDir, { recursive: true });
+
+      const archivePath = path.join(config.inputDir, 'takeout-clean.zip');
+      await fs.writeFile(archivePath, 'dummy');
+
+      const provider = new MockProvider();
+
+      const extractor = async (_archive: string, destinationDir: string) => {
+        const media = path.join(destinationDir, 'Google Photos', 'Album', 'IMG_1.jpg');
+        await fs.mkdir(path.dirname(media), { recursive: true });
+        await fs.writeFile(media, 'img-content');
+      };
+
+      const result = await runTakeoutIncremental(config, provider, {}, extractor);
+      expect(result.totalUploaded).toBe(1);
+
+      const archiveStatePath = path.join(config.workDir, 'archive-state.json');
+      const archiveState = await loadArchiveState(archiveStatePath);
+      const record = archiveState.archives['takeout-clean.zip'];
+      expect(record).toBeDefined();
+      expect(record.skipReasons).toBeDefined();
+      expect(record.skipReasons?.already_exists_in_destination).toBe(0);
+      expect(record.skipReasons?.already_uploaded_in_state).toBe(0);
+      expect(record.skipReasons?.already_skipped_in_state).toBe(0);
+    });
   });
 });

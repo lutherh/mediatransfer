@@ -5,7 +5,7 @@ import os from 'node:os';
 import { createReadStream } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import type { Env } from '../../config/env.js';
-import type { UploadState, UploadStateItem } from '../../takeout/uploader.js';
+import type { UploadSkipReason, UploadState, UploadStateItem } from '../../takeout/uploader.js';
 import { OVERRIDABLE_PATHS, type OverridablePathName } from '../../takeout/config.js';
 import {
   loadPipelineState,
@@ -89,6 +89,11 @@ type ArchiveHistoryEntry = {
   failedCount: number;
   handledPercent: number;
   isFullyUploaded: boolean;
+  notUploadedReasons?: Array<{
+    code: UploadSkipReason | 'upload_failed';
+    label: string;
+    count: number;
+  }>;
   startedAt?: string;
   completedAt?: string;
   error?: string;
@@ -1408,6 +1413,7 @@ async function buildArchiveHistory(
         failedCount: item.failedCount,
         handledPercent,
         isFullyUploaded,
+        notUploadedReasons: buildNotUploadedReasons(item),
         startedAt: item.startedAt,
         completedAt: item.completedAt,
         error: item.error,
@@ -1425,6 +1431,38 @@ async function buildArchiveHistory(
   });
 
   return entries;
+}
+
+function buildNotUploadedReasons(item: ArchiveStateItem): ArchiveHistoryEntry['notUploadedReasons'] {
+  const reasons: NonNullable<ArchiveHistoryEntry['notUploadedReasons']> = [];
+
+  const skipReasonCounts = item.skipReasons ?? {};
+  const reasonDefinitions: Array<{ code: UploadSkipReason; label: string }> = [
+    { code: 'already_exists_in_destination', label: 'Already exists in S3' },
+    { code: 'already_uploaded_in_state', label: 'Already uploaded in previous run' },
+    { code: 'already_skipped_in_state', label: 'Already skipped in previous run' },
+  ];
+
+  for (const reason of reasonDefinitions) {
+    const count = skipReasonCounts[reason.code] ?? 0;
+    if (count > 0) {
+      reasons.push({
+        code: reason.code,
+        label: reason.label,
+        count,
+      });
+    }
+  }
+
+  if (item.failedCount > 0) {
+    reasons.push({
+      code: 'upload_failed',
+      label: 'Upload failed',
+      count: item.failedCount,
+    });
+  }
+
+  return reasons.length > 0 ? reasons : undefined;
 }
 
 async function resolveArchiveSizeBytes(

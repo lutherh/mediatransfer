@@ -643,6 +643,7 @@ export function TakeoutProgressPage() {
                   <th className="py-2 pr-3 font-medium">TGZ Size</th>
                   <th className="py-2 pr-3 font-medium">Handled Data</th>
                   <th className="py-2 pr-3 font-medium">Items</th>
+                  <th className="py-2 pr-3 font-medium">Not Uploaded Reason</th>
                   <th className="py-2 pr-3 font-medium">Status</th>
                   <th className="py-2 font-medium">Finished</th>
                 </tr>
@@ -655,6 +656,9 @@ export function TakeoutProgressPage() {
                     <td className="py-2 pr-3 text-slate-700 tabular-nums">{formatBytesAsGb(record.mediaBytes)}</td>
                     <td className="py-2 pr-3 text-slate-700 tabular-nums">
                       {record.uploadedCount.toLocaleString()} / {record.entryCount.toLocaleString()}
+                    </td>
+                    <td className="py-2 pr-3 text-slate-600">
+                      <ArchiveNotUploadedReasons record={record} />
                     </td>
                     <td className="py-2 pr-3">
                       <ArchiveStatusPill record={record} />
@@ -942,9 +946,10 @@ function ArchiveStatusPill({ record }: { record: TakeoutArchiveHistoryEntry }): 
     || record.failedCount > 0;
 
   if (record.isFullyUploaded) {
+    const allSkipped = record.uploadedCount === 0 && record.skippedCount > 0;
     return (
       <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-medium text-green-800">
-        100% uploaded
+        {allSkipped ? 'All previously uploaded' : '100% uploaded'}
       </span>
     );
   }
@@ -969,6 +974,24 @@ function ArchiveStatusPill({ record }: { record: TakeoutArchiveHistoryEntry }): 
     <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
       {record.status} ({record.handledPercent.toFixed(0)}%)
     </span>
+  );
+}
+
+function ArchiveNotUploadedReasons({ record }: { record: TakeoutArchiveHistoryEntry }): ReactElement {
+  const reasons = record.notUploadedReasons ?? [];
+
+  if (reasons.length === 0) {
+    return <span className="text-slate-400">-</span>;
+  }
+
+  return (
+    <ul className="space-y-1">
+      {reasons.map((reason) => (
+        <li key={reason.code} className="text-[11px] leading-tight">
+          {reason.count.toLocaleString()} {reason.label.toLowerCase()}
+        </li>
+      ))}
+    </ul>
   );
 }
 
