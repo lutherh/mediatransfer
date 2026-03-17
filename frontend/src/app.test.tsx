@@ -89,6 +89,7 @@ vi.mock('@/lib/api', () => ({
     exitCode: 0,
     output: [],
   })),
+  setAutoUpload: vi.fn(async () => ({ enabled: true })),
   runTakeoutAction: vi.fn(),
   createTransfer: vi.fn(),
   fetchGoogleAuthStatus: vi.fn(async () => ({
