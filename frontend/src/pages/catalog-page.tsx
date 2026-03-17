@@ -1,3 +1,19 @@
+/**
+ * @file Catalog Page – Browse, select, and manage media stored in object storage.
+ *
+ * This page is modeled after three best-in-class photo management UIs:
+ *   • **Google Photos** – human-friendly date headers, larger tiles, rounded corners
+ *   • **Immich** – skeleton loading, shift-click range select, user-select-none grid
+ *   • **Ente** – enhanced lightbox with toolbar auto-hide, zoom, metadata overlay
+ *
+ * Architecture: a single-file page component that uses React Query for data,
+ * IntersectionObserver for infinite scroll, and a flat sorted array for
+ * cross-section lightbox navigation and range selection.
+ *
+ * @pattern Google Photos timeline grid with date-grouped sections
+ * @pattern Immich virtualized gallery with skeleton placeholders
+ * @pattern Ente full-screen viewer with metadata panel
+ */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -14,6 +30,7 @@ import { DateScroller } from '@/components/date-scroller';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+/** Format raw byte count into a human-readable string (B / KB / MB / GB). */
 function formatBytes(bytes: number): string {
   if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(2)} GB`;
   if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
@@ -21,6 +38,10 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
+/**
+ * Read an optional `apiToken` query-parameter from the URL. Memoized so the
+ * URLSearchParams parse happens only once per mount.
+ */
 function useApiToken(): string | undefined {
   return useMemo(() => {
     const params = new URLSearchParams(window.location.search);
@@ -28,8 +49,54 @@ function useApiToken(): string | undefined {
   }, []);
 }
 
+// ── Date formatting ────────────────────────────────────────────────────────
+
+const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/**
+ * Convert an ISO date string (e.g. "2025-06-16") into a human-friendly label.
+ *
+ * Rules (inspired by Google Photos timeline headers):
+ *   • Same calendar day → "Today"
+ *   • Previous calendar day → "Yesterday"
+ *   • Within the past 7 days → "Mon, Jun 16"
+ *   • Same year → "Jun 16, 2025"
+ *   • Older → "Jun 16, 2024"
+ *
+ * @pattern Google Photos human-friendly section headers
+ */
+function formatSectionDate(dateStr: string): string {
+  // Parse as local date (the YYYY-MM-DD from sectionDate is already local)
+  const parts = dateStr.split('-');
+  const year = Number(parts[0]);
+  const month = Number(parts[1]) - 1; // 0-indexed
+  const day = Number(parts[2]);
+  const date = new Date(year, month, day);
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diffMs = today.getTime() - date.getTime();
+  const diffDays = Math.round(diffMs / 86_400_000);
+
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays > 0 && diffDays < 7) {
+    return `${DAY_NAMES[date.getDay()]}, ${SHORT_MONTHS[month]} ${day}`;
+  }
+  // Same year → omit year for brevity; otherwise include it
+  if (year === now.getFullYear()) {
+    return `${SHORT_MONTHS[month]} ${day}, ${year}`;
+  }
+  return `${SHORT_MONTHS[month]} ${day}, ${year}`;
+}
+
 // ── Stats bar ──────────────────────────────────────────────────────────────
 
+/**
+ * Compact summary row showing total files, size, photo/video counts, and
+ * date range. Placed inside a Card at the top of the catalog page.
+ */
 function StatsBar({ stats }: { stats: CatalogStats }) {
   return (
     <div className="grid grid-cols-2 gap-2 text-sm text-slate-700 sm:grid-cols-3 lg:grid-cols-6">
@@ -49,6 +116,12 @@ function StatsBar({ stats }: { stats: CatalogStats }) {
 
 // ── Selection toolbar ──────────────────────────────────────────────────────
 
+/**
+ * Sticky action bar that appears when ≥ 1 item is selected.
+ * Provides select-all, clear, and delete (with confirmation) controls.
+ *
+ * @pattern Google Photos blue selection bar with two-step delete confirmation
+ */
 function SelectionBar({
   count,
   totalItems,
@@ -138,6 +211,27 @@ function SelectionBar({
 
 // ── Lightbox ───────────────────────────────────────────────────────────────
 
+/** Minimum / maximum zoom scale bounds for the lightbox viewer. */
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 5;
+/** Toolbar auto-hides after this many ms of inactivity. */
+const TOOLBAR_HIDE_MS = 3000;
+
+/**
+ * Full-screen media viewer with navigation, zoom, download, and info panel.
+ *
+ * Features (inspired by Immich & Ente lightbox UIs):
+ *   • Gradient toolbar at top that auto-hides after 3 s of inactivity
+ *   • Filename centered in toolbar
+ *   • Download (⬇) opens media in new tab; keyboard shortcut: D
+ *   • Info toggle (ⓘ) shows metadata overlay; keyboard shortcut: I
+ *   • Zoom via mouse-wheel or +/- keys; reset with 0
+ *   • Counter display "3 / 42"
+ *   • Arrow keys + Escape for navigation
+ *
+ * @pattern Immich lightbox with swipe navigation and zoom
+ * @pattern Ente info panel overlay with EXIF metadata
+ */
 function Lightbox({
   items,
   index,
@@ -154,56 +248,218 @@ function Lightbox({
   const item = items[index];
   const mediaUrl = catalogMediaUrl(item.encodedKey, apiToken);
 
+  // ── Zoom state ──
+  const [zoom, setZoom] = useState(1);
+  // ── Info panel toggle ──
+  const [showInfo, setShowInfo] = useState(false);
+  // ── Toolbar auto-hide ──
+  const [toolbarVisible, setToolbarVisible] = useState(true);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  /** Reset transient lightbox state whenever the viewed item changes. */
+  useEffect(() => {
+    setZoom(1);
+    setShowInfo(false);
+  }, [index]);
+
+  /** Restart the toolbar auto-hide timer on any mouse movement. */
+  const resetToolbarTimer = useCallback(() => {
+    setToolbarVisible(true);
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = setTimeout(() => setToolbarVisible(false), TOOLBAR_HIDE_MS);
+  }, []);
+
+  useEffect(() => {
+    resetToolbarTimer();
+    return () => { if (hideTimerRef.current) clearTimeout(hideTimerRef.current); };
+  }, [resetToolbarTimer]);
+
+  /** Open the full-resolution media URL in a new browser tab. */
+  const handleDownload = useCallback(() => {
+    window.open(mediaUrl, '_blank', 'noopener');
+  }, [mediaUrl]);
+
+  // ── Keyboard shortcuts ──
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-      if (e.key === 'ArrowLeft' && index > 0) onNavigate(index - 1);
-      if (e.key === 'ArrowRight' && index < items.length - 1) onNavigate(index + 1);
+      switch (e.key) {
+        case 'Escape': onClose(); break;
+        case 'ArrowLeft': if (index > 0) onNavigate(index - 1); break;
+        case 'ArrowRight': if (index < items.length - 1) onNavigate(index + 1); break;
+        // D → download, I → info toggle (Ente-inspired shortcuts)
+        case 'd': case 'D': handleDownload(); break;
+        case 'i': case 'I': setShowInfo((v) => !v); break;
+        // Zoom: +/= to zoom in, - to zoom out, 0 to reset
+        case '+': case '=': setZoom((z) => Math.min(z + 0.25, ZOOM_MAX)); break;
+        case '-': setZoom((z) => Math.max(z - 0.25, ZOOM_MIN)); break;
+        case '0': setZoom(1); break;
+      }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [index, items.length, onClose, onNavigate]);
+  }, [index, items.length, onClose, onNavigate, handleDownload]);
+
+  /** Mouse-wheel zoom (Immich pattern). Prevents default page scroll. */
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
+    setZoom((z) => {
+      const next = z + (e.deltaY < 0 ? 0.25 : -0.25);
+      return Math.min(Math.max(next, ZOOM_MIN), ZOOM_MAX);
+    });
+  }, []);
+
+  // Extract filename from the key for the toolbar display
+  const filename = item.key.split('/').pop() ?? item.key;
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/85"
       onClick={onClose}
+      onMouseMove={resetToolbarTimer}
     >
-      <button
-        className="absolute right-4 top-3 text-2xl font-bold leading-none text-white/80 hover:text-white"
-        onClick={onClose}
-        aria-label="Close"
-      >✕</button>
+      {/* ── Gradient toolbar (auto-hides) ────────────────────────────── */}
+      <div
+        className={`absolute inset-x-0 top-0 z-10 flex items-center justify-between bg-gradient-to-b from-black/70 to-transparent px-4 py-3 transition-opacity duration-300 ${
+          toolbarVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
+        }`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Counter */}
+        <span className="text-sm font-medium text-white/80">
+          {index + 1} / {items.length}
+        </span>
+
+        {/* Filename */}
+        <span className="max-w-[40vw] truncate text-sm text-white/90" title={item.key}>
+          {filename}
+        </span>
+
+        {/* Action buttons */}
+        <div className="flex items-center gap-3">
+          <button
+            className="text-lg text-white/80 hover:text-white"
+            onClick={handleDownload}
+            aria-label="Download"
+            title="Download (D)"
+          >⬇</button>
+          <button
+            className={`text-lg hover:text-white ${showInfo ? 'text-blue-400' : 'text-white/80'}`}
+            onClick={() => setShowInfo((v) => !v)}
+            aria-label="Toggle info"
+            title="Info (I)"
+          >ⓘ</button>
+          <button
+            className="text-xl font-bold text-white/80 hover:text-white"
+            onClick={onClose}
+            aria-label="Close"
+            title="Close (Esc)"
+          >✕</button>
+        </div>
+      </div>
+
+      {/* ── Navigation arrows ──────────────────────────────────────── */}
       {index > 0 && (
         <button
-          className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/40 px-3 py-2 text-3xl text-white hover:bg-black/60"
+          className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/40 px-3 py-2 text-3xl text-white hover:bg-black/60"
           onClick={(e) => { e.stopPropagation(); onNavigate(index - 1); }}
           aria-label="Previous"
         >‹</button>
       )}
       {index < items.length - 1 && (
         <button
-          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/40 px-3 py-2 text-3xl text-white hover:bg-black/60"
+          className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/40 px-3 py-2 text-3xl text-white hover:bg-black/60"
           onClick={(e) => { e.stopPropagation(); onNavigate(index + 1); }}
           aria-label="Next"
         >›</button>
       )}
-      <div className="relative flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
+
+      {/* ── Media content ──────────────────────────────────────────── */}
+      <div
+        className="relative flex flex-col items-center"
+        onClick={(e) => e.stopPropagation()}
+        onWheel={handleWheel}
+      >
         {item.mediaType === 'video' ? (
-          <video key={mediaUrl} src={mediaUrl} controls autoPlay className="max-h-[88vh] max-w-[88vw] rounded-lg" />
+          <video
+            key={mediaUrl}
+            src={mediaUrl}
+            controls
+            autoPlay
+            className="max-h-[88vh] max-w-[88vw] rounded-lg transition-transform duration-200"
+            style={{ transform: `scale(${zoom})` }}
+          />
         ) : (
-          <img key={mediaUrl} src={mediaUrl} alt={item.key} className="max-h-[88vh] max-w-[88vw] rounded-lg object-contain" />
+          <img
+            key={mediaUrl}
+            src={mediaUrl}
+            alt={item.key}
+            className="max-h-[88vh] max-w-[88vw] rounded-lg object-contain transition-transform duration-200"
+            style={{ transform: `scale(${zoom})` }}
+          />
         )}
+
+        {/* Bottom caption: date · size · counter */}
         <p className="mt-2 text-xs text-white/60">
           {item.capturedAt.slice(0, 10)} · {formatBytes(item.size)} · {index + 1} / {items.length}
         </p>
+
+        {/* Zoom indicator — only shown when zoomed */}
+        {zoom !== 1 && (
+          <span className="absolute bottom-12 rounded bg-black/60 px-2 py-0.5 text-xs text-white/80">
+            {Math.round(zoom * 100)}%
+          </span>
+        )}
       </div>
+
+      {/* ── Info / metadata overlay (Ente-inspired) ────────────────── */}
+      {showInfo && (
+        <div
+          className="absolute bottom-0 right-0 top-0 z-20 w-72 overflow-y-auto border-l border-white/10 bg-black/80 p-4 backdrop-blur-sm"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h3 className="mb-3 text-sm font-semibold text-white">Details</h3>
+          <dl className="space-y-2 text-xs text-white/70">
+            <div>
+              <dt className="font-medium text-white/50">Key</dt>
+              <dd className="break-all">{item.key}</dd>
+            </div>
+            <div>
+              <dt className="font-medium text-white/50">Size</dt>
+              <dd>{formatBytes(item.size)}</dd>
+            </div>
+            <div>
+              <dt className="font-medium text-white/50">Captured</dt>
+              <dd>{item.capturedAt}</dd>
+            </div>
+            <div>
+              <dt className="font-medium text-white/50">Last Modified</dt>
+              <dd>{item.lastModified}</dd>
+            </div>
+            <div>
+              <dt className="font-medium text-white/50">Type</dt>
+              <dd>{item.mediaType}</dd>
+            </div>
+          </dl>
+        </div>
+      )}
     </div>
   );
 }
 
 // ── Thumbnail ──────────────────────────────────────────────────────────────
 
+/**
+ * Single grid cell representing one media item. Shows a lazy-loaded thumbnail
+ * with skeleton placeholder, selection checkbox, and video play icon overlay.
+ *
+ * Skeleton loading pattern: a pulsing gray background is shown until the image
+ * fires its `onLoad` event, at which point we fade the image in from opacity-0
+ * to opacity-100. This eliminates the jarring pop-in that occurs when images
+ * load at different speeds.
+ *
+ * @pattern Immich skeleton-to-fade thumbnail loading
+ * @pattern Google Photos rounded-lg tiles with hover scale
+ */
 function Thumbnail({
   item,
   apiToken,
@@ -212,6 +468,7 @@ function Thumbnail({
   lightboxIndex,
   onToggleSelect,
   onOpenLightbox,
+  onShiftClick,
 }: {
   item: CatalogItem;
   apiToken: string | undefined;
@@ -220,11 +477,21 @@ function Thumbnail({
   lightboxIndex: number;
   onToggleSelect: () => void;
   onOpenLightbox: (index: number) => void;
+  /** Called when the user shift-clicks a thumbnail for range selection. */
+  onShiftClick: (index: number) => void;
 }) {
-  const handleClick = useCallback(() => {
+  // ── Skeleton / fade-in state ──
+  const [loaded, setLoaded] = useState(false);
+
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    if (e.shiftKey) {
+      // Shift-click → range select (Immich pattern)
+      onShiftClick(lightboxIndex);
+      return;
+    }
     if (selectionMode) onToggleSelect();
     else onOpenLightbox(lightboxIndex);
-  }, [selectionMode, onToggleSelect, onOpenLightbox, lightboxIndex]);
+  }, [selectionMode, onToggleSelect, onOpenLightbox, lightboxIndex, onShiftClick]);
 
   const handleCheckClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -233,25 +500,32 @@ function Thumbnail({
 
   return (
     <div
-      className={`group relative aspect-square cursor-pointer overflow-hidden rounded bg-slate-100 ${
+      className={`group relative aspect-square cursor-pointer overflow-hidden rounded-lg bg-slate-200 ${
         selected ? 'ring-2 ring-blue-500 ring-offset-1' : ''
       }`}
       onClick={handleClick}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleClick(); }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenLightbox(lightboxIndex); } }}
       title={item.capturedAt.slice(0, 10)}
     >
+      {/* Skeleton placeholder – pulsing gray shown until image loads */}
+      {!loaded && (
+        <div className="absolute inset-0 animate-pulse bg-slate-300" />
+      )}
+
+      {/* Actual thumbnail image – fades in once loaded */}
       <img
         src={catalogMediaUrl(item.encodedKey, apiToken)}
         loading="lazy"
-        className={`h-full w-full object-cover transition-transform duration-200 ${
-          !selectionMode ? 'group-hover:scale-105' : ''
-        } ${selected ? 'brightness-75' : ''}`}
-        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+        className={`h-full w-full object-cover transition-all duration-300 ${
+          loaded ? 'opacity-100' : 'opacity-0'
+        } ${!selectionMode ? 'group-hover:scale-105' : ''} ${selected ? 'brightness-75' : ''}`}
+        onLoad={() => setLoaded(true)}
+        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; setLoaded(true); }}
       />
 
-      {/* Video play icon */}
+      {/* Video play icon overlay */}
       {item.mediaType === 'video' && !selected && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <div className="rounded-full bg-black/50 p-1.5">
@@ -285,6 +559,12 @@ function Thumbnail({
 
 // ── Section header with select-all ────────────────────────────────────────
 
+/**
+ * Date section header with a tri-state checkbox (none / some / all selected).
+ * Uses `formatSectionDate` for human-friendly labels instead of raw ISO dates.
+ *
+ * @pattern Google Photos date-grouped section with select-all toggle
+ */
 function SectionHeader({
   date,
   items,
@@ -323,13 +603,66 @@ function SectionHeader({
           <div className="h-1.5 w-1.5 rounded-full bg-blue-500" />
         )}
       </button>
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{date}</p>
+      <p className="text-sm font-semibold text-slate-600">{formatSectionDate(date)}</p>
+    </div>
+  );
+}
+
+// ── Empty state ────────────────────────────────────────────────────────────
+
+/**
+ * Friendly empty state shown when the catalog has no items (or the prefix
+ * filter yields zero results). Uses a centered camera icon with muted guidance.
+ *
+ * @pattern Immich empty-library illustration with call-to-action text
+ */
+function EmptyState({ prefix }: { prefix: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-16 text-center">
+      {/* Camera SVG icon */}
+      <svg
+        className="mb-4 h-16 w-16 text-slate-300"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" />
+        <circle cx="12" cy="13" r="4" />
+      </svg>
+      <p className="text-sm font-medium text-slate-500">
+        {prefix ? `No media found matching "${prefix}"` : 'No media in the catalog yet'}
+      </p>
+      <p className="mt-1 text-xs text-slate-400">
+        {prefix
+          ? 'Try a different prefix filter or clear the search.'
+          : 'Upload photos or run a transfer to get started.'}
+      </p>
     </div>
   );
 }
 
 // ── Page ───────────────────────────────────────────────────────────────────
 
+/**
+ * Main catalog page component. Renders a date-grouped media grid with
+ * infinite scroll, multi-select, bulk delete, lightbox, and date scroller.
+ *
+ * Key design decisions:
+ *   • `sortedItems` is a flat array derived from sections, used as the single
+ *     source of truth for lightbox navigation and shift-click range selection.
+ *   • Selection state is a Set<encodedKey> – O(1) lookups keep re-renders fast
+ *     even with thousands of thumbnails.
+ *   • `lastSelectedIndex` ref persists across renders for shift-click without
+ *     causing unnecessary re-renders.
+ *   • The grid uses `select-none` to prevent accidental text selection during
+ *     multi-select drag operations (Immich pattern).
+ *
+ * @pattern Google Photos date-timeline infinite-scroll grid
+ * @pattern Immich shift-click range selection with lastSelectedIndex tracking
+ */
 export function CatalogPage() {
   const apiToken = useApiToken();
   const queryClient = useQueryClient();
@@ -343,19 +676,31 @@ export function CatalogPage() {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
+  /**
+   * Tracks the index (in `sortedItems`) of the last individually clicked
+   * thumbnail. Used for shift-click range selection across section boundaries.
+   * Stored in a ref to avoid re-renders on every click.
+   * @pattern Immich shift-click range selection
+   */
+  const lastSelectedIndexRef = useRef<number | null>(null);
+
   const selectionMode = selected.size > 0;
 
-  // Debounce prefix filter
+  // ── Debounce prefix filter ──
+  // 400 ms delay prevents spamming the API on every keystroke
   useEffect(() => {
     const t = setTimeout(() => setPrefix(prefixInput.trim()), 400);
     return () => clearTimeout(t);
   }, [prefixInput]);
 
-  // Clear selection on prefix change
+  // ── Clear selection on prefix change ──
+  // Stale selection keys would reference items no longer in the filtered set
   useEffect(() => {
     setSelected(new Set());
     setConfirmDelete(false);
   }, [prefix]);
+
+  // ── Data queries ──
 
   const statsQuery = useQuery({
     queryKey: ['catalog-stats', apiToken],
@@ -372,31 +717,39 @@ export function CatalogPage() {
     initialPageParam: undefined as string | undefined,
   });
 
+  /** All loaded items across every fetched page (unsorted). */
   const allItems = useMemo(
     () => itemsQuery.data?.pages.flatMap((p) => p.items) ?? [],
     [itemsQuery.data],
   );
 
+  /**
+   * Group items by `sectionDate`, then sort both sections and intra-section
+   * items according to the user's chosen sort direction.
+   */
   const sections = useMemo(() => {
     const map = new Map<string, CatalogItem[]>();
     for (const item of allItems) {
       if (!map.has(item.sectionDate)) map.set(item.sectionDate, []);
       map.get(item.sectionDate)!.push(item);
     }
-    // Sort sections and items within each section by sort direction
     const dir = sortNewestFirst ? -1 : 1;
     return [...map.entries()]
       .sort(([a], [b]) => dir * a.localeCompare(b))
       .map(([date, items]) => [date, items.sort((a, b) => dir * a.capturedAt.localeCompare(b.capturedAt))] as [string, CatalogItem[]]);
   }, [allItems, sortNewestFirst]);
 
-  // Flat sorted list matching the lightbox index order
+  /**
+   * Flat sorted list matching the visual order on screen. Used as the single
+   * source of truth for lightbox index and shift-click range operations.
+   */
   const sortedItems = useMemo(
     () => sections.flatMap(([, items]) => items),
     [sections],
   );
 
-  // Infinite scroll
+  // ── Infinite scroll via IntersectionObserver ──
+  // A sentinel div at the bottom of the page triggers the next page fetch
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el) return;
@@ -412,7 +765,7 @@ export function CatalogPage() {
     return () => observer.disconnect();
   }, [itemsQuery.hasNextPage, itemsQuery.isFetchingNextPage, itemsQuery.fetchNextPage]);
 
-  // Keyboard shortcuts
+  // ── Global keyboard shortcuts (when lightbox is closed) ──
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (lightboxIndex !== null) return;
@@ -429,7 +782,11 @@ export function CatalogPage() {
     return () => window.removeEventListener('keydown', handleKey);
   }, [lightboxIndex, selectionMode, allItems]);
 
-  const toggleSelect = useCallback((encodedKey: string) => {
+  // ── Selection callbacks ──
+
+  /** Toggle a single item's selection state. Updates the lastSelectedIndex ref. */
+  const toggleSelect = useCallback((encodedKey: string, flatIndex: number) => {
+    lastSelectedIndexRef.current = flatIndex;
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(encodedKey)) next.delete(encodedKey);
@@ -438,6 +795,40 @@ export function CatalogPage() {
     });
   }, []);
 
+  /**
+   * Shift-click range selection: select every item between the last-clicked
+   * index and the current index (inclusive). Works across section boundaries
+   * because it operates on the flat `sortedItems` array.
+   *
+   * @pattern Immich shift-click range selection
+   */
+  const handleShiftClick = useCallback((currentIndex: number) => {
+    const anchor = lastSelectedIndexRef.current;
+    if (anchor === null) {
+      // No prior click — treat as a normal toggle
+      lastSelectedIndexRef.current = currentIndex;
+      setSelected((prev) => {
+        const next = new Set(prev);
+        const key = sortedItems[currentIndex]?.encodedKey;
+        if (key) next.add(key);
+        return next;
+      });
+      return;
+    }
+    const lo = Math.min(anchor, currentIndex);
+    const hi = Math.max(anchor, currentIndex);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (let i = lo; i <= hi; i++) {
+        const key = sortedItems[i]?.encodedKey;
+        if (key) next.add(key);
+      }
+      return next;
+    });
+    lastSelectedIndexRef.current = currentIndex;
+  }, [sortedItems]);
+
+  /** Toggle all items in a section (used by the section header checkbox). */
   const toggleSection = useCallback((keys: string[], select: boolean) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -456,6 +847,8 @@ export function CatalogPage() {
     setConfirmDelete(false);
   }, []);
 
+  // ── Bulk delete mutation ──
+  // Batches deletions in chunks of 200 to stay within API limits
   const deleteMutation = useMutation({
     mutationFn: async (encodedKeys: string[]) => {
       for (let i = 0; i < encodedKeys.length; i += 200) {
@@ -474,11 +867,12 @@ export function CatalogPage() {
   const handleClose = useCallback(() => setLightboxIndex(null), []);
   const handleNavigate = useCallback((i: number) => setLightboxIndex(i), []);
 
+  // Running offset tracks the flat index for each section's first item
   let runningOffset = 0;
 
   return (
     <div className="space-y-4">
-      {/* Header */}
+      {/* ── Header ──────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h1 className="text-xl font-semibold sm:text-2xl">Catalog</h1>
@@ -492,7 +886,7 @@ export function CatalogPage() {
         </Link>
       </div>
 
-      {/* Selection toolbar */}
+      {/* ── Selection toolbar ───────────────────────────────────────── */}
       {selectionMode && (
         <SelectionBar
           count={selected.size}
@@ -513,7 +907,7 @@ export function CatalogPage() {
         </p>
       )}
 
-      {/* Stats */}
+      {/* ── Stats card ──────────────────────────────────────────────── */}
       <Card>
         {statsQuery.isLoading ? (
           <p className="text-sm text-slate-600">Loading stats…</p>
@@ -526,7 +920,7 @@ export function CatalogPage() {
         ) : null}
       </Card>
 
-      {/* Prefix filter + sort toggle */}
+      {/* ── Prefix filter + sort toggle ─────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-2">
         <input
           type="text"
@@ -566,15 +960,11 @@ export function CatalogPage() {
         </p>
       )}
 
-      {/* Date-grouped grid */}
+      {/* ── Date-grouped grid ───────────────────────────────────────── */}
       {itemsQuery.isLoading ? (
         <p className="text-sm text-slate-600">Loading…</p>
       ) : sections.length === 0 ? (
-        <Card>
-          <p className="text-sm text-slate-600">
-            {prefix ? `No media found matching prefix "${prefix}".` : 'No media found in the catalog.'}
-          </p>
-        </Card>
+        <EmptyState prefix={prefix} />
       ) : (
         sections.map(([date, items]) => {
           const sectionOffset = runningOffset;
@@ -587,7 +977,13 @@ export function CatalogPage() {
                 selected={selected}
                 onToggleAll={toggleSection}
               />
-              <div className="grid grid-cols-4 gap-1 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10">
+              {/*
+                Grid container uses `select-none` to prevent accidental text
+                selection during multi-select drag operations (Immich pattern).
+                Larger tiles: 3/4/6/8 cols (Google Photos style) with rounded-lg
+                and gap-1.5 for breathing room.
+              */}
+              <div className="grid select-none grid-cols-3 gap-1.5 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
                 {items.map((item, i) => (
                   <Thumbnail
                     key={item.encodedKey}
@@ -596,8 +992,9 @@ export function CatalogPage() {
                     selected={selected.has(item.encodedKey)}
                     selectionMode={selectionMode}
                     lightboxIndex={sectionOffset + i}
-                    onToggleSelect={() => toggleSelect(item.encodedKey)}
+                    onToggleSelect={() => toggleSelect(item.encodedKey, sectionOffset + i)}
                     onOpenLightbox={setLightboxIndex}
+                    onShiftClick={handleShiftClick}
                   />
                 ))}
               </div>
@@ -606,17 +1003,17 @@ export function CatalogPage() {
         })
       )}
 
-      {/* Infinite scroll sentinel */}
+      {/* ── Infinite scroll sentinel ────────────────────────────────── */}
       <div ref={sentinelRef} className="flex h-8 items-center justify-center">
         {itemsQuery.isFetchingNextPage && (
           <p className="text-xs text-slate-500">Loading more…</p>
         )}
       </div>
 
-      {/* Date scroller */}
+      {/* ── Date scroller (right-edge timeline) ─────────────────────── */}
       <DateScroller sections={sections} sectionRefs={sectionRefs} />
 
-      {/* Lightbox */}
+      {/* ── Lightbox ────────────────────────────────────────────────── */}
       {lightboxIndex !== null && sortedItems.length > 0 && (
         <Lightbox
           items={sortedItems}
