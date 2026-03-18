@@ -19,6 +19,7 @@ import { Link } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   catalogMediaUrl,
+  catalogThumbnailUrl,
   deleteCatalogItems,
   fetchCatalogItems,
   fetchCatalogStats,
@@ -246,7 +247,12 @@ function Lightbox({
   onNavigate: (index: number) => void;
 }) {
   const item = items[index];
-  const mediaUrl = catalogMediaUrl(item.encodedKey, apiToken);
+  // Full-resolution URL for download only
+  const fullMediaUrl = catalogMediaUrl(item.encodedKey, apiToken);
+  // Lightbox preview: use large (1920px) thumbnail for images, full URL for videos
+  const previewUrl = item.mediaType === 'video'
+    ? fullMediaUrl
+    : catalogThumbnailUrl(item.encodedKey, 'large', apiToken);
 
   // ── Zoom state ──
   const [zoom, setZoom] = useState(1);
@@ -274,10 +280,10 @@ function Lightbox({
     return () => { if (hideTimerRef.current) clearTimeout(hideTimerRef.current); };
   }, [resetToolbarTimer]);
 
-  /** Open the full-resolution media URL in a new browser tab. */
+  /** Open the full-resolution media URL in a new browser tab for download. */
   const handleDownload = useCallback(() => {
-    window.open(mediaUrl, '_blank', 'noopener');
-  }, [mediaUrl]);
+    window.open(fullMediaUrl, '_blank', 'noopener');
+  }, [fullMediaUrl]);
 
   // ── Keyboard shortcuts ──
   useEffect(() => {
@@ -381,8 +387,8 @@ function Lightbox({
       >
         {item.mediaType === 'video' ? (
           <video
-            key={mediaUrl}
-            src={mediaUrl}
+            key={previewUrl}
+            src={previewUrl}
             controls
             autoPlay
             className="max-h-[88vh] max-w-[88vw] rounded-lg transition-transform duration-200"
@@ -390,8 +396,8 @@ function Lightbox({
           />
         ) : (
           <img
-            key={mediaUrl}
-            src={mediaUrl}
+            key={previewUrl}
+            src={previewUrl}
             alt={item.key}
             className="max-h-[88vh] max-w-[88vw] rounded-lg object-contain transition-transform duration-200"
             style={{ transform: `scale(${zoom})` }}
@@ -521,10 +527,14 @@ function Thumbnail({
         <div className="absolute inset-0 animate-pulse bg-slate-300" />
       )}
 
-      {/* Actual thumbnail image – fades in once loaded; select-none prevents
-          accidental text selection during multi-select drag (Immich pattern) */}
+      {/* Actual thumbnail image – uses small (256px) thumbnail for grid tiles
+          to reduce bandwidth ~99% vs full-resolution. Falls back to full media URL
+          for videos. Fades in once loaded; select-none prevents accidental text
+          selection during multi-select drag (Immich pattern) */}
       <img
-        src={catalogMediaUrl(item.encodedKey, apiToken)}
+        src={item.mediaType === 'video'
+          ? catalogMediaUrl(item.encodedKey, apiToken)
+          : catalogThumbnailUrl(item.encodedKey, 'small', apiToken)}
         loading="lazy"
         className={`h-full w-full select-none object-cover transition-all duration-300 ${
           loaded ? 'opacity-100' : 'opacity-0'

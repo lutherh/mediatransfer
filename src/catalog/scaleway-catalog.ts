@@ -9,6 +9,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { Readable } from 'node:stream';
+import sharp from 'sharp';
 import {
   resolveScalewayEndpoint,
   resolveScalewaySigningRegion,
@@ -44,6 +45,18 @@ export type CatalogStats = {
   videoCount: number;
   oldestDate: string | null;
   newestDate: string | null;
+};
+
+/**
+ * Allowed thumbnail size presets.
+ *   • `small`  – 256px longest edge, JPEG q80 (~15-30 KB) – grid tiles
+ *   • `large`  – 1920px longest edge, JPEG q85 (~200-400 KB) – lightbox preview
+ */
+export type ThumbnailSize = 'small' | 'large';
+
+export type ThumbnailResult = {
+  buffer: Buffer;
+  contentType: string;
 };
 
 export type DeleteResult = {
@@ -106,6 +119,8 @@ export type CatalogService = {
   moveObject(encodedKey: string, newDatePrefix: string): Promise<{ from: string; to: string }>;
   getAlbums(): Promise<AlbumsManifest>;
   saveAlbums(manifest: AlbumsManifest): Promise<void>;
+  /** Generate a resized thumbnail for the given media key. Returns JPEG buffer. */
+  getThumbnail(encodedKey: string, size: ThumbnailSize): Promise<ThumbnailResult>;
   /** Scan all objects and return groups of duplicates (same size + ETag). */
   findDuplicates(onProgress?: (listed: number) => void): Promise<DuplicateGroup[]>;
   /** Find and remove duplicates. Pass dryRun=true to preview without deleting. */
@@ -132,6 +147,47 @@ const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'avi', 'm4v', '3gp', 'mkv', 'web
 const DEFAULT_S3_REQUEST_TIMEOUT_MS = 300_000;
 const STATS_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_MAX_PAGE_RETRIES = 5;
+
+// ── Thumbnail configuration ─────────────────────────────────────────────────
+
+const THUMB_SIZES: Record<ThumbnailSize, { maxDimension: number; quality: number }> = {
+  small: { maxDimension: 256, quality: 80 },
+  large: { maxDimension: 1920, quality: 85 },
+};
+const THUMB_CACHE_MAX_ENTRIES = 500;
+const THUMB_CACHE_TTL_MS = 30 * 60_000; // 30 minutes
+
+type ThumbCacheEntry = { buffer: Buffer; contentType: string; expiresAt: number };
+
+/**
+ * Simple in-memory LRU cache for generated thumbnails. Evicts oldest entry
+ * when the cache exceeds THUMB_CACHE_MAX_ENTRIES or when entries expire.
+ */
+class ThumbnailCache {
+  private readonly map = new Map<string, ThumbCacheEntry>();
+
+  get(key: string): ThumbCacheEntry | undefined {
+    const entry = this.map.get(key);
+    if (!entry) return undefined;
+    if (Date.now() > entry.expiresAt) {
+      this.map.delete(key);
+      return undefined;
+    }
+    // Move to end (most-recently used)
+    this.map.delete(key);
+    this.map.set(key, entry);
+    return entry;
+  }
+
+  set(key: string, entry: ThumbCacheEntry): void {
+    if (this.map.size >= THUMB_CACHE_MAX_ENTRIES) {
+      // Evict oldest (first key)
+      const oldest = this.map.keys().next().value;
+      if (oldest !== undefined) this.map.delete(oldest);
+    }
+    this.map.set(key, entry);
+  }
+}
 
 /** Retry wrapper for S3 ListObjectsV2 — retries transient / timeout errors with linear backoff. */
 async function s3ListWithRetry(
@@ -168,6 +224,7 @@ export class ScalewayCatalogService implements CatalogService {
   private readonly s3RequestTimeoutMs: number;
   private readonly s3ListMaxRetries: number;
   private statsCache: { data: CatalogStats; expiresAt: number } | null = null;
+  private readonly thumbCache = new ThumbnailCache();
 
   constructor(config: ScalewayCatalogConfig, client?: S3Client) {
     this.bucket = config.bucket;
@@ -311,6 +368,67 @@ export class ScalewayCatalogService implements CatalogService {
       contentType: response.ContentType ?? inferContentType(decodedKey),
       contentLength: response.ContentLength,
     };
+  }
+
+  /**
+   * Generate a resized JPEG thumbnail for the given media key.
+   *
+   * Uses an in-memory LRU cache (30 min TTL, 500 entries) to avoid redundant
+   * S3 fetches + sharp resizing on repeated requests (e.g. scrolling back).
+   *
+   * @param encodedKey - Base64url-encoded S3 object key
+   * @param size       - 'small' (256px, grid) or 'large' (1920px, lightbox)
+   */
+  async getThumbnail(encodedKey: string, size: ThumbnailSize): Promise<ThumbnailResult> {
+    const cacheKey = `${size}:${encodedKey}`;
+    const cached = this.thumbCache.get(cacheKey);
+    if (cached) {
+      return { buffer: cached.buffer, contentType: cached.contentType };
+    }
+
+    // Fetch full object from S3
+    const decodedKey = decodeKey(encodedKey);
+    const fullKey = this.withPrefix(decodedKey);
+    const response = await this.client.send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: fullKey }),
+      { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
+    );
+
+    if (!response.Body) {
+      throw new Error(`Object has empty body: ${decodedKey}`);
+    }
+
+    const bodyStream =
+      response.Body instanceof Readable
+        ? response.Body
+        : Readable.fromWeb(response.Body as ReadableStream<Uint8Array>);
+
+    const sourceChunks: Buffer[] = [];
+    for await (const chunk of bodyStream) {
+      sourceChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const sourceBuffer = Buffer.concat(sourceChunks);
+
+    const { maxDimension, quality } = THUMB_SIZES[size];
+
+    const buffer = await sharp(sourceBuffer)
+      .rotate()                                // Auto-orient using EXIF
+      .resize(maxDimension, maxDimension, {
+        fit: 'inside',                         // Preserve aspect ratio
+        withoutEnlargement: true,              // Don't upscale small images
+      })
+      .jpeg({ quality, mozjpeg: true })        // MozJPEG for smaller output
+      .toBuffer();
+
+    const contentType = 'image/jpeg';
+
+    this.thumbCache.set(cacheKey, {
+      buffer,
+      contentType,
+      expiresAt: Date.now() + THUMB_CACHE_TTL_MS,
+    });
+
+    return { buffer, contentType };
   }
 
   async getStats(): Promise<CatalogStats> {

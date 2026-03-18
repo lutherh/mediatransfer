@@ -762,9 +762,24 @@ export type CatalogStats = {
   newestDate: string | null;
 };
 
-/** Returns the URL for streaming a catalog media object. */
+/** Returns the URL for streaming a catalog media object (full resolution). */
 export function catalogMediaUrl(encodedKey: string, apiToken?: string): string {
   const url = new URL(`/catalog/media/${encodedKey}`, API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  return url.toString();
+}
+
+/**
+ * Returns the URL for a resized catalog thumbnail.
+ *   • `small` – 256px grid tile (~15-30 KB)
+ *   • `large` – 1920px lightbox preview (~200-400 KB)
+ */
+export function catalogThumbnailUrl(
+  encodedKey: string,
+  size: 'small' | 'large',
+  apiToken?: string,
+): string {
+  const url = new URL(`/catalog/thumb/${size}/${encodedKey}`, API_BASE_URL);
   if (apiToken) url.searchParams.set('apiToken', apiToken);
   return url.toString();
 }
