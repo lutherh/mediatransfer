@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { CatalogService, DuplicateGroup } from '../../catalog/scaleway-catalog.js';
+import type { CatalogService, DuplicateGroup, ThumbnailSize } from '../../catalog/scaleway-catalog.js';
 import { extractExifMetadata } from '../../utils/exif.js';
 import { apiError } from '../errors.js';
 import { buildCatalogHtml } from './catalog-html.js';
@@ -34,6 +34,15 @@ const listQuerySchema = z.object({
 });
 
 const mediaParamsSchema = z.object({
+  encodedKey: z
+    .string()
+    .min(1)
+    .max(1024)
+    .regex(/^[A-Za-z0-9_-]+$/, 'encodedKey must be base64url-safe'),
+});
+
+const thumbnailParamsSchema = z.object({
+  size: z.enum(['small', 'large']),
   encodedKey: z
     .string()
     .min(1)
@@ -293,6 +302,44 @@ export async function registerCatalogRoutes(
     const body = z.object({ dryRun: z.boolean().optional() }).parse(req.body);
     const result = await catalogService.deduplicateObjects({ dryRun: body.dryRun });
     return result;
+  });
+
+  // ── Thumbnail endpoint ─────────────────────────────────────────────────
+  // Serves on-demand resized JPEG thumbnails for grid tiles (small=256px)
+  // and lightbox preview (large=1920px). Cached in-memory + aggressive
+  // browser caching (7 days) to minimize S3 GETs on scroll.
+  app.get('/catalog/thumb/:size/:encodedKey', { config: { rateLimit: { max: 3000, timeWindow: '1 minute' } } }, async (req, reply) => {
+    const catalogService = requireCatalog(catalog, reply);
+    if (!catalogService) {
+      return;
+    }
+
+    let params: { size: ThumbnailSize; encodedKey: string };
+    try {
+      params = thumbnailParamsSchema.parse(req.params);
+    } catch {
+      return reply.status(400).send(apiError('INVALID_PARAMS', 'size must be "small" or "large", encodedKey must be base64url'));
+    }
+
+    try {
+      const { buffer, contentType } = await catalogService.getThumbnail(params.encodedKey, params.size);
+      reply.type(contentType);
+      reply.header('Cache-Control', 'private, max-age=604800, stale-while-revalidate=2592000'); // 7d + 30d stale
+      reply.header('Content-Length', String(buffer.length));
+      return reply.send(buffer);
+    } catch (error) {
+      if (isCatalogObjectNotFound(error)) {
+        return reply.status(404).send({
+          ...apiError('CATALOG_MEDIA_NOT_FOUND', 'Catalog media not found'),
+          requestId: req.id,
+        });
+      }
+      // If sharp can't process the image (e.g. unsupported format), fall through to full media
+      if (error instanceof Error && error.message.includes('Input buffer')) {
+        return reply.status(415).send(apiError('UNSUPPORTED_FORMAT', 'Cannot generate thumbnail for this format'));
+      }
+      throw error;
+    }
   });
 
   app.get('/catalog/media/:encodedKey', { config: { rateLimit: { max: 2000, timeWindow: '1 minute' } } }, async (req, reply) => {

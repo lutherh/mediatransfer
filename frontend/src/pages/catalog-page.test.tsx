@@ -58,6 +58,7 @@ vi.mock('@/lib/api', () => ({
     nextToken: undefined,
   })),
   catalogMediaUrl: vi.fn((encodedKey: string) => `/catalog/media/${encodedKey}`),
+  catalogThumbnailUrl: vi.fn((encodedKey: string, size: string) => `/catalog/thumb/${size}/${encodedKey}`),
   deleteCatalogItems: vi.fn(async () => {}),
 }));
 
