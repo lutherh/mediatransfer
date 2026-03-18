@@ -799,12 +799,14 @@ export async function fetchCatalogItems(opts: {
   token?: string;
   prefix?: string;
   max?: number;
+  sort?: 'asc' | 'desc';
   apiToken?: string;
 }): Promise<CatalogPage> {
   const url = new URL('/catalog/api/items', API_BASE_URL);
   if (opts.token) url.searchParams.set('token', opts.token);
   if (opts.prefix) url.searchParams.set('prefix', opts.prefix);
   if (opts.max !== undefined) url.searchParams.set('max', String(opts.max));
+  if (opts.sort) url.searchParams.set('sort', opts.sort);
   if (opts.apiToken) url.searchParams.set('apiToken', opts.apiToken);
   const response = await fetch(url.toString());
   if (!response.ok) {

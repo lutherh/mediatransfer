@@ -31,6 +31,7 @@ const listQuerySchema = z.object({
   max: z.coerce.number().int().min(1).max(200).optional(),
   token: z.string().min(1).optional(),
   prefix: z.string().optional(),
+  sort: z.enum(['asc', 'desc']).optional(),
 });
 
 const mediaParamsSchema = z.object({
@@ -95,6 +96,7 @@ export async function registerCatalogRoutes(
         max: query.max,
         token: query.token,
         prefix: query.prefix,
+        sort: query.sort,
       });
       return page;
     } catch (err) {

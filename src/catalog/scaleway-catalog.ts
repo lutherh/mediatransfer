@@ -109,6 +109,7 @@ export type CatalogService = {
     max?: number;
     token?: string;
     prefix?: string;
+    sort?: 'asc' | 'desc';
   }): Promise<CatalogPage>;
   listAll(prefix?: string): Promise<CatalogItem[]>;
   getObject(encodedKey: string): Promise<CatalogObject>;
@@ -225,6 +226,7 @@ export class ScalewayCatalogService implements CatalogService {
   private readonly s3ListMaxRetries: number;
   private statsCache: { data: CatalogStats; expiresAt: number } | null = null;
   private readonly thumbCache = new ThumbnailCache();
+  private itemsIndexCache: { items: CatalogItem[]; expiresAt: number } | null = null;
 
   constructor(config: ScalewayCatalogConfig, client?: S3Client) {
     this.bucket = config.bucket;
@@ -244,7 +246,10 @@ export class ScalewayCatalogService implements CatalogService {
       });
   }
 
-  async listPage(input?: { max?: number; token?: string; prefix?: string }): Promise<CatalogPage> {
+  async listPage(input?: { max?: number; token?: string; prefix?: string; sort?: 'asc' | 'desc' }): Promise<CatalogPage> {
+    if (input?.sort === 'desc') {
+      return this.listPageDescending(input);
+    }
     const max = clamp(input?.max ?? 90, 1, 200);
     const prefix = this.fullPrefix(input?.prefix);
 
@@ -304,6 +309,44 @@ export class ScalewayCatalogService implements CatalogService {
       items,
       nextToken: continuationToken,
     };
+  }
+
+  /**
+   * Serve a page of items in descending (newest-first) order from a cached
+   * full index. The index is built lazily on first request and cached with
+   * the same TTL as stats (5 min). Pagination uses numeric offsets encoded
+   * as the nextToken string (e.g. "200").
+   */
+  private async listPageDescending(input?: { max?: number; token?: string; prefix?: string }): Promise<CatalogPage> {
+    const max = clamp(input?.max ?? 90, 1, 200);
+    const allItems = await this.getItemsIndex();
+
+    let items = allItems;
+    if (input?.prefix) {
+      const lowerPrefix = input.prefix.toLowerCase();
+      items = allItems.filter(item => item.key.toLowerCase().startsWith(lowerPrefix));
+    }
+
+    const offset = input?.token ? parseInt(input.token, 10) : 0;
+    if (Number.isNaN(offset) || offset < 0) {
+      return { items: [], nextToken: undefined };
+    }
+    const page = items.slice(offset, offset + max);
+    const nextOffset = offset + page.length;
+
+    return {
+      items: page,
+      nextToken: nextOffset < items.length ? String(nextOffset) : undefined,
+    };
+  }
+
+  private async getItemsIndex(): Promise<CatalogItem[]> {
+    if (this.itemsIndexCache && Date.now() < this.itemsIndexCache.expiresAt) {
+      return this.itemsIndexCache.items;
+    }
+    const items = await this.listAll();
+    this.itemsIndexCache = { items, expiresAt: Date.now() + STATS_CACHE_TTL_MS };
+    return items;
   }
 
   async getObject(encodedKey: string): Promise<CatalogObject> {
@@ -569,8 +612,9 @@ export class ScalewayCatalogService implements CatalogService {
       }
     }
 
-    // Invalidate stats cache after deletion
+    // Invalidate caches after deletion
     this.statsCache = null;
+    this.itemsIndexCache = null;
     return { deleted, failed };
   }
 
@@ -601,8 +645,9 @@ export class ScalewayCatalogService implements CatalogService {
       { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
     );
 
-    // Invalidate stats cache
+    // Invalidate caches
     this.statsCache = null;
+    this.itemsIndexCache = null;
     return { from: oldKey, to: newKey };
   }
 

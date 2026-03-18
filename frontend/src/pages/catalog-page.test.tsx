@@ -150,6 +150,46 @@ describe('CatalogPage', () => {
     expect(await screen.findByText(/Oldest first/)).toBeInTheDocument();
   });
 
+  it('passes sort=desc to the API by default', async () => {
+    const { fetchCatalogItems } = await import('@/lib/api');
+    renderCatalogPage();
+    await screen.findByText(/Newest first/);
+    expect(fetchCatalogItems).toHaveBeenCalledWith(
+      expect.objectContaining({ sort: 'desc' }),
+    );
+  });
+
+  it('passes sort=asc after toggling to oldest first', async () => {
+    const { fetchCatalogItems } = await import('@/lib/api');
+    renderCatalogPage();
+    const sortBtn = await screen.findByText(/Newest first/);
+    fireEvent.click(sortBtn);
+    await screen.findByText(/Oldest first/);
+    expect(fetchCatalogItems).toHaveBeenCalledWith(
+      expect.objectContaining({ sort: 'asc' }),
+    );
+  });
+
+  it('persists sort preference to localStorage', async () => {
+    // Provide a minimal localStorage stub if the test environment lacks one
+    const store: Record<string, string> = {};
+    const storageMock = {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => { store[key] = value; },
+      removeItem: (key: string) => { delete store[key]; },
+      clear: () => { for (const k of Object.keys(store)) delete store[k]; },
+      get length() { return Object.keys(store).length; },
+      key: (i: number) => Object.keys(store)[i] ?? null,
+    };
+    Object.defineProperty(window, 'localStorage', { value: storageMock, writable: true, configurable: true });
+
+    renderCatalogPage();
+    const sortBtn = await screen.findByText(/Newest first/);
+    fireEvent.click(sortBtn);
+    await screen.findByText(/Oldest first/);
+    expect(store['catalog-sort-newest-first']).toBe('false');
+  });
+
   it('renders prefix filter input', async () => {
     renderCatalogPage();
     const input = await screen.findByPlaceholderText(/Filter by prefix/);
