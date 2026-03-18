@@ -691,7 +691,14 @@ export function CatalogPage() {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [sortNewestFirst, setSortNewestFirst] = useState(true);
+  const [sortNewestFirst, setSortNewestFirst] = useState(() => {
+    try {
+      const saved = localStorage.getItem('catalog-sort-newest-first');
+      return saved !== null ? saved === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
   const sentinelRef = useRef<HTMLDivElement>(null);
   const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
@@ -702,6 +709,11 @@ export function CatalogPage() {
    * @pattern Immich shift-click range selection
    */
   const lastSelectedIndexRef = useRef<number | null>(null);
+
+  // Persist sort preference
+  useEffect(() => {
+    try { localStorage.setItem('catalog-sort-newest-first', String(sortNewestFirst)); } catch { /* test/SSR */ }
+  }, [sortNewestFirst]);
 
   const selectionMode = selected.size > 0;
 
@@ -728,10 +740,12 @@ export function CatalogPage() {
     staleTime: 60_000,
   });
 
+  const sortDirection = sortNewestFirst ? 'desc' : 'asc';
+
   const itemsQuery = useInfiniteQuery({
-    queryKey: ['catalog-items', prefix, apiToken],
+    queryKey: ['catalog-items', prefix, sortDirection, apiToken],
     queryFn: ({ pageParam }) =>
-      fetchCatalogItems({ token: pageParam as string | undefined, prefix: prefix || undefined, max: 100, apiToken }),
+      fetchCatalogItems({ token: pageParam as string | undefined, prefix: prefix || undefined, max: 100, sort: sortDirection, apiToken }),
     getNextPageParam: (lastPage) => lastPage.nextToken,
     initialPageParam: undefined as string | undefined,
   });

@@ -85,6 +85,81 @@ describe('scaleway catalog service', () => {
     expect(page.items[0]?.sectionDate).toBe('2021-09-14');
   });
 
+  describe('listPage with sort=desc', () => {
+    function makeDescService() {
+      let callCount = 0;
+      const send = vi.fn(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            Contents: [
+              { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
+              { Key: '2021/06/15/b.jpg', Size: 200, LastModified: new Date('2021-06-15') },
+              { Key: '2024/03/10/c.mp4', Size: 300, LastModified: new Date('2024-03-10') },
+              { Key: '2025/12/25/d.jpg', Size: 400, LastModified: new Date('2025-12-25') },
+            ],
+            IsTruncated: false,
+          };
+        }
+        return { Contents: [], IsTruncated: false };
+      });
+      return makeService(send);
+    }
+
+    it('returns items sorted newest-first', async () => {
+      const service = makeDescService();
+      const page = await service.listPage({ max: 10, sort: 'desc' });
+      expect(page.items).toHaveLength(4);
+      expect(page.items[0]?.key).toBe('2025/12/25/d.jpg');
+      expect(page.items[3]?.key).toBe('2020/01/01/a.jpg');
+    });
+
+    it('paginates with numeric offset tokens', async () => {
+      const service = makeDescService();
+      const page1 = await service.listPage({ max: 2, sort: 'desc' });
+      expect(page1.items).toHaveLength(2);
+      expect(page1.nextToken).toBe('2');
+      expect(page1.items[0]?.key).toBe('2025/12/25/d.jpg');
+
+      const page2 = await service.listPage({ max: 2, token: page1.nextToken, sort: 'desc' });
+      expect(page2.items).toHaveLength(2);
+      expect(page2.items[0]?.key).toBe('2021/06/15/b.jpg');
+      expect(page2.nextToken).toBeUndefined();
+    });
+
+    it('filters by prefix', async () => {
+      const service = makeDescService();
+      const page = await service.listPage({ max: 10, prefix: '2020', sort: 'desc' });
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0]?.key).toBe('2020/01/01/a.jpg');
+    });
+
+    it('returns empty for invalid token', async () => {
+      const service = makeDescService();
+      const page = await service.listPage({ max: 10, token: 'not-a-number', sort: 'desc' });
+      expect(page.items).toHaveLength(0);
+      expect(page.nextToken).toBeUndefined();
+    });
+
+    it('caches index across calls', async () => {
+      let listCallCount = 0;
+      const send = vi.fn(async () => {
+        listCallCount++;
+        return {
+          Contents: [
+            { Key: '2025/01/01/a.jpg', Size: 100, LastModified: new Date('2025-01-01') },
+          ],
+          IsTruncated: false,
+        };
+      });
+      const service = makeService(send);
+      await service.listPage({ sort: 'desc' });
+      await service.listPage({ sort: 'desc' });
+      // Second call should use cache — only 1 S3 list call
+      expect(listCallCount).toBe(1);
+    });
+  });
+
   describe('listAll', () => {
     it('returns all items across multiple pages', async () => {
       let callCount = 0;
@@ -212,6 +287,38 @@ describe('scaleway catalog service', () => {
       await service.getStats();
       expect(statsCallCount).toBeGreaterThan(firstCount);
     });
+
+    it('invalidates items index cache after deletion', async () => {
+      let listCallCount = 0;
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'ListObjectsV2Command') {
+          listCallCount++;
+          return {
+            Contents: [
+              { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
+            ],
+            IsTruncated: false,
+          };
+        }
+        if (name === 'DeleteObjectsCommand') {
+          return { Deleted: [{ Key: '2020/01/01/a.jpg' }], Errors: [] };
+        }
+        return {};
+      });
+
+      const service = makeService(send);
+      // Prime index cache via desc listing
+      await service.listPage({ sort: 'desc' });
+      const firstCount = listCallCount;
+      // Use cache
+      await service.listPage({ sort: 'desc' });
+      expect(listCallCount).toBe(firstCount);
+      // Delete should invalidate index cache
+      await service.deleteObjects([encodeKey('2020/01/01/a.jpg')]);
+      await service.listPage({ sort: 'desc' });
+      expect(listCallCount).toBeGreaterThan(firstCount);
+    });
   });
 
   describe('moveObject', () => {
@@ -242,6 +349,34 @@ describe('scaleway catalog service', () => {
       const service = makeService(send);
       const result = await service.moveObject(encodeKey('2026/02/24/IMG_20200315_120000.jpg'), '2020/03/15');
       expect(result.to).toBe('2020/03/15/IMG_20200315_120000.jpg');
+    });
+
+    it('invalidates items index cache after move', async () => {
+      let listCallCount = 0;
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'ListObjectsV2Command') {
+          listCallCount++;
+          return {
+            Contents: [
+              { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
+            ],
+            IsTruncated: false,
+          };
+        }
+        return {};
+      });
+
+      const service = makeService(send);
+      // Prime index cache
+      await service.listPage({ sort: 'desc' });
+      const firstCount = listCallCount;
+      await service.listPage({ sort: 'desc' });
+      expect(listCallCount).toBe(firstCount);
+      // Move should invalidate index cache
+      await service.moveObject(encodeKey('2020/01/01/a.jpg'), '2021/05/10');
+      await service.listPage({ sort: 'desc' });
+      expect(listCallCount).toBeGreaterThan(firstCount);
     });
   });
 
