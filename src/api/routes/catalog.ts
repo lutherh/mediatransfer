@@ -334,8 +334,8 @@ export async function registerCatalogRoutes(
           requestId: req.id,
         });
       }
-      // If sharp can't process the image (e.g. unsupported format), fall through to full media
-      if (error instanceof Error && error.message.includes('Input buffer')) {
+      // Detect sharp image processing failures (unsupported format, corrupt data, etc.)
+      if (isImageProcessingError(error)) {
         return reply.status(415).send(apiError('UNSUPPORTED_FORMAT', 'Cannot generate thumbnail for this format'));
       }
       throw error;
@@ -481,4 +481,21 @@ function isCatalogObjectNotFound(error: unknown): boolean {
 
   const maybeMetadata = error as Error & { $metadata?: { httpStatusCode?: number } };
   return error.name === 'NoSuchKey' || maybeMetadata.$metadata?.httpStatusCode === 404;
+}
+
+/** Detect sharp / libvips image processing errors (corrupt data, unsupported format, etc.). */
+const IMAGE_PROCESSING_ERROR_PATTERNS = [
+  'Input buffer',        // "Input buffer contains unsupported image format"
+  'Input file',          // "Input file is missing"
+  'unsupported image',   // "unsupported image format"
+  'Corrupt JPEG',        // "VipsJpeg: Corrupt JPEG data"
+  'Vips',                // General libvips error prefix
+  'heif:',               // HEIF decoding errors
+  'Invalid SOS',         // Corrupt JPEG marker
+];
+
+function isImageProcessingError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const msg = error.message;
+  return IMAGE_PROCESSING_ERROR_PATTERNS.some((pattern) => msg.includes(pattern));
 }
