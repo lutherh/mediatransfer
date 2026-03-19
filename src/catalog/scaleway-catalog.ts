@@ -429,8 +429,12 @@ export class ScalewayCatalogService implements CatalogService {
       return { buffer: cached.buffer, contentType: cached.contentType };
     }
 
-    // Fetch full object from S3
+    // Reject video files early — sharp can't process them and we'd waste
+    // bandwidth downloading the full video from S3 just to fail.
     const decodedKey = decodeKey(encodedKey);
+    if (inferMediaType(decodedKey) === 'video') {
+      throw Object.assign(new Error('Video thumbnails not supported'), { code: 'UNSUPPORTED_FORMAT' });
+    }
     const fullKey = this.withPrefix(decodedKey);
     const response = await this.client.send(
       new GetObjectCommand({ Bucket: this.bucket, Key: fullKey }),
