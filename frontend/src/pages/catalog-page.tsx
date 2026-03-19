@@ -455,13 +455,13 @@ function Lightbox({
 // ── Thumbnail ──────────────────────────────────────────────────────────────
 
 /**
- * Single grid cell representing one media item. Shows a lazy-loaded thumbnail
- * with skeleton placeholder, selection checkbox, and video play icon overlay.
+ * Single grid cell representing one media item. Uses IntersectionObserver to
+ * only start loading the thumbnail when the cell is near the viewport (200px
+ * margin). This prevents hundreds of concurrent requests when scrolling through
+ * thousands of items.
  *
- * Skeleton loading pattern: a pulsing gray background is shown until the image
- * fires its `onLoad` event, at which point we fade the image in from opacity-0
- * to opacity-100. This eliminates the jarring pop-in that occurs when images
- * load at different speeds.
+ * Both images and videos use the small thumbnail endpoint — videos are never
+ * loaded as full media files in the grid.
  *
  * @pattern Immich skeleton-to-fade thumbnail loading
  * @pattern Google Photos rounded-lg tiles with hover scale
@@ -486,12 +486,36 @@ function Thumbnail({
   /** Called when the user shift-clicks a thumbnail for range selection. */
   onShiftClick: (index: number) => void;
 }) {
-  // ── Skeleton / fade-in state ──
+  const cellRef = useRef<HTMLDivElement>(null);
+  const [isNearViewport, setIsNearViewport] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [thumbError, setThumbError] = useState(false);
+
+  // Observe when the cell enters a 200px margin around the viewport
+  useEffect(() => {
+    const el = cellRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setIsNearViewport(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '200px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const thumbUrl = catalogThumbnailUrl(item.encodedKey, 'small', apiToken);
+  // Fallback for videos if the server can't generate a thumbnail (415)
+  const fallbackUrl = thumbError && item.mediaType === 'video'
+    ? catalogMediaUrl(item.encodedKey, apiToken)
+    : undefined;
 
   const handleClick = useCallback((e: React.MouseEvent) => {
     if (e.shiftKey) {
-      // Shift-click → range select (Immich pattern)
       onShiftClick(lightboxIndex);
       return;
     }
@@ -506,6 +530,7 @@ function Thumbnail({
 
   return (
     <div
+      ref={cellRef}
       className={`group relative aspect-square cursor-pointer overflow-hidden rounded-lg bg-slate-200 ${
         selected ? 'ring-2 ring-blue-500 ring-offset-1' : ''
       }`}
@@ -527,22 +552,25 @@ function Thumbnail({
         <div className="absolute inset-0 animate-pulse bg-slate-300" />
       )}
 
-      {/* Actual thumbnail image – uses small (256px) thumbnail for grid tiles
-          to reduce bandwidth ~99% vs full-resolution. Falls back to full media URL
-          for videos. Fades in once loaded; select-none prevents accidental text
-          selection during multi-select drag (Immich pattern) */}
-      <img
-        src={item.mediaType === 'video'
-          ? catalogMediaUrl(item.encodedKey, apiToken)
-          : catalogThumbnailUrl(item.encodedKey, 'small', apiToken)}
-        loading="lazy"
-        className={`h-full w-full select-none object-cover transition-all duration-300 ${
-          loaded ? 'opacity-100' : 'opacity-0'
-        } ${!selectionMode ? 'group-hover:scale-105' : ''} ${selected ? 'brightness-75' : ''}`}
-        onLoad={() => setLoaded(true)}
-        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; setLoaded(true); }}
-        draggable={false}
-      />
+      {/* Only render the img tag when the cell is near the viewport */}
+      {isNearViewport && (
+        <img
+          src={fallbackUrl ?? thumbUrl}
+          className={`h-full w-full select-none object-cover transition-all duration-300 ${
+            loaded ? 'opacity-100' : 'opacity-0'
+          } ${!selectionMode ? 'group-hover:scale-105' : ''} ${selected ? 'brightness-75' : ''}`}
+          onLoad={() => setLoaded(true)}
+          onError={() => {
+            if (!thumbError && item.mediaType === 'video') {
+              // Thumbnail generation failed for this video — fall back to poster frame
+              setThumbError(true);
+            } else {
+              setLoaded(true);
+            }
+          }}
+          draggable={false}
+        />
+      )}
 
       {/* Video play icon overlay */}
       {item.mediaType === 'video' && !selected && (
