@@ -21,10 +21,12 @@ import {
   catalogMediaUrl,
   catalogThumbnailUrl,
   deleteCatalogItems,
+  fetchCatalogExif,
   fetchCatalogItems,
   fetchCatalogStats,
   type CatalogItem,
   type CatalogStats,
+  type ExifData,
 } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { DateScroller } from '@/components/date-scroller';
@@ -104,7 +106,7 @@ function formatSectionDate(dateStr: string): string {
  */
 function StatsBar({ stats }: { stats: CatalogStats }) {
   return (
-    <div className="grid grid-cols-2 gap-2 text-sm text-slate-700 sm:grid-cols-3 lg:grid-cols-6">
+    <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-slate-700 sm:grid-cols-3 lg:grid-cols-6">
       <div><span className="font-medium">Files:</span> {stats.totalFiles.toLocaleString()}</div>
       <div><span className="font-medium">Size:</span> {formatBytes(stats.totalBytes)}</div>
       <div><span className="font-medium">Photos:</span> {stats.imageCount.toLocaleString()}</div>
@@ -149,7 +151,7 @@ function SelectionBar({
   onCancelConfirm: () => void;
 }) {
   return (
-    <div className="sticky top-0 z-40 flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 shadow-sm">
+    <div className="sticky top-0 z-40 flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 shadow-sm">
       <button
         type="button"
         onClick={onClearAll}
@@ -210,6 +212,92 @@ function SelectionBar({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Lightbox info panel ────────────────────────────────────────────────────
+
+/**
+ * Rich metadata overlay for the lightbox. Shows basic file properties plus
+ * EXIF data (dimensions, camera, GPS) fetched on demand via `fetchCatalogExif`.
+ *
+ * @pattern Google Photos info panel with camera details and location
+ * @pattern Ente metadata sidebar
+ */
+function InfoPanel({ item, apiToken }: { item: CatalogItem; apiToken: string | undefined }) {
+  const exifQuery = useQuery({
+    queryKey: ['catalog-exif', item.encodedKey],
+    queryFn: () => fetchCatalogExif(item.encodedKey, apiToken),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+
+  const exif = exifQuery.data;
+
+  return (
+    <div
+      className="absolute bottom-0 right-0 top-0 z-20 w-72 overflow-y-auto border-l border-white/10 bg-black/80 p-4 backdrop-blur-sm"
+      onClick={(e) => e.stopPropagation()}
+      role="complementary"
+      aria-label="File details"
+    >
+      <h3 className="mb-3 text-sm font-semibold text-white">Details</h3>
+      <dl className="space-y-2 text-xs text-white/70">
+        <div>
+          <dt className="font-medium text-white/50">Key</dt>
+          <dd className="break-all">{item.key}</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-white/50">Size</dt>
+          <dd>{formatBytes(item.size)}</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-white/50">Captured</dt>
+          <dd>{item.capturedAt}</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-white/50">Last Modified</dt>
+          <dd>{item.lastModified}</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-white/50">Type</dt>
+          <dd>{item.mediaType}</dd>
+        </div>
+
+        {/* ── EXIF data (fetched on demand) ── */}
+        {exifQuery.isLoading && (
+          <div className="pt-2 text-[10px] text-white/40">Loading EXIF…</div>
+        )}
+        {exif && (
+          <>
+            {(exif.width || exif.height) && (
+              <div>
+                <dt className="font-medium text-white/50">Dimensions</dt>
+                <dd>{exif.width} × {exif.height}</dd>
+              </div>
+            )}
+            {(exif.make || exif.model) && (
+              <div>
+                <dt className="font-medium text-white/50">Camera</dt>
+                <dd>{[exif.make, exif.model].filter(Boolean).join(' ')}</dd>
+              </div>
+            )}
+            {exif.capturedAt && (
+              <div>
+                <dt className="font-medium text-white/50">EXIF Date</dt>
+                <dd>{exif.capturedAt}</dd>
+              </div>
+            )}
+            {exif.latitude != null && exif.longitude != null && (
+              <div>
+                <dt className="font-medium text-white/50">Location</dt>
+                <dd>{exif.latitude.toFixed(6)}, {exif.longitude.toFixed(6)}</dd>
+              </div>
+            )}
+          </>
+        )}
+      </dl>
     </div>
   );
 }
@@ -339,6 +427,8 @@ function Lightbox({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/85"
       onClick={onClose}
       onMouseMove={resetToolbarTimer}
+      role="dialog"
+      aria-label="Media viewer"
     >
       {/* ── Gradient toolbar (auto-hides) ────────────────────────────── */}
       <div
@@ -459,36 +549,9 @@ function Lightbox({
         )}
       </div>
 
-      {/* ── Info / metadata overlay (Ente-inspired) ────────────────── */}
+      {/* ── Info / metadata overlay (Ente-inspired + Google Photos EXIF) ── */}
       {showInfo && (
-        <div
-          className="absolute bottom-0 right-0 top-0 z-20 w-72 overflow-y-auto border-l border-white/10 bg-black/80 p-4 backdrop-blur-sm"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <h3 className="mb-3 text-sm font-semibold text-white">Details</h3>
-          <dl className="space-y-2 text-xs text-white/70">
-            <div>
-              <dt className="font-medium text-white/50">Key</dt>
-              <dd className="break-all">{item.key}</dd>
-            </div>
-            <div>
-              <dt className="font-medium text-white/50">Size</dt>
-              <dd>{formatBytes(item.size)}</dd>
-            </div>
-            <div>
-              <dt className="font-medium text-white/50">Captured</dt>
-              <dd>{item.capturedAt}</dd>
-            </div>
-            <div>
-              <dt className="font-medium text-white/50">Last Modified</dt>
-              <dd>{item.lastModified}</dd>
-            </div>
-            <div>
-              <dt className="font-medium text-white/50">Type</dt>
-              <dd>{item.mediaType}</dd>
-            </div>
-          </dl>
-        </div>
+        <InfoPanel item={item} apiToken={apiToken} />
       )}
     </div>
   );
@@ -575,11 +638,11 @@ function Thumbnail({
   return (
     <div
       ref={cellRef}
-      className={`group relative aspect-square cursor-pointer overflow-hidden rounded-lg bg-slate-200 ${
+      className={`group relative aspect-square cursor-pointer overflow-hidden rounded-md bg-slate-200 ${
         selected ? 'ring-2 ring-blue-500 ring-offset-1' : ''
       }`}
       onClick={handleClick}
-      role="button"
+      role="gridcell"
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -689,7 +752,7 @@ function SectionHeader({
   const someSelected = !allSelected && keys.some((k) => selected.has(k));
 
   return (
-    <div className="flex items-center gap-2.5 py-1.5">
+    <div className="flex items-center gap-2 py-0.5">
       <button
         type="button"
         onClick={() => onToggleAll(keys, !allSelected)}
@@ -711,8 +774,33 @@ function SectionHeader({
           <div className="h-2 w-2 rounded-full bg-blue-500" />
         )}
       </button>
-      <h2 className="text-base font-bold text-slate-800">{formatSectionDate(date)}</h2>
-      <span className="text-xs text-slate-400">{items.length}</span>
+      <h2 className="text-sm font-semibold text-slate-800">{formatSectionDate(date)}</h2>
+      <span className="text-[10px] text-slate-400">{items.length}</span>
+    </div>
+  );
+}
+
+// ── Skeleton grid ──────────────────────────────────────────────────────────
+
+/**
+ * Pulsing placeholder grid shown while the initial catalog data is loading.
+ * Mimics the real grid layout so the page doesn't jump when content arrives.
+ *
+ * @pattern Google Photos skeleton loading tiles
+ */
+function SkeletonGrid() {
+  return (
+    <div className="space-y-2">
+      {[0, 1, 2].map((section) => (
+        <div key={section}>
+          <div className="mb-0.5 h-4 w-24 animate-pulse rounded bg-slate-200" />
+          <div className="grid grid-cols-3 gap-0.5 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
+            {Array.from({ length: section === 0 ? 16 : 8 }, (_, i) => (
+              <div key={i} className="aspect-square animate-pulse rounded-md bg-slate-200" />
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -753,6 +841,89 @@ function EmptyState({ prefix }: { prefix: string }) {
   );
 }
 
+// ── Keyboard shortcuts help dialog ────────────────────────────────────────
+
+/**
+ * Modal dialog listing all available keyboard shortcuts. Opened by pressing
+ * the `?` key (Google Photos pattern: "Press question mark to see shortcut
+ * keys available").
+ *
+ * @pattern Google Photos keyboard shortcut help dialog
+ */
+function ShortcutsDialog({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' || e.key === '?') onClose();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [onClose]);
+
+  const sections = [
+    {
+      title: 'Gallery',
+      shortcuts: [
+        ['Ctrl + A', 'Select all items'],
+        ['Esc', 'Clear selection'],
+        ['?', 'Show keyboard shortcuts'],
+      ],
+    },
+    {
+      title: 'Lightbox',
+      shortcuts: [
+        ['\u2190 / \u2192', 'Previous / next'],
+        ['Esc', 'Close'],
+        ['D', 'Download'],
+        ['I', 'Toggle info panel'],
+        ['+ / \u2212', 'Zoom in / out'],
+        ['0', 'Reset zoom'],
+      ],
+    },
+  ];
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm"
+      onClick={onClose}
+      role="dialog"
+      aria-label="Keyboard shortcuts"
+    >
+      <div
+        className="w-80 rounded-xl bg-white p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-base font-semibold text-slate-800">Keyboard shortcuts</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600"
+            aria-label="Close"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-5 w-5">
+              <path d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        {sections.map((sec) => (
+          <div key={sec.title} className="mb-3">
+            <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">{sec.title}</h3>
+            <dl className="space-y-1">
+              {sec.shortcuts.map(([key, desc]) => (
+                <div key={key} className="flex items-center justify-between text-sm">
+                  <dt className="text-slate-600">{desc}</dt>
+                  <dd><kbd className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-xs text-slate-700">{key}</kbd></dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        ))}
+        <p className="mt-3 text-center text-[10px] text-slate-400">Press <kbd className="rounded border border-slate-200 bg-slate-50 px-1 font-mono text-[10px]">?</kbd> or <kbd className="rounded border border-slate-200 bg-slate-50 px-1 font-mono text-[10px]">Esc</kbd> to close</p>
+      </div>
+    </div>
+  );
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────
 
 /**
@@ -789,6 +960,9 @@ export function CatalogPage() {
       return true;
     }
   });
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [showScrollTop, setShowScrollTop] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
@@ -806,6 +980,13 @@ export function CatalogPage() {
   }, [sortNewestFirst]);
 
   const selectionMode = selected.size > 0;
+
+  // ── Scroll-to-top FAB visibility ──
+  useEffect(() => {
+    const handleScroll = () => setShowScrollTop(window.scrollY > 600);
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   // ── Debounce prefix filter ──
   // 400 ms delay prevents spamming the API on every keystroke
@@ -897,6 +1078,11 @@ export function CatalogPage() {
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (lightboxIndex !== null) return;
+      // ? key → open keyboard shortcuts dialog (Google Photos pattern)
+      if (e.key === '?' && !showShortcuts) {
+        setShowShortcuts(true);
+        return;
+      }
       if (e.key === 'Escape' && selectionMode) {
         setSelected(new Set());
         setConfirmDelete(false);
@@ -908,7 +1094,7 @@ export function CatalogPage() {
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [lightboxIndex, selectionMode, allItems]);
+  }, [lightboxIndex, selectionMode, allItems, showShortcuts]);
 
   // ── Selection callbacks ──
 
@@ -1013,19 +1199,49 @@ export function CatalogPage() {
     return offsets;
   }, [sections]);
 
+  // ── Drag-and-drop visual overlay ──
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(true);
+  }, []);
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    // Only deactivate when leaving the container (not entering a child)
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setDragOver(false);
+  }, []);
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    // Future: handle file upload from drag-and-drop
+  }, []);
+
   return (
-    <div className="space-y-4">
+    <div
+      className="relative space-y-2"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Drag-and-drop overlay (Google Photos pattern) */}
+      {dragOver && (
+        <div className="pointer-events-none fixed inset-0 z-[55] flex items-center justify-center bg-blue-500/10 backdrop-blur-[2px]">
+          <div className="rounded-2xl border-2 border-dashed border-blue-400 bg-white/90 px-8 py-6 shadow-lg">
+            <p className="text-sm font-medium text-blue-700">Drop files to upload</p>
+          </div>
+        </div>
+      )}
+
       {/* ── Header ──────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap items-start justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h1 className="text-xl font-semibold sm:text-2xl">Catalog</h1>
-          <p className="text-sm text-slate-600">Browse media stored in Scaleway Object Storage.</p>
+          <h1 className="text-lg font-semibold sm:text-xl">Catalog</h1>
+          <p className="text-xs text-slate-500">Browse media stored in Scaleway Object Storage.</p>
         </div>
         <Link
           to="/catalog/dedup"
-          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
         >
-          🔍 Deduplication
+          🔍 Dedup
         </Link>
       </div>
 
@@ -1051,11 +1267,11 @@ export function CatalogPage() {
       )}
 
       {/* ── Stats card ──────────────────────────────────────────────── */}
-      <Card>
+      <Card className="p-2.5">
         {statsQuery.isLoading ? (
-          <p className="text-sm text-slate-600">Loading stats…</p>
+          <p className="text-xs text-slate-600">Loading stats…</p>
         ) : statsQuery.isError ? (
-          <p className="text-sm text-amber-700">
+          <p className="text-xs text-amber-700">
             {statsQuery.error instanceof Error ? statsQuery.error.message : 'Catalog unavailable — check SCW_* env vars'}
           </p>
         ) : statsQuery.data ? (
@@ -1064,17 +1280,18 @@ export function CatalogPage() {
       </Card>
 
       {/* ── Prefix filter + sort toggle ─────────────────────────────── */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-1.5">
         <input
           type="text"
           placeholder="Filter by prefix (e.g. 2024/06)…"
-          className="w-full max-w-xs rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full max-w-xs rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={prefixInput}
           onChange={(e) => setPrefixInput(e.target.value)}
+          aria-label="Filter catalog by prefix"
         />
         {prefix && (
           <button
-            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-600 hover:bg-slate-50"
+            className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
             onClick={() => { setPrefixInput(''); setPrefix(''); }}
           >
             Clear
@@ -1083,7 +1300,7 @@ export function CatalogPage() {
         <button
           type="button"
           onClick={() => setSortNewestFirst((p) => !p)}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-600 hover:bg-slate-50"
+          className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
           title={sortNewestFirst ? 'Showing newest first' : 'Showing oldest first'}
         >
           {sortNewestFirst ? '↓ Newest first' : '↑ Oldest first'}
@@ -1105,18 +1322,18 @@ export function CatalogPage() {
 
       {/* ── Date-grouped grid (Google Photos-style sections) ─────── */}
       {itemsQuery.isLoading ? (
-        <p className="text-sm text-slate-600">Loading…</p>
+        <SkeletonGrid />
       ) : sections.length === 0 ? (
         <EmptyState prefix={prefix} />
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-2">
           {sections.map(([date, items], sectionIndex) => {
             const sectionOffset = sectionOffsets.get(date) ?? 0;
             return (
               <section
                 key={date}
                 ref={(el) => { if (el) sectionRefs.current.set(date, el); else sectionRefs.current.delete(date); }}
-                className={sectionIndex > 0 ? 'border-t border-slate-200 pt-4' : ''}
+                className={sectionIndex > 0 ? 'border-t border-slate-100 pt-1.5' : ''}
               >
                 <SectionHeader
                   date={date}
@@ -1129,7 +1346,7 @@ export function CatalogPage() {
                   and gap-1 for minimal spacing between tiles. select-none is applied
                   per-image to prevent drag selection while keeping dates accessible.
                 */}
-                <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
+                <div className="grid grid-cols-3 gap-0.5 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8" role="grid" aria-label="Photo grid">
                   {items.map((item, i) => (
                     <Thumbnail
                       key={item.encodedKey}
@@ -1151,7 +1368,7 @@ export function CatalogPage() {
       )}
 
       {/* ── Infinite scroll sentinel ────────────────────────────────── */}
-      <div ref={sentinelRef} className="flex h-8 items-center justify-center">
+      <div ref={sentinelRef} className="flex h-4 items-center justify-center">
         {itemsQuery.isFetchingNextPage && (
           <p className="text-xs text-slate-500">Loading more…</p>
         )}
@@ -1159,6 +1376,39 @@ export function CatalogPage() {
 
       {/* ── Date scroller (right-edge timeline) ─────────────────────── */}
       <DateScroller sections={sections} sectionRefs={sectionRefs} />
+
+      {/* ── Scroll-to-top FAB (Google Photos pattern) ──────────────── */}
+      {showScrollTop && (
+        <button
+          type="button"
+          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          className="fixed bottom-6 right-6 z-30 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-lg ring-1 ring-slate-200 transition-opacity hover:bg-slate-50"
+          aria-label="Scroll to top"
+          title="Back to top"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-5 w-5 text-slate-600">
+            <path d="M18 15l-6-6-6 6" />
+          </svg>
+        </button>
+      )}
+
+      {/* ── Keyboard shortcut hint (bottom-left) ────────────────────── */}
+      {!selectionMode && lightboxIndex === null && !showShortcuts && (
+        <button
+          type="button"
+          onClick={() => setShowShortcuts(true)}
+          className="fixed bottom-6 left-6 z-30 flex h-7 w-7 items-center justify-center rounded-md bg-white text-xs font-mono text-slate-400 shadow ring-1 ring-slate-200 transition-opacity hover:text-slate-600"
+          title="Keyboard shortcuts (?)"
+          aria-label="Show keyboard shortcuts"
+        >
+          ?
+        </button>
+      )}
+
+      {/* ── Keyboard shortcuts dialog (Google Photos: press ? key) ──── */}
+      {showShortcuts && (
+        <ShortcutsDialog onClose={() => setShowShortcuts(false)} />
+      )}
 
       {/* ── Lightbox ────────────────────────────────────────────────── */}
       {lightboxIndex !== null && sortedItems.length > 0 && (
