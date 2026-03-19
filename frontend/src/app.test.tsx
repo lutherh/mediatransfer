@@ -89,6 +89,7 @@ vi.mock('@/lib/api', () => ({
     exitCode: 0,
     output: [],
   })),
+  setAutoUpload: vi.fn(async () => ({ enabled: true })),
   runTakeoutAction: vi.fn(),
   createTransfer: vi.fn(),
   fetchGoogleAuthStatus: vi.fn(async () => ({
@@ -184,7 +185,7 @@ describe('frontend pages', () => {
   it('renders catalog page', async () => {
     renderRoute('/catalog');
     expect(await screen.findByRole('heading', { name: 'Catalog' })).toBeInTheDocument();
-    expect(await screen.findByText(/browse media stored in scaleway/i)).toBeInTheDocument();
+    expect(await screen.findByText(/your photos and videos/i)).toBeInTheDocument();
   });
 
   it('shows navigation links', async () => {
