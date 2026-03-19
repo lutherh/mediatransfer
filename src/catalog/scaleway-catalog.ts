@@ -44,6 +44,8 @@ export type CatalogObject = {
   etag?: string;
   lastModified?: string;
   contentLength?: number;
+  /** Set when the response is a partial 206 range response. */
+  contentRange?: string;
 };
 
 export type CatalogStats = {
@@ -120,7 +122,7 @@ export type CatalogService = {
     sort?: 'asc' | 'desc';
   }): Promise<CatalogPage>;
   listAll(prefix?: string): Promise<CatalogItem[]>;
-  getObject(encodedKey: string): Promise<CatalogObject>;
+  getObject(encodedKey: string, range?: string): Promise<CatalogObject>;
   /** Fetch up to `maxBytes` of an object as a Buffer (for EXIF parsing etc.). */
   getObjectBuffer(encodedKey: string, maxBytes?: number): Promise<{ buffer: Buffer; contentType?: string; contentLength?: number }>;
   getStats(): Promise<CatalogStats>;
@@ -449,14 +451,16 @@ export class ScalewayCatalogService implements CatalogService {
     return this.itemsIndexInflight;
   }
 
-  async getObject(encodedKey: string): Promise<CatalogObject> {
+  async getObject(encodedKey: string, range?: string): Promise<CatalogObject> {
     const decodedKey = decodeKey(encodedKey);
     const fullKey = this.withPrefix(decodedKey);
     const response = await this.client.send(
       new GetObjectCommand({
         Bucket: this.bucket,
         Key: fullKey,
+        ...(range ? { Range: range } : {}),
       }),
+      { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
     );
 
     if (!response.Body) {
@@ -474,6 +478,7 @@ export class ScalewayCatalogService implements CatalogService {
       etag: response.ETag,
       lastModified: response.LastModified?.toISOString(),
       contentLength: response.ContentLength,
+      contentRange: response.ContentRange,
     };
   }
 
