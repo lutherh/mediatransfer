@@ -55,16 +55,17 @@ function useApiToken(): string | undefined {
 
 const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAY_NAMES_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 /**
  * Convert an ISO date string (e.g. "2025-06-16") into a human-friendly label.
  *
- * Rules (inspired by Google Photos timeline headers):
+ * Rules (modeled after Google Photos timeline headers):
  *   • Same calendar day → "Today"
  *   • Previous calendar day → "Yesterday"
- *   • Within the past 7 days → "Mon, Jun 16"
- *   • Same year → "Jun 16, 2025"
- *   • Older → "Jun 16, 2024"
+ *   • 2–6 days ago → just the day name: "Tuesday", "Wednesday", etc.
+ *   • Same year → "Sat 14 Mar" (abbreviated day + day number + month)
+ *   • Older → "Sat 14 Mar 2024" (includes year)
  *
  * @pattern Google Photos human-friendly section headers
  */
@@ -83,14 +84,16 @@ function formatSectionDate(dateStr: string): string {
 
   if (diffDays === 0) return 'Today';
   if (diffDays === 1) return 'Yesterday';
-  if (diffDays > 0 && diffDays < 7) {
-    return `${DAY_NAMES[date.getDay()]}, ${SHORT_MONTHS[month]} ${day}`;
+  // 2–6 days ago: just the full day name (Google Photos shows "Tuesday", etc.)
+  if (diffDays > 1 && diffDays < 7) {
+    return DAY_NAMES_FULL[date.getDay()];
   }
-  // Same year → omit year for brevity; otherwise include it
+  // Same year → "Sat 14 Mar" (abbreviated day + day number + month)
   if (year === now.getFullYear()) {
-    return `${SHORT_MONTHS[month]} ${day}`;
+    return `${DAY_NAMES[date.getDay()]} ${day} ${SHORT_MONTHS[month]}`;
   }
-  return `${SHORT_MONTHS[month]} ${day}, ${year}`;
+  // Older → "Sat 14 Mar 2024" (includes year)
+  return `${DAY_NAMES[date.getDay()]} ${day} ${SHORT_MONTHS[month]} ${year}`;
 }
 
 // ── Stats bar ──────────────────────────────────────────────────────────────
@@ -657,8 +660,9 @@ function Thumbnail({
 // ── Section header with select-all ────────────────────────────────────────
 
 /**
- * Date section header with a tri-state checkbox (none / some / all selected).
- * Uses `formatSectionDate` for human-friendly labels instead of raw ISO dates.
+ * Date section header with a tri-state checkbox (none / some / all selected)
+ * and an item count badge. Styled to match Google Photos' prominent date
+ * labels that clearly separate timeline sections.
  *
  * @pattern Google Photos date-grouped section with select-all toggle
  */
@@ -678,11 +682,11 @@ function SectionHeader({
   const someSelected = !allSelected && keys.some((k) => selected.has(k));
 
   return (
-    <div className="mb-1.5 flex items-center gap-2">
+    <div className="flex items-center gap-2.5 pb-2 pt-1">
       <button
         type="button"
         onClick={() => onToggleAll(keys, !allSelected)}
-        className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
+        className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
           allSelected
             ? 'border-blue-500 bg-blue-500'
             : someSelected
@@ -700,7 +704,8 @@ function SectionHeader({
           <div className="h-1.5 w-1.5 rounded-full bg-blue-500" />
         )}
       </button>
-      <p className="text-sm font-semibold text-slate-600">{formatSectionDate(date)}</p>
+      <h2 className="text-base font-bold text-slate-800">{formatSectionDate(date)}</h2>
+      <span className="text-xs text-slate-400">{items.length}</span>
     </div>
   );
 }
@@ -1091,45 +1096,51 @@ export function CatalogPage() {
         </p>
       )}
 
-      {/* ── Date-grouped grid ───────────────────────────────────────── */}
+      {/* ── Date-grouped grid (Google Photos-style sections) ─────── */}
       {itemsQuery.isLoading ? (
         <p className="text-sm text-slate-600">Loading…</p>
       ) : sections.length === 0 ? (
         <EmptyState prefix={prefix} />
       ) : (
-        sections.map(([date, items]) => {
-          const sectionOffset = sectionOffsets.get(date) ?? 0;
-          return (
-            <div key={date} ref={(el) => { if (el) sectionRefs.current.set(date, el); else sectionRefs.current.delete(date); }}>
-              <SectionHeader
-                date={date}
-                items={items}
-                selected={selected}
-                onToggleAll={toggleSection}
-              />
-              {/*
-                Larger tiles: 3/4/6/8 cols (Google Photos style) with rounded-lg
-                and gap-1.5 for breathing room. select-none is applied per-image
-                to prevent drag selection while keeping dates accessible.
-              */}
-              <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
-                {items.map((item, i) => (
-                  <Thumbnail
-                    key={item.encodedKey}
-                    item={item}
-                    apiToken={apiToken}
-                    selected={selected.has(item.encodedKey)}
-                    selectionMode={selectionMode}
-                    lightboxIndex={sectionOffset + i}
-                    onToggleSelect={() => toggleSelect(item.encodedKey, sectionOffset + i)}
-                    onOpenLightbox={setLightboxIndex}
-                    onShiftClick={handleShiftClick}
-                  />
-                ))}
-              </div>
-            </div>
-          );
-        })
+        <div className="space-y-6">
+          {sections.map(([date, items], sectionIndex) => {
+            const sectionOffset = sectionOffsets.get(date) ?? 0;
+            return (
+              <section
+                key={date}
+                ref={(el) => { if (el) sectionRefs.current.set(date, el); else sectionRefs.current.delete(date); }}
+                className={sectionIndex > 0 ? 'border-t border-slate-200 pt-4' : ''}
+              >
+                <SectionHeader
+                  date={date}
+                  items={items}
+                  selected={selected}
+                  onToggleAll={toggleSection}
+                />
+                {/*
+                  Larger tiles: 3/4/6/8 cols (Google Photos style) with rounded-lg
+                  and gap-1 for minimal spacing between tiles. select-none is applied
+                  per-image to prevent drag selection while keeping dates accessible.
+                */}
+                <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
+                  {items.map((item, i) => (
+                    <Thumbnail
+                      key={item.encodedKey}
+                      item={item}
+                      apiToken={apiToken}
+                      selected={selected.has(item.encodedKey)}
+                      selectionMode={selectionMode}
+                      lightboxIndex={sectionOffset + i}
+                      onToggleSelect={() => toggleSelect(item.encodedKey, sectionOffset + i)}
+                      onOpenLightbox={setLightboxIndex}
+                      onShiftClick={handleShiftClick}
+                    />
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+        </div>
       )}
 
       {/* ── Infinite scroll sentinel ────────────────────────────────── */}

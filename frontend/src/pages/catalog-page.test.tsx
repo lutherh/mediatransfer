@@ -117,8 +117,8 @@ describe('CatalogPage', () => {
     renderCatalogPage();
     // The 2024 date should show with the year since it's not the current year
     // The exact format depends on the current date context, so we check the
-    // section renders at least one header
-    const headings = await screen.findAllByText(/Jun|Mar|Today|Yesterday/);
+    // section renders at least one heading element (h2)
+    const headings = await screen.findAllByRole('heading', { level: 2 });
     expect(headings.length).toBeGreaterThan(0);
   });
 
@@ -206,6 +206,7 @@ describe('formatSectionDate logic', () => {
 
   const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const DAY_NAMES_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
   function formatSectionDate(dateStr: string): string {
     const parts = dateStr.split('-');
@@ -221,13 +222,13 @@ describe('formatSectionDate logic', () => {
 
     if (diffDays === 0) return 'Today';
     if (diffDays === 1) return 'Yesterday';
-    if (diffDays > 0 && diffDays < 7) {
-      return `${DAY_NAMES[date.getDay()]}, ${SHORT_MONTHS[month]} ${day}`;
+    if (diffDays > 1 && diffDays < 7) {
+      return DAY_NAMES_FULL[date.getDay()];
     }
     if (year === now.getFullYear()) {
-      return `${SHORT_MONTHS[month]} ${day}`;
+      return `${DAY_NAMES[date.getDay()]} ${day} ${SHORT_MONTHS[month]}`;
     }
-    return `${SHORT_MONTHS[month]} ${day}, ${year}`;
+    return `${DAY_NAMES[date.getDay()]} ${day} ${SHORT_MONTHS[month]} ${year}`;
   }
 
   it('returns "Today" for current date', () => {
@@ -243,28 +244,29 @@ describe('formatSectionDate logic', () => {
     expect(formatSectionDate(ydStr)).toBe('Yesterday');
   });
 
-  it('returns day name + month for dates within last 7 days', () => {
+  it('returns full day name for dates 2–6 days ago', () => {
     const threeDaysAgo = new Date();
     threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
     const dateStr = `${threeDaysAgo.getFullYear()}-${String(threeDaysAgo.getMonth() + 1).padStart(2, '0')}-${String(threeDaysAgo.getDate()).padStart(2, '0')}`;
     const result = formatSectionDate(dateStr);
-    // Should be like "Mon, Jun 14"
-    expect(result).toMatch(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat), (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d+$/);
+    // Should be a full day name like "Tuesday", "Wednesday", etc.
+    expect(result).toMatch(/^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)$/);
   });
 
-  it('omits year for same-year dates outside 7-day window', () => {
+  it('returns abbreviated day + day number + month for same-year dates outside 7-day window', () => {
     const now = new Date();
     // Use a date early in the year (Jan 1) if we're far enough into the year
     const month = now.getMonth();
     if (month >= 1) {
       const dateStr = `${now.getFullYear()}-01-01`;
       const result = formatSectionDate(dateStr);
-      expect(result).toBe('Jan 1');
+      // Should be like "Wed 1 Jan"
+      expect(result).toMatch(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) \d+ Jan$/);
     }
   });
 
   it('includes year for dates in a different year', () => {
     const result = formatSectionDate('2020-07-04');
-    expect(result).toBe('Jul 4, 2020');
+    expect(result).toBe('Sat 4 Jul 2020');
   });
 });
