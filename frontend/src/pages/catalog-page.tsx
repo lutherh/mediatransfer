@@ -56,6 +56,7 @@ function useApiToken(): string | undefined {
 // ── Date formatting ────────────────────────────────────────────────────────
 
 const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const FULL_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DAY_NAMES_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -780,6 +781,112 @@ function SectionHeader({
   );
 }
 
+// ── Monthly divider card ──────────────────────────────────────────────────
+
+/**
+ * Extract "YYYY-MM" from a "YYYY-MM-DD" section date string.
+ */
+function monthKey(dateStr: string): string {
+  return dateStr.slice(0, 7);
+}
+
+/**
+ * Compute month-level grouping info from sections.
+ * Returns a Map of "YYYY-MM" → { items: CatalogItem[], label, year }.
+ * Used to render "Best of [Month]" divider cards when the month changes.
+ */
+function buildMonthGroups(
+  sections: [string, CatalogItem[]][],
+): Map<string, { items: CatalogItem[]; label: string; year: string }> {
+  const map = new Map<string, { items: CatalogItem[]; label: string; year: string }>();
+  for (const [date, items] of sections) {
+    const mk = monthKey(date);
+    const existing = map.get(mk);
+    if (existing) {
+      existing.items.push(...items);
+    } else {
+      const m = parseInt(date.slice(5, 7), 10) - 1;
+      map.set(mk, {
+        items: [...items],
+        label: FULL_MONTHS[m],
+        year: date.slice(0, 4),
+      });
+    }
+  }
+  return map;
+}
+
+/**
+ * "Best of [Month]" cover card — shown at the start of each new month group
+ * in the timeline. Uses the first image item as the cover photo, displaying
+ * the month name and a highlights count.
+ *
+ * @pattern Google Photos monthly memories card
+ */
+function MonthDivider({
+  monthLabel,
+  year,
+  itemCount,
+  coverItem,
+  apiToken,
+}: {
+  monthLabel: string;
+  year: string;
+  itemCount: number;
+  coverItem: CatalogItem | undefined;
+  apiToken: string | undefined;
+}) {
+  const [imgLoaded, setImgLoaded] = useState(false);
+  const [imgFailed, setImgFailed] = useState(false);
+  const coverUrl = coverItem
+    ? catalogThumbnailUrl(coverItem.encodedKey, 'small', apiToken)
+    : null;
+
+  return (
+    <div className="py-2" data-testid="month-divider">
+      <h2 className="mb-2 text-lg font-bold text-slate-800">{monthLabel}</h2>
+      <div
+        className="relative h-36 w-full max-w-sm overflow-hidden rounded-xl bg-slate-200 sm:h-40"
+        role="img"
+        aria-label={`Best of ${monthLabel} ${year}`}
+      >
+        {/* Cover photo */}
+        {coverUrl && !imgFailed && (
+          <img
+            src={coverUrl}
+            loading="lazy"
+            decoding="async"
+            className={`h-full w-full object-cover transition-opacity duration-500 ${
+              imgLoaded ? 'opacity-100' : 'opacity-0'
+            }`}
+            onLoad={() => setImgLoaded(true)}
+            onError={() => setImgFailed(true)}
+            draggable={false}
+          />
+        )}
+
+        {/* Fallback gradient when no image or failed */}
+        {(!coverUrl || imgFailed) && (
+          <div className="absolute inset-0 bg-gradient-to-br from-slate-300 to-slate-400" />
+        )}
+
+        {/* Dark overlay for text readability */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
+
+        {/* Text overlay */}
+        <div className="absolute bottom-0 left-0 p-3">
+          <p className="text-sm font-semibold text-white drop-shadow-sm">
+            Best of {monthLabel}
+          </p>
+          <p className="text-xs text-white/80">
+            {itemCount} highlight{itemCount !== 1 ? 's' : ''}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Skeleton grid ──────────────────────────────────────────────────────────
 
 /**
@@ -964,7 +1071,7 @@ export function CatalogPage() {
   const [dragOver, setDragOver] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
-  const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const sectionRefs = useRef<Map<string, HTMLElement>>(new Map());
 
   /**
    * Tracks the index (in `sortedItems`) of the last individually clicked
@@ -1054,6 +1161,15 @@ export function CatalogPage() {
    */
   const sortedItems = useMemo(
     () => sections.flatMap(([, items]) => items),
+    [sections],
+  );
+
+  /**
+   * Month-level grouping used for the "Best of [Month]" divider cards.
+   * Keyed by "YYYY-MM", holds aggregate item list, label, and year.
+   */
+  const monthGroups = useMemo(
+    () => buildMonthGroups(sections),
     [sections],
   );
 
@@ -1354,12 +1470,30 @@ export function CatalogPage() {
         <div className="space-y-6">
           {sections.map(([date, items], sectionIndex) => {
             const sectionOffset = sectionOffsets.get(date) ?? 0;
+            const prevMonth = sectionIndex > 0 ? monthKey(sections[sectionIndex - 1][0]) : null;
+            const curMonth = monthKey(date);
+            const isNewMonth = sectionIndex === 0 || curMonth !== prevMonth;
+            const mg = monthGroups.get(curMonth);
+            // Pick the first image in the month as cover photo
+            const coverItem = mg?.items.find((it) => it.mediaType === 'image') ?? mg?.items[0];
+
             return (
               <section
                 key={date}
                 ref={(el) => { if (el) sectionRefs.current.set(date, el); else sectionRefs.current.delete(date); }}
                 className={sectionIndex > 0 ? 'border-t border-slate-200 pt-4' : ''}
+                style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 500px' }}
               >
+                {/* Monthly "Best of" cover card at the start of each month */}
+                {isNewMonth && mg && mg.items.length > 0 && (
+                  <MonthDivider
+                    monthLabel={mg.label}
+                    year={mg.year}
+                    itemCount={mg.items.length}
+                    coverItem={coverItem}
+                    apiToken={apiToken}
+                  />
+                )}
                 <SectionHeader
                   date={date}
                   items={items}

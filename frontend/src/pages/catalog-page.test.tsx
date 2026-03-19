@@ -195,6 +195,33 @@ describe('CatalogPage', () => {
     const input = await screen.findByPlaceholderText(/Search by date or folder/);
     expect(input).toBeInTheDocument();
   });
+
+  it('renders monthly divider cards for each distinct month', async () => {
+    renderCatalogPage();
+    // Mock data has items in 2025-06 and 2024-03, so we expect 2 month dividers
+    const dividers = await screen.findAllByTestId('month-divider');
+    expect(dividers.length).toBe(2);
+  });
+
+  it('shows "Best of [Month]" label inside month divider', async () => {
+    renderCatalogPage();
+    // 2025-06 items → "Best of June", 2024-03 items → "Best of March"
+    expect(await screen.findByText('Best of June')).toBeInTheDocument();
+    expect(await screen.findByText('Best of March')).toBeInTheDocument();
+  });
+
+  it('shows highlights count in month divider', async () => {
+    renderCatalogPage();
+    // June has 2 items, March has 1 item
+    expect(await screen.findByText('2 highlights')).toBeInTheDocument();
+    expect(await screen.findByText('1 highlight')).toBeInTheDocument();
+  });
+
+  it('renders month heading in month divider', async () => {
+    renderCatalogPage();
+    expect(await screen.findByText('June')).toBeInTheDocument();
+    expect(await screen.findByText('March')).toBeInTheDocument();
+  });
 });
 
 // ── formatSectionDate tests (extracted logic) ──────────────────────────────
