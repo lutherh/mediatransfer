@@ -596,6 +596,17 @@ export function reconcileArchiveEntries(
         reconciled += 1;
         continue;
       }
+      if (item.failedCount === 0 && (item.uploadedCount + item.skippedCount) >= item.entryCount && item.entryCount > 0) {
+        // Fully handled despite stale status — mark completed for accurate status/reporting.
+        nextArchives[name] = {
+          ...item,
+          status: 'completed',
+          error: undefined,
+          completedAt: item.completedAt ?? new Date().toISOString(),
+        };
+        reconciled += 1;
+        continue;
+      }
       // Had entries scanned/partially processed — mark failed for retry
       nextArchives[name] = {
         ...item,

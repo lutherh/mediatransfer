@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { CatalogService, DuplicateGroup } from '../../catalog/scaleway-catalog.js';
+import type { CatalogService, DuplicateGroup, ThumbnailSize } from '../../catalog/scaleway-catalog.js';
+import { decodeKey } from '../../catalog/scaleway-catalog.js';
 import { extractExifMetadata } from '../../utils/exif.js';
 import { apiError } from '../errors.js';
 import { buildCatalogHtml } from './catalog-html.js';
@@ -31,9 +32,19 @@ const listQuerySchema = z.object({
   max: z.coerce.number().int().min(1).max(200).optional(),
   token: z.string().min(1).optional(),
   prefix: z.string().optional(),
+  sort: z.enum(['asc', 'desc']).optional(),
 });
 
 const mediaParamsSchema = z.object({
+  encodedKey: z
+    .string()
+    .min(1)
+    .max(1024)
+    .regex(/^[A-Za-z0-9_-]+$/, 'encodedKey must be base64url-safe'),
+});
+
+const thumbnailParamsSchema = z.object({
+  size: z.enum(['small', 'large']),
   encodedKey: z
     .string()
     .min(1)
@@ -86,6 +97,7 @@ export async function registerCatalogRoutes(
         max: query.max,
         token: query.token,
         prefix: query.prefix,
+        sort: query.sort,
       });
       return page;
     } catch (err) {
@@ -156,12 +168,24 @@ export async function registerCatalogRoutes(
 
     const { moves } = bulkMoveBodySchema.parse(req.body);
     const results = { moved: [] as { from: string; to: string }[], failed: [] as { key: string; error: string }[] };
-    for (const move of moves) {
-      try {
-        const result = await catalogService.moveObject(move.encodedKey, move.newDatePrefix);
-        results.moved.push(result);
-      } catch (err) {
-        results.failed.push({ key: move.encodedKey, error: String(err) });
+
+    // Process moves with limited concurrency (5 at a time) instead of serially
+    const CONCURRENCY = 5;
+    for (let i = 0; i < moves.length; i += CONCURRENCY) {
+      const batch = moves.slice(i, i + CONCURRENCY);
+      const settled = await Promise.allSettled(
+        batch.map(async (move) => {
+          const result = await catalogService.moveObject(move.encodedKey, move.newDatePrefix);
+          return result;
+        }),
+      );
+      for (let j = 0; j < settled.length; j++) {
+        const outcome = settled[j]!;
+        if (outcome.status === 'fulfilled') {
+          results.moved.push(outcome.value);
+        } else {
+          results.failed.push({ key: batch[j]!.encodedKey, error: String(outcome.reason) });
+        }
       }
     }
     return results;
@@ -295,6 +319,44 @@ export async function registerCatalogRoutes(
     return result;
   });
 
+  // ── Thumbnail endpoint ─────────────────────────────────────────────────
+  // Serves on-demand resized JPEG thumbnails for grid tiles (small=256px)
+  // and lightbox preview (large=1920px). Cached in-memory + aggressive
+  // browser caching (7 days) to minimize S3 GETs on scroll.
+  app.get('/catalog/thumb/:size/:encodedKey', { config: { rateLimit: { max: 3000, timeWindow: '1 minute' } } }, async (req, reply) => {
+    const catalogService = requireCatalog(catalog, reply);
+    if (!catalogService) {
+      return;
+    }
+
+    let params: { size: ThumbnailSize; encodedKey: string };
+    try {
+      params = thumbnailParamsSchema.parse(req.params);
+    } catch {
+      return reply.status(400).send(apiError('INVALID_PARAMS', 'size must be "small" or "large", encodedKey must be base64url'));
+    }
+
+    try {
+      const { buffer, contentType } = await catalogService.getThumbnail(params.encodedKey, params.size);
+      reply.type(contentType);
+      reply.header('Cache-Control', 'private, max-age=604800, stale-while-revalidate=2592000'); // 7d + 30d stale
+      reply.header('Content-Length', String(buffer.length));
+      return reply.send(buffer);
+    } catch (error) {
+      if (isCatalogObjectNotFound(error)) {
+        return reply.status(404).send({
+          ...apiError('CATALOG_MEDIA_NOT_FOUND', 'Catalog media not found'),
+          requestId: req.id,
+        });
+      }
+      // Detect sharp image processing failures (unsupported format, corrupt data, etc.)
+      if (isImageProcessingError(error)) {
+        return reply.status(415).send(apiError('UNSUPPORTED_FORMAT', 'Cannot generate thumbnail for this format'));
+      }
+      throw error;
+    }
+  });
+
   app.get('/catalog/media/:encodedKey', { config: { rateLimit: { max: 2000, timeWindow: '1 minute' } } }, async (req, reply) => {
     const catalogService = requireCatalog(catalog, reply);
     if (!catalogService) {
@@ -316,9 +378,9 @@ export async function registerCatalogRoutes(
       throw error;
     }
 
-    const normalizedEtag = normalizeEtag(media.etag);
+    const normalizedEtag = formatEtagHeader(media.etag);
     const ifNoneMatch = req.headers['if-none-match'];
-    if (normalizedEtag && ifNoneMatch && normalizeEtag(ifNoneMatch) === normalizedEtag) {
+    if (normalizedEtag && ifNoneMatch && formatEtagHeader(ifNoneMatch) === normalizedEtag) {
       reply.header('Cache-Control', 'private, max-age=86400, stale-while-revalidate=604800');
       reply.header('ETag', normalizedEtag);
       return reply.code(304).send();
@@ -354,6 +416,10 @@ export async function registerCatalogRoutes(
     if (typeof media.contentLength === 'number' && Number.isFinite(media.contentLength) && media.contentLength >= 0) {
       reply.header('Content-Length', String(media.contentLength));
     }
+    // Suggest a filename for download — extract from the decoded S3 key
+    const decodedKey = decodeKey(encodedKey);
+    const filename = decodedKey.split('/').pop() ?? decodedKey;
+    reply.header('Content-Disposition', `inline; filename="${filename.replace(/"/g, '_')}"`);
     return reply.send(media.stream);
   });
 
@@ -414,7 +480,8 @@ function requireCatalog(catalog: CatalogService | undefined, reply: { status: (c
   return catalog;
 }
 
-function normalizeEtag(value: string | undefined): string | undefined {
+/** Format an ETag value as a properly quoted HTTP header value. */
+function formatEtagHeader(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
   }
@@ -434,4 +501,22 @@ function isCatalogObjectNotFound(error: unknown): boolean {
 
   const maybeMetadata = error as Error & { $metadata?: { httpStatusCode?: number } };
   return error.name === 'NoSuchKey' || maybeMetadata.$metadata?.httpStatusCode === 404;
+}
+
+/** Detect sharp / libvips image processing errors (corrupt data, unsupported format, etc.). */
+const IMAGE_PROCESSING_ERROR_PATTERNS = [
+  'Input buffer',        // "Input buffer contains unsupported image format"
+  'Input file',          // "Input file is missing"
+  'unsupported image',   // "unsupported image format"
+  'Corrupt JPEG',        // "VipsJpeg: Corrupt JPEG data"
+  'Vips',                // General libvips error prefix
+  'heif:',               // HEIF decoding errors
+  'Invalid SOS',         // Corrupt JPEG marker
+  'not supported',       // "Video thumbnails not supported"
+];
+
+function isImageProcessingError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const msg = error.message;
+  return IMAGE_PROCESSING_ERROR_PATTERNS.some((pattern) => msg.includes(pattern));
 }

@@ -62,7 +62,43 @@ describe('takeout/manifest', () => {
     });
   });
 
-  it('falls back to file mtime when sidecar is missing', async () => {
+  it('uses EXIF date when sidecar and filename date are unavailable', async () => {
+    await withTempDir(async (dir) => {
+      const mediaRoot = path.join(dir, 'Google Photos', 'Album2');
+      await fs.mkdir(mediaRoot, { recursive: true });
+
+      // Minimal JPEG with EXIF DateTimeOriginal = "2019:07:15 14:30:00"
+      // Filename has no date pattern, no sidecar — should fall through to EXIF
+      const jpeg = Buffer.from([
+        0xFF, 0xD8,                                           // SOI
+        0xFF, 0xE1, 0x00, 0x48,                               // APP1 marker + length
+        0x45, 0x78, 0x69, 0x66, 0x00, 0x00,                   // "Exif\0\0"
+        0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00,       // TIFF LE header, IFD0 at 8
+        0x01, 0x00,                                           // IFD0: 1 entry
+        0x69, 0x87, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00,       //   ExifIFD tag, LONG, count=1
+        0x1A, 0x00, 0x00, 0x00,                               //   value: offset 26
+        0x00, 0x00, 0x00, 0x00,                               // next IFD: none
+        0x01, 0x00,                                           // ExifIFD: 1 entry
+        0x03, 0x90, 0x02, 0x00, 0x14, 0x00, 0x00, 0x00,       //   DateTimeOriginal, ASCII, 20 chars
+        0x2C, 0x00, 0x00, 0x00,                               //   value: offset 44
+        0x00, 0x00, 0x00, 0x00,                               // next IFD: none
+        ...Buffer.from('2019:07:15 14:30:00\0'),               // DateTimeOriginal value
+        0xFF, 0xD9,                                           // EOI
+      ]);
+
+      const mediaPath = path.join(mediaRoot, 'random.jpg');
+      await fs.writeFile(mediaPath, jpeg);
+
+      // Set mtime to a wrong date to confirm EXIF wins
+      const wrongDate = new Date('2026-02-01T00:00:00Z');
+      await fs.utimes(mediaPath, wrongDate, wrongDate);
+
+      const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
+      expect(entry.datePath).toBe('2019/07/15');
+    });
+  });
+
+  it('falls back to file mtime when sidecar, filename, and EXIF are all unavailable', async () => {
     await withTempDir(async (dir) => {
       const mediaRoot = path.join(dir, 'Google Photos', 'Album2');
       await fs.mkdir(mediaRoot, { recursive: true });

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   catalogMediaUrl,
+  catalogThumbnailUrl,
   deleteCatalogItems,
   encodeS3Key,
   fetchDedupScanStatus,
@@ -51,7 +52,11 @@ function Thumb({
   selected?: boolean;
 }) {
   const encodedKey = encodeS3Key(s3Key);
-  const src = catalogMediaUrl(encodedKey, apiToken);
+  const thumbUrl = catalogThumbnailUrl(encodedKey, 'small', apiToken);
+  const fullUrl = catalogMediaUrl(encodedKey, apiToken);
+  const [useFallback, setUseFallback] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const imgSrc = failed ? undefined : (useFallback ? fullUrl : thumbUrl);
   const ringColor =
     variant === 'keep'
       ? 'ring-2 ring-emerald-500'
@@ -66,14 +71,27 @@ function Thumb({
       onClick={onSelect}
       title={s3Key}
     >
-      <img
-        src={src}
-        loading="lazy"
-        className="h-full w-full object-cover"
-        onError={(e) => {
-          (e.target as HTMLImageElement).style.display = 'none';
-        }}
-      />
+      {imgSrc && (
+        <img
+          src={imgSrc}
+          loading="lazy"
+          className="h-full w-full object-cover"
+          onError={() => {
+            if (!useFallback) setUseFallback(true);
+            else setFailed(true);
+          }}
+        />
+      )}
+      {/* Fallback icon when neither thumbnail nor full image could load */}
+      {failed && (
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-200 text-slate-400">
+          <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none" />
+            <path d="M21 15l-5-5L5 21" />
+          </svg>
+        </div>
+      )}
       {/* overlay label */}
       <span
         className={`absolute bottom-0 left-0 right-0 py-0.5 text-center text-[9px] font-semibold uppercase tracking-wide text-white ${
@@ -97,6 +115,40 @@ function Thumb({
         </span>
       )}
     </button>
+  );
+}
+
+/** Compact thumbnail for the GroupRow summary — tries small thumb, falls back to full media, then icon. */
+function DedupSummaryThumb({ s3Key, apiToken }: { s3Key: string; apiToken: string | undefined }) {
+  const encodedKey = encodeS3Key(s3Key);
+  const thumbUrl = catalogThumbnailUrl(encodedKey, 'small', apiToken);
+  const fullUrl = catalogMediaUrl(encodedKey, apiToken);
+  const [useFallback, setUseFallback] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const imgSrc = failed ? undefined : (useFallback ? fullUrl : thumbUrl);
+
+  if (failed) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-slate-200 text-slate-400">
+        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none" />
+          <path d="M21 15l-5-5L5 21" />
+        </svg>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={imgSrc}
+      loading="lazy"
+      className="h-full w-full object-cover"
+      onError={() => {
+        if (!useFallback) setUseFallback(true);
+        else setFailed(true);
+      }}
+    />
   );
 }
 
@@ -154,14 +206,7 @@ function GroupRow({
       <div className="flex items-center gap-3 px-4 py-3">
         {/* Compact keep thumb */}
         <div className="h-12 w-12 flex-shrink-0 overflow-hidden rounded border-2 border-emerald-400 bg-slate-100">
-          <img
-            src={catalogMediaUrl(encodeS3Key(group.keepKey), apiToken)}
-            loading="lazy"
-            className="h-full w-full object-cover"
-            onError={(e) => {
-              (e.target as HTMLImageElement).style.display = 'none';
-            }}
-          />
+          <DedupSummaryThumb s3Key={group.keepKey} apiToken={apiToken} />
         </div>
 
         <div className="min-w-0 flex-1">

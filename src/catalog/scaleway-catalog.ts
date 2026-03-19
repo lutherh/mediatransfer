@@ -8,7 +8,15 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
+import fs from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
+import sharp from 'sharp';
 import {
   resolveScalewayEndpoint,
   resolveScalewaySigningRegion,
@@ -44,6 +52,18 @@ export type CatalogStats = {
   videoCount: number;
   oldestDate: string | null;
   newestDate: string | null;
+};
+
+/**
+ * Allowed thumbnail size presets.
+ *   • `small`  – 256px longest edge, JPEG q80 (~15-30 KB) – grid tiles
+ *   • `large`  – 1920px longest edge, JPEG q85 (~200-400 KB) – lightbox preview
+ */
+export type ThumbnailSize = 'small' | 'large';
+
+export type ThumbnailResult = {
+  buffer: Buffer;
+  contentType: string;
 };
 
 export type DeleteResult = {
@@ -96,6 +116,7 @@ export type CatalogService = {
     max?: number;
     token?: string;
     prefix?: string;
+    sort?: 'asc' | 'desc';
   }): Promise<CatalogPage>;
   listAll(prefix?: string): Promise<CatalogItem[]>;
   getObject(encodedKey: string): Promise<CatalogObject>;
@@ -106,6 +127,8 @@ export type CatalogService = {
   moveObject(encodedKey: string, newDatePrefix: string): Promise<{ from: string; to: string }>;
   getAlbums(): Promise<AlbumsManifest>;
   saveAlbums(manifest: AlbumsManifest): Promise<void>;
+  /** Generate a resized thumbnail for the given media key. Returns JPEG buffer. */
+  getThumbnail(encodedKey: string, size: ThumbnailSize): Promise<ThumbnailResult>;
   /** Scan all objects and return groups of duplicates (same size + ETag). */
   findDuplicates(onProgress?: (listed: number) => void): Promise<DuplicateGroup[]>;
   /** Find and remove duplicates. Pass dryRun=true to preview without deleting. */
@@ -132,6 +155,124 @@ const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'avi', 'm4v', '3gp', 'mkv', 'web
 const DEFAULT_S3_REQUEST_TIMEOUT_MS = 300_000;
 const STATS_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_MAX_PAGE_RETRIES = 5;
+
+// ── Thumbnail configuration ─────────────────────────────────────────────────
+
+const THUMB_SIZES: Record<ThumbnailSize, { maxDimension: number; quality: number }> = {
+  small: { maxDimension: 256, quality: 80 },
+  large: { maxDimension: 1920, quality: 85 },
+};
+const THUMB_CACHE_MAX_ENTRIES = 500;
+const THUMB_CACHE_TTL_MS = 30 * 60_000; // 30 minutes
+
+// ── Video thumbnail via ffmpeg ──────────────────────────────────────────────
+
+/** Cache the ffmpeg availability check so we only probe once per process. */
+let ffmpegAvailable: boolean | null = null;
+
+function checkFfmpeg(): Promise<boolean> {
+  if (ffmpegAvailable !== null) return Promise.resolve(ffmpegAvailable);
+  return new Promise((resolve) => {
+    execFile('ffmpeg', ['-version'], (error) => {
+      ffmpegAvailable = !error;
+      resolve(ffmpegAvailable);
+    });
+  });
+}
+
+/** Timeout for ffmpeg frame extraction commands. */
+const FFMPEG_TIMEOUT_MS = 30_000;
+
+/**
+ * Extract a single frame from a video file using ffmpeg.
+ * Downloads the video to a temp file, extracts a frame at 1s (or first frame),
+ * pipes to sharp for resizing, then cleans up.
+ */
+async function extractVideoFrame(
+  videoStream: Readable,
+  maxDimension: number,
+  quality: number,
+): Promise<Buffer> {
+  const tempVideo = path.join(tmpdir(), `mediatransfer-vid-${randomUUID()}`);
+  const tempFrame = `${tempVideo}-frame.jpg`;
+  try {
+    // Write video stream to temp file
+    await pipeline(videoStream, createWriteStream(tempVideo));
+
+    // Extract a single frame at 1 second (falls back to first frame for short clips)
+    await new Promise<void>((resolve, reject) => {
+      execFile('ffmpeg', [
+        '-y',
+        '-ss', '1',               // seek to 1s
+        '-i', tempVideo,
+        '-frames:v', '1',         // single frame
+        '-q:v', '2',              // high quality JPEG
+        '-f', 'image2',
+        tempFrame,
+      ], { timeout: FFMPEG_TIMEOUT_MS }, (error) => {
+        if (error) {
+          // Retry without -ss for very short clips
+          execFile('ffmpeg', [
+            '-y',
+            '-i', tempVideo,
+            '-frames:v', '1',
+            '-q:v', '2',
+            '-f', 'image2',
+            tempFrame,
+          ], { timeout: FFMPEG_TIMEOUT_MS }, (retryError) => {
+            if (retryError) reject(retryError);
+            else resolve();
+          });
+        } else {
+          resolve();
+        }
+      });
+    });
+
+    // Resize the extracted frame via sharp (sharp throws a clear error if file missing)
+    const buffer = await sharp(tempFrame)
+      .resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality, mozjpeg: true })
+      .toBuffer();
+    return buffer;
+  } finally {
+    // Cleanup temp files
+    await fs.unlink(tempVideo).catch(() => {});
+    await fs.unlink(tempFrame).catch(() => {});
+  }
+}
+
+type ThumbCacheEntry = { buffer: Buffer; contentType: string; expiresAt: number };
+
+/**
+ * Simple in-memory LRU cache for generated thumbnails. Evicts oldest entry
+ * when the cache exceeds THUMB_CACHE_MAX_ENTRIES or when entries expire.
+ */
+class ThumbnailCache {
+  private readonly map = new Map<string, ThumbCacheEntry>();
+
+  get(key: string): ThumbCacheEntry | undefined {
+    const entry = this.map.get(key);
+    if (!entry) return undefined;
+    if (Date.now() > entry.expiresAt) {
+      this.map.delete(key);
+      return undefined;
+    }
+    // Move to end (most-recently used)
+    this.map.delete(key);
+    this.map.set(key, entry);
+    return entry;
+  }
+
+  set(key: string, entry: ThumbCacheEntry): void {
+    if (this.map.size >= THUMB_CACHE_MAX_ENTRIES) {
+      // Evict oldest (first key)
+      const oldest = this.map.keys().next().value;
+      if (oldest !== undefined) this.map.delete(oldest);
+    }
+    this.map.set(key, entry);
+  }
+}
 
 /** Retry wrapper for S3 ListObjectsV2 — retries transient / timeout errors with linear backoff. */
 async function s3ListWithRetry(
@@ -168,6 +309,8 @@ export class ScalewayCatalogService implements CatalogService {
   private readonly s3RequestTimeoutMs: number;
   private readonly s3ListMaxRetries: number;
   private statsCache: { data: CatalogStats; expiresAt: number } | null = null;
+  private readonly thumbCache = new ThumbnailCache();
+  private itemsIndexCache: { items: CatalogItem[]; expiresAt: number } | null = null;
 
   constructor(config: ScalewayCatalogConfig, client?: S3Client) {
     this.bucket = config.bucket;
@@ -187,7 +330,10 @@ export class ScalewayCatalogService implements CatalogService {
       });
   }
 
-  async listPage(input?: { max?: number; token?: string; prefix?: string }): Promise<CatalogPage> {
+  async listPage(input?: { max?: number; token?: string; prefix?: string; sort?: 'asc' | 'desc' }): Promise<CatalogPage> {
+    if (input?.sort === 'desc') {
+      return this.listPageDescending(input);
+    }
     const max = clamp(input?.max ?? 90, 1, 200);
     const prefix = this.fullPrefix(input?.prefix);
 
@@ -247,6 +393,44 @@ export class ScalewayCatalogService implements CatalogService {
       items,
       nextToken: continuationToken,
     };
+  }
+
+  /**
+   * Serve a page of items in descending (newest-first) order from a cached
+   * full index. The index is built lazily on first request and cached with
+   * the same TTL as stats (5 min). Pagination uses numeric offsets encoded
+   * as the nextToken string (e.g. "200").
+   */
+  private async listPageDescending(input?: { max?: number; token?: string; prefix?: string }): Promise<CatalogPage> {
+    const max = clamp(input?.max ?? 90, 1, 200);
+    const allItems = await this.getItemsIndex();
+
+    let items = allItems;
+    if (input?.prefix) {
+      const lowerPrefix = input.prefix.toLowerCase();
+      items = allItems.filter(item => item.key.toLowerCase().startsWith(lowerPrefix));
+    }
+
+    const offset = input?.token ? parseInt(input.token, 10) : 0;
+    if (Number.isNaN(offset) || offset < 0) {
+      return { items: [], nextToken: undefined };
+    }
+    const page = items.slice(offset, offset + max);
+    const nextOffset = offset + page.length;
+
+    return {
+      items: page,
+      nextToken: nextOffset < items.length ? String(nextOffset) : undefined,
+    };
+  }
+
+  private async getItemsIndex(): Promise<CatalogItem[]> {
+    if (this.itemsIndexCache && Date.now() < this.itemsIndexCache.expiresAt) {
+      return this.itemsIndexCache.items;
+    }
+    const items = await this.listAll();
+    this.itemsIndexCache = { items, expiresAt: Date.now() + STATS_CACHE_TTL_MS };
+    return items;
   }
 
   async getObject(encodedKey: string): Promise<CatalogObject> {
@@ -311,6 +495,98 @@ export class ScalewayCatalogService implements CatalogService {
       contentType: response.ContentType ?? inferContentType(decodedKey),
       contentLength: response.ContentLength,
     };
+  }
+
+  /**
+   * Generate a resized JPEG thumbnail for the given media key.
+   *
+   * Uses an in-memory LRU cache (30 min TTL, 500 entries) to avoid redundant
+   * S3 fetches + sharp resizing on repeated requests (e.g. scrolling back).
+   *
+   * @param encodedKey - Base64url-encoded S3 object key
+   * @param size       - 'small' (256px, grid) or 'large' (1920px, lightbox)
+   */
+  async getThumbnail(encodedKey: string, size: ThumbnailSize): Promise<ThumbnailResult> {
+    const cacheKey = `${size}:${encodedKey}`;
+    const cached = this.thumbCache.get(cacheKey);
+    if (cached) {
+      return { buffer: cached.buffer, contentType: cached.contentType };
+    }
+
+    const decodedKey = decodeKey(encodedKey);
+    const isVideo = inferMediaType(decodedKey) === 'video';
+
+    // For videos, use ffmpeg to extract a frame. Falls back to UNSUPPORTED_FORMAT if ffmpeg not available.
+    if (isVideo) {
+      const hasFfmpeg = await checkFfmpeg();
+      if (!hasFfmpeg) {
+        throw Object.assign(new Error('Video thumbnails not supported (ffmpeg not installed)'), { code: 'UNSUPPORTED_FORMAT' });
+      }
+
+      const fullKey = this.withPrefix(decodedKey);
+      const response = await this.client.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: fullKey }),
+        { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
+      );
+      if (!response.Body) {
+        throw new Error(`Object has empty body: ${decodedKey}`);
+      }
+      const bodyStream =
+        response.Body instanceof Readable
+          ? response.Body
+          : Readable.fromWeb(response.Body as ReadableStream<Uint8Array>);
+
+      const { maxDimension, quality } = THUMB_SIZES[size];
+      const buffer = await extractVideoFrame(bodyStream, maxDimension, quality);
+      const contentType = 'image/jpeg';
+
+      this.thumbCache.set(cacheKey, {
+        buffer,
+        contentType,
+        expiresAt: Date.now() + THUMB_CACHE_TTL_MS,
+      });
+      return { buffer, contentType };
+    }
+
+    const fullKey = this.withPrefix(decodedKey);
+    const response = await this.client.send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: fullKey }),
+      { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
+    );
+
+    if (!response.Body) {
+      throw new Error(`Object has empty body: ${decodedKey}`);
+    }
+
+    const bodyStream =
+      response.Body instanceof Readable
+        ? response.Body
+        : Readable.fromWeb(response.Body as ReadableStream<Uint8Array>);
+
+    const { maxDimension, quality } = THUMB_SIZES[size];
+
+    // Stream S3 body directly into Sharp — avoids buffering the full-size
+    // image (potentially 20+ MB for HEIC) into a single Buffer[]
+    const sharpTransform = sharp()
+      .rotate()                                // Auto-orient using EXIF
+      .resize(maxDimension, maxDimension, {
+        fit: 'inside',                         // Preserve aspect ratio
+        withoutEnlargement: true,              // Don't upscale small images
+      })
+      .jpeg({ quality, mozjpeg: true });       // MozJPEG for smaller output
+
+    bodyStream.pipe(sharpTransform);
+    const buffer = await sharpTransform.toBuffer();
+
+    const contentType = 'image/jpeg';
+
+    this.thumbCache.set(cacheKey, {
+      buffer,
+      contentType,
+      expiresAt: Date.now() + THUMB_CACHE_TTL_MS,
+    });
+
+    return { buffer, contentType };
   }
 
   async getStats(): Promise<CatalogStats> {
@@ -451,8 +727,9 @@ export class ScalewayCatalogService implements CatalogService {
       }
     }
 
-    // Invalidate stats cache after deletion
+    // Invalidate caches after deletion
     this.statsCache = null;
+    this.itemsIndexCache = null;
     return { deleted, failed };
   }
 
@@ -483,8 +760,9 @@ export class ScalewayCatalogService implements CatalogService {
       { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
     );
 
-    // Invalidate stats cache
+    // Invalidate caches
     this.statsCache = null;
+    this.itemsIndexCache = null;
     return { from: oldKey, to: newKey };
   }
 
@@ -622,10 +900,21 @@ function inferMediaType(key: string): 'image' | 'video' | 'other' {
 }
 
 function inferCapturedAt(key: string, fallback: Date): Date {
+  // 1. Prefer the date from the S3 path (YYYY/MM/DD folders) — this was assigned
+  //    during upload from EXIF/sidecar data, so it's the most reliable source.
   const fromPath = /(?:^|\/)((?:19|20)\d{2})\/(\d{2})\/(\d{2})(?:\/|$)/.exec(key);
+  if (fromPath) {
+    const parsed = asUtcDate(fromPath[1], fromPath[2], fromPath[3], '00', '00', '00');
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  // 2. Try filename-embedded timestamps (e.g. IMG_20231215_143022.jpg)
+  //    Use (?<!\d) / (?!\d) boundaries so we don't match inside longer digit runs.
   const filename = key.split('/').pop() ?? key;
 
-  const fromFileUnderscore = /((?:19|20)\d{2})(\d{2})(\d{2})[\sT_-]?(\d{2})(\d{2})(\d{2})/.exec(filename);
+  const fromFileUnderscore = /(?<!\d)((?:19|20)\d{2})(\d{2})(\d{2})[\sT_-]?(\d{2})(\d{2})(\d{2})(?!\d)/.exec(filename);
   if (fromFileUnderscore) {
     const parsed = asUtcDate(
       fromFileUnderscore[1],
@@ -640,7 +929,7 @@ function inferCapturedAt(key: string, fallback: Date): Date {
     }
   }
 
-  const fromFileDashed = /((?:19|20)\d{2})-(\d{2})-(\d{2})[ T_.-]?(\d{2})[.:_-]?(\d{2})[.:_-]?(\d{2})/.exec(filename);
+  const fromFileDashed = /(?<!\d)((?:19|20)\d{2})-(\d{2})-(\d{2})[ T_.-]?(\d{2})[.:_-]?(\d{2})[.:_-]?(\d{2})(?!\d)/.exec(filename);
   if (fromFileDashed) {
     const parsed = asUtcDate(
       fromFileDashed[1],
@@ -655,7 +944,7 @@ function inferCapturedAt(key: string, fallback: Date): Date {
     }
   }
 
-  const fromFileDateOnly = /((?:19|20)\d{2})(\d{2})(\d{2})/.exec(filename);
+  const fromFileDateOnly = /(?<!\d)((?:19|20)\d{2})(\d{2})(\d{2})(?!\d)/.exec(filename);
   if (fromFileDateOnly) {
     const parsed = asUtcDate(
       fromFileDateOnly[1],
@@ -665,13 +954,6 @@ function inferCapturedAt(key: string, fallback: Date): Date {
       '00',
       '00',
     );
-    if (parsed) {
-      return parsed;
-    }
-  }
-
-  if (fromPath) {
-    const parsed = asUtcDate(fromPath[1], fromPath[2], fromPath[3], '00', '00', '00');
     if (parsed) {
       return parsed;
     }
@@ -688,6 +970,13 @@ function asUtcDate(
   minute: string,
   second: string,
 ): Date | undefined {
+  const y = Number(year);
+  const m = Number(month);
+  const d = Number(day);
+  // Reject implausible dates: before 1970, after current year + 1, or invalid month/day
+  if (y < 1970 || y > new Date().getFullYear() + 1 || m < 1 || m > 12 || d < 1 || d > 31) {
+    return undefined;
+  }
   const iso = `${year}-${month}-${day}T${hour}:${minute}:${second}.000Z`;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) {
