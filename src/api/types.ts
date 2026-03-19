@@ -63,7 +63,7 @@ export type QueueService = {
 export type CatalogService = {
   listPage(input?: { max?: number; token?: string; prefix?: string }): Promise<{ items: CatalogItem[]; nextToken?: string }>;
   listAll(prefix?: string): Promise<CatalogItem[]>;
-  getObject(encodedKey: string): Promise<CatalogObject>;
+  getObject(encodedKey: string, range?: string): Promise<CatalogObject>;
   getObjectBuffer(encodedKey: string, maxBytes?: number): Promise<{ buffer: Buffer; contentType?: string; contentLength?: number }>;
   getStats(): Promise<CatalogStats>;
   getThumbnail(encodedKey: string, size: ThumbnailSize): Promise<ThumbnailResult>;

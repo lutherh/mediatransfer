@@ -364,10 +364,11 @@ export async function registerCatalogRoutes(
     }
 
     const { encodedKey } = mediaParamsSchema.parse(req.params);
+    const rangeHeader = req.headers['range'];
 
     let media;
     try {
-      media = await catalogService.getObject(encodedKey);
+      media = await catalogService.getObject(encodedKey, rangeHeader);
     } catch (error) {
       if (isCatalogObjectNotFound(error)) {
         return reply.status(404).send({
@@ -379,30 +380,35 @@ export async function registerCatalogRoutes(
     }
 
     const normalizedEtag = formatEtagHeader(media.etag);
-    const ifNoneMatch = req.headers['if-none-match'];
-    if (normalizedEtag && ifNoneMatch && formatEtagHeader(ifNoneMatch) === normalizedEtag) {
-      reply.header('Cache-Control', 'private, max-age=86400, stale-while-revalidate=604800');
-      reply.header('ETag', normalizedEtag);
-      return reply.code(304).send();
-    }
 
-    const ifModifiedSinceHeader = req.headers['if-modified-since'];
-    if (ifModifiedSinceHeader && media.lastModified) {
-      const modifiedAt = Date.parse(media.lastModified);
-      const requestedAt = Date.parse(ifModifiedSinceHeader);
-      if (!Number.isNaN(modifiedAt) && !Number.isNaN(requestedAt) && modifiedAt <= requestedAt) {
+    // Only honour conditional-request shortcuts for full (non-range) requests
+    if (!rangeHeader) {
+      const ifNoneMatch = req.headers['if-none-match'];
+      if (normalizedEtag && ifNoneMatch && formatEtagHeader(ifNoneMatch) === normalizedEtag) {
         reply.header('Cache-Control', 'private, max-age=86400, stale-while-revalidate=604800');
-        if (normalizedEtag) {
-          reply.header('ETag', normalizedEtag);
-        }
-        reply.header('Last-Modified', new Date(modifiedAt).toUTCString());
+        reply.header('ETag', normalizedEtag);
         return reply.code(304).send();
+      }
+
+      const ifModifiedSinceHeader = req.headers['if-modified-since'];
+      if (ifModifiedSinceHeader && media.lastModified) {
+        const modifiedAt = Date.parse(media.lastModified);
+        const requestedAt = Date.parse(ifModifiedSinceHeader);
+        if (!Number.isNaN(modifiedAt) && !Number.isNaN(requestedAt) && modifiedAt <= requestedAt) {
+          reply.header('Cache-Control', 'private, max-age=86400, stale-while-revalidate=604800');
+          if (normalizedEtag) {
+            reply.header('ETag', normalizedEtag);
+          }
+          reply.header('Last-Modified', new Date(modifiedAt).toUTCString());
+          return reply.code(304).send();
+        }
       }
     }
 
     if (media.contentType) {
       reply.type(media.contentType);
     }
+    reply.header('Accept-Ranges', 'bytes');
     reply.header('Cache-Control', 'private, max-age=86400, stale-while-revalidate=604800');
     if (normalizedEtag) {
       reply.header('ETag', normalizedEtag);
@@ -420,6 +426,12 @@ export async function registerCatalogRoutes(
     const decodedKey = decodeKey(encodedKey);
     const filename = decodedKey.split('/').pop() ?? decodedKey;
     reply.header('Content-Disposition', `inline; filename="${filename.replace(/"/g, '_')}"`);
+
+    if (rangeHeader && media.contentRange) {
+      reply.header('Content-Range', media.contentRange);
+      return reply.code(206).send(media.stream);
+    }
+
     return reply.send(media.stream);
   });
 
