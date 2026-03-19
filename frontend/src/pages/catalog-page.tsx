@@ -251,9 +251,22 @@ function Lightbox({
   // Full-resolution URL for download only
   const fullMediaUrl = catalogMediaUrl(item.encodedKey, apiToken);
   // Lightbox preview: use large (1920px) thumbnail for images, full URL for videos
-  const previewUrl = item.mediaType === 'video'
+  const thumbUrl = item.mediaType === 'video'
     ? fullMediaUrl
     : catalogThumbnailUrl(item.encodedKey, 'large', apiToken);
+
+  // Fall back to the full media URL if the large thumbnail fails (e.g. HEIC
+  // without libheif in Sharp — the browser can still decode it natively).
+  const [previewFailed, setPreviewFailed] = useState(false);
+  // Second-level: full media URL itself failed (unsupported codec / corrupt)
+  const [mediaFailed, setMediaFailed] = useState(false);
+  const previewUrl = previewFailed ? fullMediaUrl : thumbUrl;
+
+  // Reset fallback state when navigating to a different item
+  useEffect(() => {
+    setPreviewFailed(false);
+    setMediaFailed(false);
+  }, [index]);
 
   // ── Zoom state ──
   const [zoom, setZoom] = useState(1);
@@ -386,7 +399,17 @@ function Lightbox({
         onClick={(e) => e.stopPropagation()}
         onWheel={handleWheel}
       >
-        {item.mediaType === 'video' ? (
+        {mediaFailed ? (
+          <div className="flex h-48 w-64 flex-col items-center justify-center gap-2 rounded-lg bg-slate-800 text-slate-400">
+            <svg className="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none" />
+              <path d="M21 15l-5-5L5 21" />
+            </svg>
+            <span className="text-xs">{item.key.split('/').pop()}</span>
+            <span className="text-[10px] text-slate-500">Cannot preview this file</span>
+          </div>
+        ) : item.mediaType === 'video' ? (
           <video
             key={previewUrl}
             src={previewUrl}
@@ -394,14 +417,20 @@ function Lightbox({
             autoPlay
             className="max-h-[88vh] max-w-[88vw] rounded-lg transition-transform duration-200"
             style={{ transform: `scale(${zoom})` }}
+            onError={() => setMediaFailed(true)}
           />
         ) : (
           <img
             key={previewUrl}
             src={previewUrl}
             alt={item.key}
+            decoding="async"
             className="max-h-[88vh] max-w-[88vw] rounded-lg object-contain transition-transform duration-200"
             style={{ transform: `scale(${zoom})` }}
+            onError={() => {
+              if (!previewFailed) setPreviewFailed(true);
+              else setMediaFailed(true);
+            }}
           />
         )}
 
