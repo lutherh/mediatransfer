@@ -8,6 +8,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
@@ -311,6 +312,7 @@ export class ScalewayCatalogService implements CatalogService {
   private statsCache: { data: CatalogStats; expiresAt: number } | null = null;
   private readonly thumbCache = new ThumbnailCache();
   private itemsIndexCache: { items: CatalogItem[]; expiresAt: number } | null = null;
+  private itemsIndexInflight: Promise<CatalogItem[]> | null = null;
 
   constructor(config: ScalewayCatalogConfig, client?: S3Client) {
     this.bucket = config.bucket;
@@ -327,6 +329,10 @@ export class ScalewayCatalogService implements CatalogService {
           secretAccessKey: config.secretKey,
         },
         forcePathStyle: true,
+        requestHandler: new NodeHttpHandler({
+          connectionTimeout: 10_000,  // 10s to establish TCP connection
+          requestTimeout: 60_000,     // 60s for the response to begin
+        }),
       });
   }
 
@@ -428,9 +434,19 @@ export class ScalewayCatalogService implements CatalogService {
     if (this.itemsIndexCache && Date.now() < this.itemsIndexCache.expiresAt) {
       return this.itemsIndexCache.items;
     }
-    const items = await this.listAll();
-    this.itemsIndexCache = { items, expiresAt: Date.now() + STATS_CACHE_TTL_MS };
-    return items;
+    // Dedup concurrent callers — share one in-flight listAll() instead of
+    // launching parallel full scans that hammer S3 and cause timeouts.
+    if (!this.itemsIndexInflight) {
+      this.itemsIndexInflight = this.listAll()
+        .then((items) => {
+          this.itemsIndexCache = { items, expiresAt: Date.now() + STATS_CACHE_TTL_MS };
+          return items;
+        })
+        .finally(() => {
+          this.itemsIndexInflight = null;
+        });
+    }
+    return this.itemsIndexInflight;
   }
 
   async getObject(encodedKey: string): Promise<CatalogObject> {
