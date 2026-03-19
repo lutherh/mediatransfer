@@ -85,6 +85,28 @@ describe('scaleway catalog service', () => {
     expect(page.items[0]?.sectionDate).toBe('2021-09-14');
   });
 
+  it('uses path date instead of false-positive filename digit match', async () => {
+    // Filenames like 68120710305__… contain "2071" embedded in a longer digit
+    // sequence. The regex should NOT extract a bogus 2071-03-05 date from that;
+    // it should prefer the reliable YYYY/MM/DD path date.
+    const send = vi.fn(async () => ({
+      Contents: [
+        {
+          Key: 'transfers/2022/08/03/Photos_from_2022/68120710305__48F6AE01-7E45-45D1-9DE6-9175E5E32C.JPG',
+          Size: 2_600_000,
+          LastModified: new Date('2026-03-18T23:31:01.000Z'),
+        },
+      ],
+      IsTruncated: false,
+    }));
+
+    const service = makeService(send);
+    const page = await service.listPage({ max: 10 });
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]?.capturedAt).toBe('2022-08-03T00:00:00.000Z');
+    expect(page.items[0]?.sectionDate).toBe('2022-08-03');
+  });
+
   describe('listPage with sort=desc', () => {
     function makeDescService() {
       let callCount = 0;

@@ -787,10 +787,21 @@ function inferMediaType(key: string): 'image' | 'video' | 'other' {
 }
 
 function inferCapturedAt(key: string, fallback: Date): Date {
+  // 1. Prefer the date from the S3 path (YYYY/MM/DD folders) — this was assigned
+  //    during upload from EXIF/sidecar data, so it's the most reliable source.
   const fromPath = /(?:^|\/)((?:19|20)\d{2})\/(\d{2})\/(\d{2})(?:\/|$)/.exec(key);
+  if (fromPath) {
+    const parsed = asUtcDate(fromPath[1], fromPath[2], fromPath[3], '00', '00', '00');
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  // 2. Try filename-embedded timestamps (e.g. IMG_20231215_143022.jpg)
+  //    Use (?<!\d) / (?!\d) boundaries so we don't match inside longer digit runs.
   const filename = key.split('/').pop() ?? key;
 
-  const fromFileUnderscore = /((?:19|20)\d{2})(\d{2})(\d{2})[\sT_-]?(\d{2})(\d{2})(\d{2})/.exec(filename);
+  const fromFileUnderscore = /(?<!\d)((?:19|20)\d{2})(\d{2})(\d{2})[\sT_-]?(\d{2})(\d{2})(\d{2})(?!\d)/.exec(filename);
   if (fromFileUnderscore) {
     const parsed = asUtcDate(
       fromFileUnderscore[1],
@@ -805,7 +816,7 @@ function inferCapturedAt(key: string, fallback: Date): Date {
     }
   }
 
-  const fromFileDashed = /((?:19|20)\d{2})-(\d{2})-(\d{2})[ T_.-]?(\d{2})[.:_-]?(\d{2})[.:_-]?(\d{2})/.exec(filename);
+  const fromFileDashed = /(?<!\d)((?:19|20)\d{2})-(\d{2})-(\d{2})[ T_.-]?(\d{2})[.:_-]?(\d{2})[.:_-]?(\d{2})(?!\d)/.exec(filename);
   if (fromFileDashed) {
     const parsed = asUtcDate(
       fromFileDashed[1],
@@ -820,7 +831,7 @@ function inferCapturedAt(key: string, fallback: Date): Date {
     }
   }
 
-  const fromFileDateOnly = /((?:19|20)\d{2})(\d{2})(\d{2})/.exec(filename);
+  const fromFileDateOnly = /(?<!\d)((?:19|20)\d{2})(\d{2})(\d{2})(?!\d)/.exec(filename);
   if (fromFileDateOnly) {
     const parsed = asUtcDate(
       fromFileDateOnly[1],
@@ -830,13 +841,6 @@ function inferCapturedAt(key: string, fallback: Date): Date {
       '00',
       '00',
     );
-    if (parsed) {
-      return parsed;
-    }
-  }
-
-  if (fromPath) {
-    const parsed = asUtcDate(fromPath[1], fromPath[2], fromPath[3], '00', '00', '00');
     if (parsed) {
       return parsed;
     }
@@ -853,6 +857,13 @@ function asUtcDate(
   minute: string,
   second: string,
 ): Date | undefined {
+  const y = Number(year);
+  const m = Number(month);
+  const d = Number(day);
+  // Reject implausible dates: before 1970, after current year + 1, or invalid month/day
+  if (y < 1970 || y > new Date().getFullYear() + 1 || m < 1 || m > 12 || d < 1 || d > 31) {
+    return undefined;
+  }
   const iso = `${year}-${month}-${day}T${hour}:${minute}:${second}.000Z`;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) {
