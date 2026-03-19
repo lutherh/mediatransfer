@@ -408,6 +408,15 @@ function Lightbox({
             </svg>
             <span className="text-xs">{item.key.split('/').pop()}</span>
             <span className="text-[10px] text-slate-500">Cannot preview this file</span>
+            <a
+              href={fullMediaUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-1 rounded bg-slate-600 px-3 py-1 text-[11px] text-slate-200 hover:bg-slate-500"
+              onClick={(e) => e.stopPropagation()}
+            >
+              Download to open externally
+            </a>
           </div>
         ) : item.mediaType === 'video' ? (
           <video
