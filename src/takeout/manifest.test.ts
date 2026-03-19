@@ -98,7 +98,7 @@ describe('takeout/manifest', () => {
     });
   });
 
-  it('falls back to file mtime when sidecar, filename, and EXIF are all unavailable', async () => {
+  it('uses unknown-date path when sidecar, filename, and EXIF are all unavailable', async () => {
     await withTempDir(async (dir) => {
       const mediaRoot = path.join(dir, 'Google Photos', 'Album2');
       await fs.mkdir(mediaRoot, { recursive: true });
@@ -110,7 +110,9 @@ describe('takeout/manifest', () => {
       await fs.utimes(mediaPath, fallback, fallback);
 
       const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
-      expect(entry.datePath).toBe('2024/03/09');
+      expect(entry.datePath).toBe('unknown-date');
+      // capturedAt still stores mtime for sorting reference
+      expect(entry.capturedAt).toBe(fallback.toISOString());
     });
   });
 
