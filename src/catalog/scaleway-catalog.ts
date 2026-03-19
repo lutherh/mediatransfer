@@ -9,6 +9,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
+import { Agent as HttpsAgent } from 'node:https';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
@@ -310,6 +311,7 @@ export class ScalewayCatalogService implements CatalogService {
   private readonly s3RequestTimeoutMs: number;
   private readonly s3ListMaxRetries: number;
   private statsCache: { data: CatalogStats; expiresAt: number } | null = null;
+  private statsInflight: Promise<CatalogStats> | null = null;
   private readonly thumbCache = new ThumbnailCache();
   private itemsIndexCache: { items: CatalogItem[]; expiresAt: number } | null = null;
   private itemsIndexInflight: Promise<CatalogItem[]> | null = null;
@@ -330,6 +332,10 @@ export class ScalewayCatalogService implements CatalogService {
         },
         forcePathStyle: true,
         requestHandler: new NodeHttpHandler({
+          httpsAgent: new HttpsAgent({
+            keepAlive: true,      // reuse TCP connections – avoids slow-start & TLS handshake per request
+            maxSockets: 25,       // Scaleway recommends parallelism; pool up to 25 concurrent connections
+          }),
           connectionTimeout: 10_000,  // 10s to establish TCP connection
           requestTimeout: 60_000,     // 60s for the response to begin
         }),
@@ -609,56 +615,44 @@ export class ScalewayCatalogService implements CatalogService {
     if (this.statsCache && Date.now() < this.statsCache.expiresAt) {
       return this.statsCache.data;
     }
+    // Dedup concurrent callers — derive stats from the items index.
+    // This avoids a separate full-bucket scan; getItemsIndex() already
+    // lists every object and deduplicates concurrent requests.
+    if (!this.statsInflight) {
+      this.statsInflight = this.getItemsIndex()
+        .then((items) => {
+          let totalBytes = 0;
+          let imageCount = 0;
+          let videoCount = 0;
+          let oldest: Date | null = null;
+          let newest: Date | null = null;
 
-    let totalFiles = 0;
-    let totalBytes = 0;
-    let imageCount = 0;
-    let videoCount = 0;
-    let oldest: Date | null = null;
-    let newest: Date | null = null;
-    let continuationToken: string | undefined;
+          for (const item of items) {
+            totalBytes += item.size;
+            if (item.mediaType === 'image') imageCount++;
+            else videoCount++;
+            const d = new Date(item.capturedAt);
+            if (!oldest || d < oldest) oldest = d;
+            if (!newest || d > newest) newest = d;
+          }
 
-    do {
-      const result = await s3ListWithRetry(this.client, {
-        Bucket: this.bucket,
-        Prefix: this.prefix ? `${this.prefix}/` : undefined,
-        ContinuationToken: continuationToken,
-        MaxKeys: 1000,
-      }, {
-        timeoutMs: this.s3RequestTimeoutMs,
-        maxRetries: this.s3ListMaxRetries,
-      });
+          const stats: CatalogStats = {
+            totalFiles: items.length,
+            totalBytes,
+            imageCount,
+            videoCount,
+            oldestDate: oldest?.toISOString() ?? null,
+            newestDate: newest?.toISOString() ?? null,
+          };
 
-      for (const obj of result.Contents ?? []) {
-        if (!obj.Key || obj.Size === undefined) continue;
-        const key = this.stripPrefix(obj.Key);
-        const type = inferMediaType(key);
-        if (type !== 'image' && type !== 'video') continue;
-
-        totalFiles++;
-        totalBytes += Number(obj.Size);
-        if (type === 'image') imageCount++;
-        else videoCount++;
-
-        const capturedAt = inferCapturedAt(key, obj.LastModified ?? new Date());
-        if (!oldest || capturedAt < oldest) oldest = capturedAt;
-        if (!newest || capturedAt > newest) newest = capturedAt;
-      }
-
-      continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
-    } while (continuationToken);
-
-    const stats: CatalogStats = {
-      totalFiles,
-      totalBytes,
-      imageCount,
-      videoCount,
-      oldestDate: oldest?.toISOString() ?? null,
-      newestDate: newest?.toISOString() ?? null,
-    };
-
-    this.statsCache = { data: stats, expiresAt: Date.now() + STATS_CACHE_TTL_MS };
-    return stats;
+          this.statsCache = { data: stats, expiresAt: Date.now() + STATS_CACHE_TTL_MS };
+          return stats;
+        })
+        .finally(() => {
+          this.statsInflight = null;
+        });
+    }
+    return this.statsInflight;
   }
 
   async listAll(prefix?: string): Promise<CatalogItem[]> {
