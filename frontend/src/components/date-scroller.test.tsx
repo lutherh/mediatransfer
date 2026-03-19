@@ -22,7 +22,7 @@ function makeSections(dates: string[], itemsPerDate = 3): [string, unknown[]][] 
 
 /** Create a ref-compatible Map with mock DOM elements */
 function makeSectionRefs(dates: string[]) {
-  const map = new Map<string, HTMLDivElement>();
+  const map = new Map<string, HTMLElement>();
   dates.forEach((d) => {
     const el = document.createElement('div');
     // Mock getBoundingClientRect

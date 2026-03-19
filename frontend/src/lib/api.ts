@@ -697,8 +697,14 @@ export function uploadFiles(
       }
     });
 
+    const PAYLOAD_TOO_LARGE_MSG = 'Files are too large. Maximum size is 500 MB per file. Try uploading fewer or smaller files.';
+
     xhr.addEventListener('load', () => {
       try {
+        if (xhr.status === 413) {
+          reject(new Error(PAYLOAD_TOO_LARGE_MSG));
+          return;
+        }
         const data = JSON.parse(xhr.responseText) as UploadResponse;
         if (xhr.status >= 200 && xhr.status < 300) {
           resolve(data);
@@ -706,7 +712,11 @@ export function uploadFiles(
           reject(new Error((data as unknown as { error?: string })?.error ?? `Upload failed (${xhr.status})`));
         }
       } catch {
-        reject(new Error(`Upload failed (${xhr.status})`));
+        if (xhr.status === 413) {
+          reject(new Error(PAYLOAD_TOO_LARGE_MSG));
+        } else {
+          reject(new Error(`Upload failed (${xhr.status})`));
+        }
       }
     });
 
@@ -762,9 +772,24 @@ export type CatalogStats = {
   newestDate: string | null;
 };
 
-/** Returns the URL for streaming a catalog media object. */
+/** Returns the URL for streaming a catalog media object (full resolution). */
 export function catalogMediaUrl(encodedKey: string, apiToken?: string): string {
   const url = new URL(`/catalog/media/${encodedKey}`, API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  return url.toString();
+}
+
+/**
+ * Returns the URL for a resized catalog thumbnail.
+ *   • `small` – 256px grid tile (~15-30 KB)
+ *   • `large` – 1920px lightbox preview (~200-400 KB)
+ */
+export function catalogThumbnailUrl(
+  encodedKey: string,
+  size: 'small' | 'large',
+  apiToken?: string,
+): string {
+  const url = new URL(`/catalog/thumb/${size}/${encodedKey}`, API_BASE_URL);
   if (apiToken) url.searchParams.set('apiToken', apiToken);
   return url.toString();
 }
@@ -784,12 +809,14 @@ export async function fetchCatalogItems(opts: {
   token?: string;
   prefix?: string;
   max?: number;
+  sort?: 'asc' | 'desc';
   apiToken?: string;
 }): Promise<CatalogPage> {
   const url = new URL('/catalog/api/items', API_BASE_URL);
   if (opts.token) url.searchParams.set('token', opts.token);
   if (opts.prefix) url.searchParams.set('prefix', opts.prefix);
   if (opts.max !== undefined) url.searchParams.set('max', String(opts.max));
+  if (opts.sort) url.searchParams.set('sort', opts.sort);
   if (opts.apiToken) url.searchParams.set('apiToken', opts.apiToken);
   const response = await fetch(url.toString());
   if (!response.ok) {

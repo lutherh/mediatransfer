@@ -2,7 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { inferDateFromFilename } from '../utils/exif.js';
+import { inferDateFromFilename, extractExifMetadata } from '../utils/exif.js';
 
 const MEDIA_EXTENSIONS = new Set([
   '.jpg', '.jpeg', '.png', '.gif', '.webp',
@@ -168,6 +168,9 @@ async function findSidecarPath(sourcePath: string): Promise<string | undefined> 
   return results.find((r) => r !== null) ?? undefined;
 }
 
+/** Max bytes to read for EXIF parsing — headers are always at the start of the file */
+const EXIF_READ_BYTES = 256 * 1024;
+
 async function deriveCapturedDate(
   sourcePath: string,
   sidecarPath: string | undefined,
@@ -184,7 +187,22 @@ async function deriveCapturedDate(
   const fromFilename = inferDateFromFilename(filename);
   if (fromFilename) return fromFilename;
 
-  // 3. Last resort: file modification time
+  // 3. Try EXIF metadata embedded in the file (DateTimeOriginal / CreateDate)
+  try {
+    const fd = await fs.open(sourcePath, 'r');
+    try {
+      const buf = Buffer.alloc(EXIF_READ_BYTES);
+      const { bytesRead } = await fd.read(buf, 0, EXIF_READ_BYTES, 0);
+      const exif = await extractExifMetadata(buf.subarray(0, bytesRead));
+      if (exif.capturedAt) return exif.capturedAt;
+    } finally {
+      await fd.close();
+    }
+  } catch {
+    // EXIF extraction failed — continue to fallback
+  }
+
+  // 4. Last resort: file modification time
   return fallbackDate;
 }
 
