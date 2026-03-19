@@ -44,7 +44,7 @@ export async function registerUploadRoutes(
    */
   app.post('/uploads', {
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
-    bodyLimit: MAX_FILE_SIZE * 20 + 1024 * 1024, // allow up to 20 files × 100 MB + 1 MB multipart overhead
+    bodyLimit: MAX_FILE_SIZE * 20 + 1024 * 1024, // allow up to 20 files × 500 MB + 1 MB multipart overhead
   }, async (req, reply) => {
     const uploadService = requireUploads(uploads, reply);
     if (!uploadService) {
