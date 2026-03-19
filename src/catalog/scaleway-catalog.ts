@@ -450,22 +450,20 @@ export class ScalewayCatalogService implements CatalogService {
         ? response.Body
         : Readable.fromWeb(response.Body as ReadableStream<Uint8Array>);
 
-    const sourceChunks: Buffer[] = [];
-    for await (const chunk of bodyStream) {
-      sourceChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    const sourceBuffer = Buffer.concat(sourceChunks);
-
     const { maxDimension, quality } = THUMB_SIZES[size];
 
-    const buffer = await sharp(sourceBuffer)
+    // Stream S3 body directly into Sharp — avoids buffering the full-size
+    // image (potentially 20+ MB for HEIC) into a single Buffer[]
+    const sharpTransform = sharp()
       .rotate()                                // Auto-orient using EXIF
       .resize(maxDimension, maxDimension, {
         fit: 'inside',                         // Preserve aspect ratio
         withoutEnlargement: true,              // Don't upscale small images
       })
-      .jpeg({ quality, mozjpeg: true })        // MozJPEG for smaller output
-      .toBuffer();
+      .jpeg({ quality, mozjpeg: true });       // MozJPEG for smaller output
+
+    bodyStream.pipe(sharpTransform);
+    const buffer = await sharpTransform.toBuffer();
 
     const contentType = 'image/jpeg';
 

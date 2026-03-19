@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { CatalogService, DuplicateGroup, ThumbnailSize } from '../../catalog/scaleway-catalog.js';
+import { decodeKey } from '../../catalog/scaleway-catalog.js';
 import { extractExifMetadata } from '../../utils/exif.js';
 import { apiError } from '../errors.js';
 import { buildCatalogHtml } from './catalog-html.js';
@@ -167,12 +168,24 @@ export async function registerCatalogRoutes(
 
     const { moves } = bulkMoveBodySchema.parse(req.body);
     const results = { moved: [] as { from: string; to: string }[], failed: [] as { key: string; error: string }[] };
-    for (const move of moves) {
-      try {
-        const result = await catalogService.moveObject(move.encodedKey, move.newDatePrefix);
-        results.moved.push(result);
-      } catch (err) {
-        results.failed.push({ key: move.encodedKey, error: String(err) });
+
+    // Process moves with limited concurrency (5 at a time) instead of serially
+    const CONCURRENCY = 5;
+    for (let i = 0; i < moves.length; i += CONCURRENCY) {
+      const batch = moves.slice(i, i + CONCURRENCY);
+      const settled = await Promise.allSettled(
+        batch.map(async (move) => {
+          const result = await catalogService.moveObject(move.encodedKey, move.newDatePrefix);
+          return result;
+        }),
+      );
+      for (let j = 0; j < settled.length; j++) {
+        const outcome = settled[j]!;
+        if (outcome.status === 'fulfilled') {
+          results.moved.push(outcome.value);
+        } else {
+          results.failed.push({ key: batch[j]!.encodedKey, error: String(outcome.reason) });
+        }
       }
     }
     return results;
@@ -365,9 +378,9 @@ export async function registerCatalogRoutes(
       throw error;
     }
 
-    const normalizedEtag = normalizeEtag(media.etag);
+    const normalizedEtag = formatEtagHeader(media.etag);
     const ifNoneMatch = req.headers['if-none-match'];
-    if (normalizedEtag && ifNoneMatch && normalizeEtag(ifNoneMatch) === normalizedEtag) {
+    if (normalizedEtag && ifNoneMatch && formatEtagHeader(ifNoneMatch) === normalizedEtag) {
       reply.header('Cache-Control', 'private, max-age=86400, stale-while-revalidate=604800');
       reply.header('ETag', normalizedEtag);
       return reply.code(304).send();
@@ -403,6 +416,10 @@ export async function registerCatalogRoutes(
     if (typeof media.contentLength === 'number' && Number.isFinite(media.contentLength) && media.contentLength >= 0) {
       reply.header('Content-Length', String(media.contentLength));
     }
+    // Suggest a filename for download — extract from the decoded S3 key
+    const decodedKey = decodeKey(encodedKey);
+    const filename = decodedKey.split('/').pop() ?? decodedKey;
+    reply.header('Content-Disposition', `inline; filename="${filename.replace(/"/g, '_')}"`);
     return reply.send(media.stream);
   });
 
@@ -463,7 +480,8 @@ function requireCatalog(catalog: CatalogService | undefined, reply: { status: (c
   return catalog;
 }
 
-function normalizeEtag(value: string | undefined): string | undefined {
+/** Format an ETag value as a properly quoted HTTP header value. */
+function formatEtagHeader(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
   }
