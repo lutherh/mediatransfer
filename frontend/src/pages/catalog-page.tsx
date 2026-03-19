@@ -937,8 +937,16 @@ export function CatalogPage() {
   const handleClose = useCallback(() => setLightboxIndex(null), []);
   const handleNavigate = useCallback((i: number) => setLightboxIndex(i), []);
 
-  // Running offset tracks the flat index for each section's first item
-  let runningOffset = 0;
+  /** Pre-computed flat-index offset for each section, keyed by date string. */
+  const sectionOffsets = useMemo(() => {
+    const offsets = new Map<string, number>();
+    let offset = 0;
+    for (const [date, items] of sections) {
+      offsets.set(date, offset);
+      offset += items.length;
+    }
+    return offsets;
+  }, [sections]);
 
   return (
     <div className="space-y-4">
@@ -1037,8 +1045,7 @@ export function CatalogPage() {
         <EmptyState prefix={prefix} />
       ) : (
         sections.map(([date, items]) => {
-          const sectionOffset = runningOffset;
-          runningOffset += items.length;
+          const sectionOffset = sectionOffsets.get(date) ?? 0;
           return (
             <div key={date} ref={(el) => { if (el) sectionRefs.current.set(date, el); else sectionRefs.current.delete(date); }}>
               <SectionHeader
