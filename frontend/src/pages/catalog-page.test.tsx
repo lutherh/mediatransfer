@@ -93,7 +93,7 @@ describe('CatalogPage', () => {
   it('renders the page heading and subtext', async () => {
     renderCatalogPage();
     expect(await screen.findByRole('heading', { name: 'Catalog' })).toBeInTheDocument();
-    expect(await screen.findByText(/browse media stored in scaleway/i)).toBeInTheDocument();
+    expect(await screen.findByText(/your photos and videos/i)).toBeInTheDocument();
   });
 
   it('renders stats bar with file count and size', async () => {
@@ -192,7 +192,7 @@ describe('CatalogPage', () => {
 
   it('renders prefix filter input', async () => {
     renderCatalogPage();
-    const input = await screen.findByPlaceholderText(/Filter by prefix/);
+    const input = await screen.findByPlaceholderText(/Search by date or folder/);
     expect(input).toBeInTheDocument();
   });
 });
