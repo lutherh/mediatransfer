@@ -125,7 +125,9 @@ const server = http.createServer(async (req, res) => {
       // @ts-expect-error response.body is web stream in Node fetch
       const stream = Readable.fromWeb(response.body);
       const key = buildDestinationKey(filename, item.id, item.createTime);
-      await destination.upload(key, stream, mimeType);
+      await destination.upload(key, stream, mimeType, {
+        'captured-at': item.createTime ?? 'unknown',
+      });
 
       console.log(`⬆️ [${index + 1}/${picked.length}] Uploaded ${filename} -> ${key}`);
     }
@@ -255,14 +257,12 @@ function buildDestinationKey(
 
 function toDatePath(createTime?: string): string {
   if (!createTime) {
-    const now = new Date();
-    return `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}/${String(now.getUTCDate()).padStart(2, '0')}`;
+    return 'unknown-date';
   }
 
   const date = new Date(createTime);
   if (Number.isNaN(date.getTime())) {
-    const now = new Date();
-    return `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}/${String(now.getUTCDate()).padStart(2, '0')}`;
+    return 'unknown-date';
   }
 
   const year = date.getUTCFullYear();

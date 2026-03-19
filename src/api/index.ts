@@ -586,6 +586,7 @@ async function transferPickedMediaItemToScaleway(
 			destinationKey,
 			Readable.fromWeb(response.body as any),
 			media.mimeType,
+			{ 'captured-at': media.createTime ?? 'unknown' },
 		),
 		10 * 60_000,
 		`upload ${destinationKey}`,

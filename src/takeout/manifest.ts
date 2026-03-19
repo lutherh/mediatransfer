@@ -46,9 +46,13 @@ export async function buildManifest(
         const stat = await fs.stat(sourcePath);
         const relativePath = toPosix(path.relative(mediaRoot, sourcePath));
         const sidecarPath = await findSidecarPath(sourcePath);
-        const capturedAtDate = await deriveCapturedDate(sourcePath, sidecarPath, stat.mtime);
-        const capturedAt = capturedAtDate.toISOString();
-        const datePath = toDatePath(capturedAtDate);
+        const capturedAtDate = await deriveCapturedDate(sourcePath, sidecarPath);
+        const capturedAt = capturedAtDate
+          ? capturedAtDate.toISOString()
+          : stat.mtime.toISOString();
+        const datePath = capturedAtDate
+          ? toDatePath(capturedAtDate)
+          : 'unknown-date';
         const destinationKey = `transfers/${datePath}/${sanitizeRelativePath(relativePath)}`;
 
         return {
@@ -174,8 +178,7 @@ const EXIF_READ_BYTES = 256 * 1024;
 async function deriveCapturedDate(
   sourcePath: string,
   sidecarPath: string | undefined,
-  fallbackDate: Date,
-): Promise<Date> {
+): Promise<Date | undefined> {
   // 1. Prefer the Google Takeout sidecar JSON (photoTakenTime / creationTime)
   if (sidecarPath) {
     const fromSidecar = await readSidecarDate(sidecarPath);
@@ -202,8 +205,9 @@ async function deriveCapturedDate(
     // EXIF extraction failed — continue to fallback
   }
 
-  // 4. Last resort: file modification time
-  return fallbackDate;
+  // 4. No reliable date found — return undefined so the caller can use
+  //    an 'unknown-date' path rather than silently filing under today's date.
+  return undefined;
 }
 
 async function readSidecarDate(sidecarPath: string): Promise<Date | undefined> {
