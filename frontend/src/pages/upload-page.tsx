@@ -120,7 +120,7 @@ export function UploadPage() {
               Tap to select photos & videos
             </p>
             <p className="mb-4 text-xs text-slate-400">
-              JPEG, PNG, HEIC, MP4, MOV — up to 100 MB each
+              JPEG, PNG, HEIC, MP4, MOV — up to 500 MB each
             </p>
             <input
               ref={fileInputRef}
