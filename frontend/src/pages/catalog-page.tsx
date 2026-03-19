@@ -797,19 +797,25 @@ function monthKey(dateStr: string): string {
  */
 function buildMonthGroups(
   sections: [string, CatalogItem[]][],
-): Map<string, { items: CatalogItem[]; label: string; year: string }> {
-  const map = new Map<string, { items: CatalogItem[]; label: string; year: string }>();
+): Map<string, { items: CatalogItem[]; label: string; year: string; coverItem: CatalogItem | undefined }> {
+  const map = new Map<string, { items: CatalogItem[]; label: string; year: string; coverItem: CatalogItem | undefined }>();
   for (const [date, items] of sections) {
     const mk = monthKey(date);
     const existing = map.get(mk);
     if (existing) {
       existing.items.push(...items);
+      // Prefer an image cover; keep scanning if we haven't found one yet
+      if (!existing.coverItem || existing.coverItem.mediaType !== 'image') {
+        existing.coverItem = items.find((it) => it.mediaType === 'image') ?? existing.coverItem ?? items[0];
+      }
     } else {
       const m = parseInt(date.slice(5, 7), 10) - 1;
+      const coverItem = items.find((it) => it.mediaType === 'image') ?? items[0];
       map.set(mk, {
         items: [...items],
         label: FULL_MONTHS[m],
         year: date.slice(0, 4),
+        coverItem,
       });
     }
   }
@@ -1474,15 +1480,19 @@ export function CatalogPage() {
             const curMonth = monthKey(date);
             const isNewMonth = sectionIndex === 0 || curMonth !== prevMonth;
             const mg = monthGroups.get(curMonth);
-            // Pick the first image in the month as cover photo
-            const coverItem = mg?.items.find((it) => it.mediaType === 'image') ?? mg?.items[0];
 
             return (
               <section
                 key={date}
                 ref={(el) => { if (el) sectionRefs.current.set(date, el); else sectionRefs.current.delete(date); }}
                 className={sectionIndex > 0 ? 'border-t border-slate-200 pt-4' : ''}
-                style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 500px' }}
+                style={{
+                  // Offscreen sections skip layout/paint work, improving scroll
+                  // perf on large catalogs (1000+ items). 500px is the estimated
+                  // height of a typical section (header + ~2-3 grid rows).
+                  contentVisibility: 'auto',
+                  containIntrinsicSize: 'auto 500px',
+                }}
               >
                 {/* Monthly "Best of" cover card at the start of each month */}
                 {isNewMonth && mg && mg.items.length > 0 && (
@@ -1490,7 +1500,7 @@ export function CatalogPage() {
                     monthLabel={mg.label}
                     year={mg.year}
                     itemCount={mg.items.length}
-                    coverItem={coverItem}
+                    coverItem={mg.coverItem}
                     apiToken={apiToken}
                   />
                 )}
