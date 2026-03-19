@@ -9,7 +9,8 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { execFile } from 'node:child_process';
-import { createWriteStream, existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -179,6 +180,9 @@ function checkFfmpeg(): Promise<boolean> {
   });
 }
 
+/** Timeout for ffmpeg frame extraction commands. */
+const FFMPEG_TIMEOUT_MS = 30_000;
+
 /**
  * Extract a single frame from a video file using ffmpeg.
  * Downloads the video to a temp file, extracts a frame at 1s (or first frame),
@@ -189,7 +193,7 @@ async function extractVideoFrame(
   maxDimension: number,
   quality: number,
 ): Promise<Buffer> {
-  const tempVideo = path.join(tmpdir(), `mediatransfer-vid-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const tempVideo = path.join(tmpdir(), `mediatransfer-vid-${randomUUID()}`);
   const tempFrame = `${tempVideo}-frame.jpg`;
   try {
     // Write video stream to temp file
@@ -205,7 +209,7 @@ async function extractVideoFrame(
         '-q:v', '2',              // high quality JPEG
         '-f', 'image2',
         tempFrame,
-      ], { timeout: 30_000 }, (error) => {
+      ], { timeout: FFMPEG_TIMEOUT_MS }, (error) => {
         if (error) {
           // Retry without -ss for very short clips
           execFile('ffmpeg', [
@@ -215,7 +219,7 @@ async function extractVideoFrame(
             '-q:v', '2',
             '-f', 'image2',
             tempFrame,
-          ], { timeout: 30_000 }, (retryError) => {
+          ], { timeout: FFMPEG_TIMEOUT_MS }, (retryError) => {
             if (retryError) reject(retryError);
             else resolve();
           });
@@ -225,10 +229,7 @@ async function extractVideoFrame(
       });
     });
 
-    // Resize the extracted frame via sharp
-    if (!existsSync(tempFrame)) {
-      throw new Error('ffmpeg did not produce a frame');
-    }
+    // Resize the extracted frame via sharp (sharp throws a clear error if file missing)
     const buffer = await sharp(tempFrame)
       .resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality, mozjpeg: true })

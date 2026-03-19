@@ -697,10 +697,12 @@ export function uploadFiles(
       }
     });
 
+    const PAYLOAD_TOO_LARGE_MSG = 'Files are too large. Maximum size is 500 MB per file. Try uploading fewer or smaller files.';
+
     xhr.addEventListener('load', () => {
       try {
         if (xhr.status === 413) {
-          reject(new Error('Files are too large. Maximum size is 500 MB per file. Try uploading fewer or smaller files.'));
+          reject(new Error(PAYLOAD_TOO_LARGE_MSG));
           return;
         }
         const data = JSON.parse(xhr.responseText) as UploadResponse;
@@ -711,7 +713,7 @@ export function uploadFiles(
         }
       } catch {
         if (xhr.status === 413) {
-          reject(new Error('Files are too large. Maximum size is 500 MB per file. Try uploading fewer or smaller files.'));
+          reject(new Error(PAYLOAD_TOO_LARGE_MSG));
         } else {
           reject(new Error(`Upload failed (${xhr.status})`));
         }
