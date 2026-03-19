@@ -1261,15 +1261,30 @@ export function CatalogPage() {
       )}
 
       {deleteMutation.isError && (
-        <p className="text-sm text-red-600">
-          {deleteMutation.error instanceof Error ? deleteMutation.error.message : 'Delete failed'}
-        </p>
+        <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-4">
+          <svg className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          <div>
+            <p className="text-sm font-medium text-red-800">Delete failed</p>
+            <p className="mt-0.5 text-sm text-red-700">
+              {deleteMutation.error instanceof Error ? deleteMutation.error.message : 'Something went wrong. Please try again.'}
+            </p>
+          </div>
+        </div>
       )}
 
       {/* ── Stats card ──────────────────────────────────────────────── */}
       <Card className="p-2.5">
         {statsQuery.isLoading ? (
-          <p className="text-xs text-slate-600">Loading stats…</p>
+          /* Stats skeleton: mimics the 6-column grid while data loads */
+          <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-3 lg:grid-cols-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="h-4 animate-pulse rounded bg-slate-200" />
+            ))}
+          </div>
         ) : statsQuery.isError ? (
           <p className="text-xs text-amber-700">
             {statsQuery.error instanceof Error ? statsQuery.error.message : 'Catalog unavailable — check SCW_* env vars'}
@@ -1315,9 +1330,19 @@ export function CatalogPage() {
       </div>
 
       {itemsQuery.isError && (
-        <p className="text-sm text-red-600">
-          {itemsQuery.error instanceof Error ? itemsQuery.error.message : 'Failed to load catalog'}
-        </p>
+        <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-4">
+          <svg className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          <div>
+            <p className="text-sm font-medium text-red-800">Failed to load catalog</p>
+            <p className="mt-0.5 text-sm text-red-700">
+              {itemsQuery.error instanceof Error ? itemsQuery.error.message : 'Check your connection and try refreshing the page.'}
+            </p>
+          </div>
+        </div>
       )}
 
       {/* ── Date-grouped grid (Google Photos-style sections) ─────── */}
@@ -1368,9 +1393,14 @@ export function CatalogPage() {
       )}
 
       {/* ── Infinite scroll sentinel ────────────────────────────────── */}
-      <div ref={sentinelRef} className="flex h-4 items-center justify-center">
+      <div ref={sentinelRef} className="flex h-8 items-center justify-center gap-2" role="status">
         {itemsQuery.isFetchingNextPage && (
-          <p className="text-xs text-slate-500">Loading more…</p>
+          <>
+            <span className="sr-only">Loading more items</span>
+            <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.3s]" />
+            <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.15s]" />
+            <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" />
+          </>
         )}
       </div>
 
