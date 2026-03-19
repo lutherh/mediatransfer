@@ -14,6 +14,9 @@ export function Layout() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
 
+  // Catalog page uses wider layout to maximize grid real estate (Google Photos-style edge-to-edge grid)
+  const isCatalog = location.pathname.startsWith('/catalog');
+
   // Close mobile menu on navigation
   useEffect(() => {
     setMobileMenuOpen(false);
@@ -94,7 +97,7 @@ export function Layout() {
           </nav>
         )}
       </header>
-      <main className="mx-auto max-w-5xl px-4 py-4 sm:py-6">
+      <main className={`mx-auto px-4 py-4 sm:py-6 ${isCatalog ? 'max-w-7xl' : 'max-w-5xl'}`}>
         <Outlet />
       </main>
     </div>

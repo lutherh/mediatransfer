@@ -26,7 +26,7 @@ export interface DateScrollerProps {
   /** Sections array from CatalogPage – [date, items][] where date is "YYYY-MM-DD", newest first */
   sections: [string, unknown[]][];
   /** Map of "YYYY-MM-DD" → DOM element for each section, used for scroll-to and visibility detection */
-  sectionRefs: React.RefObject<Map<string, HTMLDivElement>>;
+  sectionRefs: React.RefObject<Map<string, HTMLElement>>;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

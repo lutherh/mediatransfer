@@ -11,10 +11,10 @@ import type { UploadService } from '../types.js';
 import { apiError } from '../errors.js';
 
 /**
- * Max file size: 100 MB per file.
- * iPhone photos are typically 2-10 MB, videos up to ~100 MB.
+ * Max file size: 500 MB per file.
+ * iPhone photos are typically 2-10 MB, videos can be 200+ MB for 4K recordings.
  */
-const MAX_FILE_SIZE = 100 * 1024 * 1024;
+const MAX_FILE_SIZE = 500 * 1024 * 1024;
 
 export async function registerUploadRoutes(
   app: FastifyInstance,
@@ -44,7 +44,7 @@ export async function registerUploadRoutes(
    */
   app.post('/uploads', {
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
-    bodyLimit: MAX_FILE_SIZE * 20 + 1024 * 1024, // allow up to 20 files × 100 MB + 1 MB multipart overhead
+    bodyLimit: MAX_FILE_SIZE * 20 + 1024 * 1024, // allow up to 20 files × 500 MB + 1 MB multipart overhead
   }, async (req, reply) => {
     const uploadService = requireUploads(uploads, reply);
     if (!uploadService) {
