@@ -28,6 +28,7 @@ import {
 } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { DateScroller } from '@/components/date-scroller';
+import { useThumbnailQueue } from '@/lib/thumbnail-queue';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -460,8 +461,8 @@ function Lightbox({
  * margin). This prevents hundreds of concurrent requests when scrolling through
  * thousands of items.
  *
- * Both images and videos use the small thumbnail endpoint — videos are never
- * loaded as full media files in the grid.
+ * Images use the small thumbnail endpoint. Videos keep a lightweight tile with
+ * a play affordance and do not request server-side thumbnails in the grid.
  *
  * @pattern Immich skeleton-to-fade thumbnail loading
  * @pattern Google Photos rounded-lg tiles with hover scale
@@ -489,7 +490,7 @@ function Thumbnail({
   const cellRef = useRef<HTMLDivElement>(null);
   const [isNearViewport, setIsNearViewport] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [thumbError, setThumbError] = useState(false);
+  const isVideo = item.mediaType === 'video';
 
   // Observe when the cell enters a 200px margin around the viewport
   useEffect(() => {
@@ -508,11 +509,12 @@ function Thumbnail({
     return () => observer.disconnect();
   }, []);
 
-  const thumbUrl = catalogThumbnailUrl(item.encodedKey, 'small', apiToken);
-  // Fallback for videos if the server can't generate a thumbnail (415)
-  const fallbackUrl = thumbError && item.mediaType === 'video'
-    ? catalogMediaUrl(item.encodedKey, apiToken)
-    : undefined;
+  // Videos skip the thumb endpoint entirely (server returns 415).
+  // Images go through the concurrency-limited queue (~30 at a time).
+  const wantUrl = !isVideo && isNearViewport
+    ? catalogThumbnailUrl(item.encodedKey, 'small', apiToken)
+    : null;
+  const { src: thumbSrc, markComplete } = useThumbnailQueue(wantUrl);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
     if (e.shiftKey) {
@@ -552,22 +554,17 @@ function Thumbnail({
         <div className="absolute inset-0 animate-pulse bg-slate-300" />
       )}
 
-      {/* Only render the img tag when the cell is near the viewport */}
-      {isNearViewport && (
+      {/* Render img only when the queue grants a slot (images only, never videos) */}
+      {thumbSrc && (
         <img
-          src={fallbackUrl ?? thumbUrl}
+          src={thumbSrc}
+          loading="lazy"
+          decoding="async"
           className={`h-full w-full select-none object-cover transition-all duration-300 ${
             loaded ? 'opacity-100' : 'opacity-0'
           } ${!selectionMode ? 'group-hover:scale-105' : ''} ${selected ? 'brightness-75' : ''}`}
-          onLoad={() => setLoaded(true)}
-          onError={() => {
-            if (!thumbError && item.mediaType === 'video') {
-              // Thumbnail generation failed for this video — fall back to poster frame
-              setThumbError(true);
-            } else {
-              setLoaded(true);
-            }
-          }}
+          onLoad={() => { markComplete(); setLoaded(true); }}
+          onError={() => { markComplete(); setLoaded(true); }}
           draggable={false}
         />
       )}
@@ -765,7 +762,9 @@ export function CatalogPage() {
     queryKey: ['catalog-stats', apiToken],
     queryFn: () => fetchCatalogStats(apiToken),
     retry: false,
-    staleTime: 60_000,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   const sortDirection = sortNewestFirst ? 'desc' : 'asc';
@@ -776,6 +775,9 @@ export function CatalogPage() {
       fetchCatalogItems({ token: pageParam as string | undefined, prefix: prefix || undefined, max: 100, sort: sortDirection, apiToken }),
     getNextPageParam: (lastPage) => lastPage.nextToken,
     initialPageParam: undefined as string | undefined,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   /** All loaded items across every fetched page (unsorted). */
