@@ -638,7 +638,7 @@ function Thumbnail({
   return (
     <div
       ref={cellRef}
-      className={`group relative aspect-square cursor-pointer overflow-hidden rounded-md bg-slate-200 ${
+      className={`group relative aspect-square cursor-pointer overflow-hidden rounded-lg bg-slate-200 ${
         selected ? 'ring-2 ring-blue-500 ring-offset-1' : ''
       }`}
       onClick={handleClick}
@@ -752,7 +752,7 @@ function SectionHeader({
   const someSelected = !allSelected && keys.some((k) => selected.has(k));
 
   return (
-    <div className="flex items-center gap-2 py-0.5">
+    <div className="flex items-center gap-2.5 py-1.5">
       <button
         type="button"
         onClick={() => onToggleAll(keys, !allSelected)}
@@ -774,8 +774,8 @@ function SectionHeader({
           <div className="h-2 w-2 rounded-full bg-blue-500" />
         )}
       </button>
-      <h2 className="text-sm font-semibold text-slate-800">{formatSectionDate(date)}</h2>
-      <span className="text-[10px] text-slate-400">{items.length}</span>
+      <h2 className="text-base font-bold text-slate-800">{formatSectionDate(date)}</h2>
+      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{items.length}</span>
     </div>
   );
 }
@@ -790,13 +790,13 @@ function SectionHeader({
  */
 function SkeletonGrid() {
   return (
-    <div className="space-y-2">
+    <div className="space-y-6">
       {[0, 1, 2].map((section) => (
-        <div key={section}>
-          <div className="mb-0.5 h-4 w-24 animate-pulse rounded bg-slate-200" />
-          <div className="grid grid-cols-3 gap-0.5 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
+        <div key={section} className={section > 0 ? 'border-t border-slate-200 pt-4' : ''}>
+          <div className="mb-1 h-5 w-28 animate-pulse rounded bg-slate-200" />
+          <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
             {Array.from({ length: section === 0 ? 16 : 8 }, (_, i) => (
-              <div key={i} className="aspect-square animate-pulse rounded-md bg-slate-200" />
+              <div key={i} className="aspect-square animate-pulse rounded-lg bg-slate-200" />
             ))}
           </div>
         </div>
@@ -1235,7 +1235,7 @@ export function CatalogPage() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-lg font-semibold sm:text-xl">Catalog</h1>
-          <p className="text-xs text-slate-500">Browse media stored in Scaleway Object Storage.</p>
+          <p className="text-xs text-slate-500">Your photos and videos, organized by date.</p>
         </div>
         <Link
           to="/catalog/dedup"
@@ -1298,7 +1298,7 @@ export function CatalogPage() {
       <div className="flex flex-wrap items-center gap-1.5">
         <input
           type="text"
-          placeholder="Filter by prefix (e.g. 2024/06)…"
+          placeholder="Search by date or folder (e.g. 2024/06)…"
           className="w-full max-w-xs rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={prefixInput}
           onChange={(e) => setPrefixInput(e.target.value)}
@@ -1351,14 +1351,14 @@ export function CatalogPage() {
       ) : sections.length === 0 ? (
         <EmptyState prefix={prefix} />
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-6">
           {sections.map(([date, items], sectionIndex) => {
             const sectionOffset = sectionOffsets.get(date) ?? 0;
             return (
               <section
                 key={date}
                 ref={(el) => { if (el) sectionRefs.current.set(date, el); else sectionRefs.current.delete(date); }}
-                className={sectionIndex > 0 ? 'border-t border-slate-100 pt-1.5' : ''}
+                className={sectionIndex > 0 ? 'border-t border-slate-200 pt-4' : ''}
               >
                 <SectionHeader
                   date={date}
@@ -1371,7 +1371,7 @@ export function CatalogPage() {
                   and gap-1 for minimal spacing between tiles. select-none is applied
                   per-image to prevent drag selection while keeping dates accessible.
                 */}
-                <div className="grid grid-cols-3 gap-0.5 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8" role="grid" aria-label="Photo grid">
+                <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8" role="grid" aria-label="Photo grid">
                   {items.map((item, i) => (
                     <Thumbnail
                       key={item.encodedKey}
