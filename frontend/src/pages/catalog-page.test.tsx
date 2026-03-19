@@ -104,7 +104,7 @@ describe('CatalogPage', () => {
 
   it('renders the deduplication link', async () => {
     renderCatalogPage();
-    expect(await screen.findByText('🔍 Deduplication')).toBeInTheDocument();
+    expect(await screen.findByText('🔍 Dedup')).toBeInTheDocument();
   });
 
   it('shows item count in the filter bar', async () => {
