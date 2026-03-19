@@ -682,7 +682,7 @@ function SectionHeader({
   const someSelected = !allSelected && keys.some((k) => selected.has(k));
 
   return (
-    <div className="flex items-center gap-2.5 pb-2 pt-1">
+    <div className="flex items-center gap-2.5 py-1.5">
       <button
         type="button"
         onClick={() => onToggleAll(keys, !allSelected)}
@@ -701,7 +701,7 @@ function SectionHeader({
           </svg>
         )}
         {someSelected && !allSelected && (
-          <div className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+          <div className="h-2 w-2 rounded-full bg-blue-500" />
         )}
       </button>
       <h2 className="text-base font-bold text-slate-800">{formatSectionDate(date)}</h2>
