@@ -8,6 +8,12 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { execFile } from 'node:child_process';
+import { createWriteStream, existsSync } from 'node:fs';
+import fs from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import sharp from 'sharp';
 import {
@@ -157,6 +163,83 @@ const THUMB_SIZES: Record<ThumbnailSize, { maxDimension: number; quality: number
 };
 const THUMB_CACHE_MAX_ENTRIES = 500;
 const THUMB_CACHE_TTL_MS = 30 * 60_000; // 30 minutes
+
+// ── Video thumbnail via ffmpeg ──────────────────────────────────────────────
+
+/** Cache the ffmpeg availability check so we only probe once per process. */
+let ffmpegAvailable: boolean | null = null;
+
+function checkFfmpeg(): Promise<boolean> {
+  if (ffmpegAvailable !== null) return Promise.resolve(ffmpegAvailable);
+  return new Promise((resolve) => {
+    execFile('ffmpeg', ['-version'], (error) => {
+      ffmpegAvailable = !error;
+      resolve(ffmpegAvailable);
+    });
+  });
+}
+
+/**
+ * Extract a single frame from a video file using ffmpeg.
+ * Downloads the video to a temp file, extracts a frame at 1s (or first frame),
+ * pipes to sharp for resizing, then cleans up.
+ */
+async function extractVideoFrame(
+  videoStream: Readable,
+  maxDimension: number,
+  quality: number,
+): Promise<Buffer> {
+  const tempVideo = path.join(tmpdir(), `mediatransfer-vid-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const tempFrame = `${tempVideo}-frame.jpg`;
+  try {
+    // Write video stream to temp file
+    await pipeline(videoStream, createWriteStream(tempVideo));
+
+    // Extract a single frame at 1 second (falls back to first frame for short clips)
+    await new Promise<void>((resolve, reject) => {
+      execFile('ffmpeg', [
+        '-y',
+        '-ss', '1',               // seek to 1s
+        '-i', tempVideo,
+        '-frames:v', '1',         // single frame
+        '-q:v', '2',              // high quality JPEG
+        '-f', 'image2',
+        tempFrame,
+      ], { timeout: 30_000 }, (error) => {
+        if (error) {
+          // Retry without -ss for very short clips
+          execFile('ffmpeg', [
+            '-y',
+            '-i', tempVideo,
+            '-frames:v', '1',
+            '-q:v', '2',
+            '-f', 'image2',
+            tempFrame,
+          ], { timeout: 30_000 }, (retryError) => {
+            if (retryError) reject(retryError);
+            else resolve();
+          });
+        } else {
+          resolve();
+        }
+      });
+    });
+
+    // Resize the extracted frame via sharp
+    if (!existsSync(tempFrame)) {
+      throw new Error('ffmpeg did not produce a frame');
+    }
+    const buffer = await sharp(tempFrame)
+      .resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality, mozjpeg: true })
+      .toBuffer();
+    return buffer;
+  } finally {
+    // Cleanup temp files
+    await fs.unlink(tempVideo).catch(() => {});
+    await fs.unlink(tempFrame).catch(() => {});
+  }
+}
 
 type ThumbCacheEntry = { buffer: Buffer; contentType: string; expiresAt: number };
 
@@ -429,12 +512,41 @@ export class ScalewayCatalogService implements CatalogService {
       return { buffer: cached.buffer, contentType: cached.contentType };
     }
 
-    // Reject video files early — sharp can't process them and we'd waste
-    // bandwidth downloading the full video from S3 just to fail.
     const decodedKey = decodeKey(encodedKey);
-    if (inferMediaType(decodedKey) === 'video') {
-      throw Object.assign(new Error('Video thumbnails not supported'), { code: 'UNSUPPORTED_FORMAT' });
+    const isVideo = inferMediaType(decodedKey) === 'video';
+
+    // For videos, use ffmpeg to extract a frame. Falls back to UNSUPPORTED_FORMAT if ffmpeg not available.
+    if (isVideo) {
+      const hasFfmpeg = await checkFfmpeg();
+      if (!hasFfmpeg) {
+        throw Object.assign(new Error('Video thumbnails not supported (ffmpeg not installed)'), { code: 'UNSUPPORTED_FORMAT' });
+      }
+
+      const fullKey = this.withPrefix(decodedKey);
+      const response = await this.client.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: fullKey }),
+        { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
+      );
+      if (!response.Body) {
+        throw new Error(`Object has empty body: ${decodedKey}`);
+      }
+      const bodyStream =
+        response.Body instanceof Readable
+          ? response.Body
+          : Readable.fromWeb(response.Body as ReadableStream<Uint8Array>);
+
+      const { maxDimension, quality } = THUMB_SIZES[size];
+      const buffer = await extractVideoFrame(bodyStream, maxDimension, quality);
+      const contentType = 'image/jpeg';
+
+      this.thumbCache.set(cacheKey, {
+        buffer,
+        contentType,
+        expiresAt: Date.now() + THUMB_CACHE_TTL_MS,
+      });
+      return { buffer, contentType };
     }
+
     const fullKey = this.withPrefix(decodedKey);
     const response = await this.client.send(
       new GetObjectCommand({ Bucket: this.bucket, Key: fullKey }),

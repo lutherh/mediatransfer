@@ -551,9 +551,9 @@ function Thumbnail({
     return () => observer.disconnect();
   }, []);
 
-  // Videos skip the thumb endpoint entirely (server returns 415).
-  // Images go through the concurrency-limited queue (~30 at a time).
-  const wantUrl = !isVideo && isNearViewport
+  // Both images and videos go through the concurrency-limited queue (~30 at a time).
+  // Videos are now supported via ffmpeg-based frame extraction on the backend.
+  const wantUrl = isNearViewport
     ? catalogThumbnailUrl(item.encodedKey, 'small', apiToken)
     : null;
   const { src: thumbSrc, markComplete } = useThumbnailQueue(wantUrl);
@@ -596,7 +596,7 @@ function Thumbnail({
         <div className="absolute inset-0 animate-pulse bg-slate-300" />
       )}
 
-      {/* Render img only when the queue grants a slot (images only, never videos) */}
+      {/* Render img when the queue grants a slot (images + videos with ffmpeg thumbnails) */}
       {thumbSrc && !thumbFailed && (
         <img
           src={thumbSrc}
@@ -611,14 +611,21 @@ function Thumbnail({
         />
       )}
 
-      {/* Fallback icon for images whose thumbnail couldn't be generated (HEIC, corrupt, etc.) */}
+      {/* Fallback icon for media whose thumbnail couldn't be generated (HEIC, corrupt, no ffmpeg, etc.) */}
       {thumbFailed && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-200 text-slate-400">
-          <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-            <rect x="3" y="3" width="18" height="18" rx="2" />
-            <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none" />
-            <path d="M21 15l-5-5L5 21" />
-          </svg>
+          {isVideo ? (
+            <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <rect x="2" y="4" width="20" height="16" rx="2" />
+              <path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none" />
+            </svg>
+          ) : (
+            <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none" />
+              <path d="M21 15l-5-5L5 21" />
+            </svg>
+          )}
           <span className="mt-0.5 text-[9px] leading-tight">
             {item.key.split('.').pop()?.toUpperCase()}
           </span>
