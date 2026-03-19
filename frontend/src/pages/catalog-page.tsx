@@ -490,6 +490,7 @@ function Thumbnail({
   const cellRef = useRef<HTMLDivElement>(null);
   const [isNearViewport, setIsNearViewport] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [thumbFailed, setThumbFailed] = useState(false);
   const isVideo = item.mediaType === 'video';
 
   // Observe when the cell enters a 200px margin around the viewport
@@ -555,7 +556,7 @@ function Thumbnail({
       )}
 
       {/* Render img only when the queue grants a slot (images only, never videos) */}
-      {thumbSrc && (
+      {thumbSrc && !thumbFailed && (
         <img
           src={thumbSrc}
           loading="lazy"
@@ -564,9 +565,23 @@ function Thumbnail({
             loaded ? 'opacity-100' : 'opacity-0'
           } ${!selectionMode ? 'group-hover:scale-105' : ''} ${selected ? 'brightness-75' : ''}`}
           onLoad={() => { markComplete(); setLoaded(true); }}
-          onError={() => { markComplete(); setLoaded(true); }}
+          onError={() => { markComplete(); setThumbFailed(true); setLoaded(true); }}
           draggable={false}
         />
+      )}
+
+      {/* Fallback icon for images whose thumbnail couldn't be generated (HEIC, corrupt, etc.) */}
+      {thumbFailed && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-200 text-slate-400">
+          <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none" />
+            <path d="M21 15l-5-5L5 21" />
+          </svg>
+          <span className="mt-0.5 text-[9px] leading-tight">
+            {item.key.split('.').pop()?.toUpperCase()}
+          </span>
+        </div>
       )}
 
       {/* Video play icon overlay */}
