@@ -758,6 +758,8 @@ function runAction(action: TakeoutAction): void {
         persistPipelineState();
       }
     }, ACTION_TIMEOUT_MS);
+    // Don't prevent the process from exiting if the timer is the only active handle.
+    currentTimeout.unref();
 
     child.stdout.on('data', (chunk) => {
       appendOutput(String(chunk));
@@ -916,6 +918,8 @@ function scheduleAutoUploadAction(nextAction: 'scan' | 'upload', env: Env): void
       }
     }
   }, AUTO_UPLOAD_DELAY_MS);
+  // Don't prevent the process from exiting if the timer is the only active handle.
+  autoUploadTimeout.unref();
 }
 
 /** Cancel a pending auto-upload timeout. */
@@ -956,6 +960,8 @@ function ensureAutoUploadPoll(): void {
       runAction('scan');
     }
   }, AUTO_UPLOAD_POLL_INTERVAL_MS);
+  // Don't prevent the process from exiting if the interval is the only active handle.
+  autoUploadPollInterval.unref();
 }
 
 /** Stop the recurring auto-upload poll. */
