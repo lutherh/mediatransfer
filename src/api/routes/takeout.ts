@@ -263,6 +263,18 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     scheduleAutoUploadAction('scan', env);
   }
 
+  // Clear all timers on close so the process can exit cleanly (important in
+  // tests where app.close() must allow the worker to terminate immediately).
+  app.addHook('onClose', (_instance, done) => {
+    clearAutoUploadTimeout();
+    stopAutoUploadPoll();
+    if (currentTimeout) {
+      clearTimeout(currentTimeout);
+      currentTimeout = null;
+    }
+    done();
+  });
+
   // ── Override any configurable path ──────────────────────────────────────
 
   app.put('/takeout/paths/:name', async (req, reply) => {
