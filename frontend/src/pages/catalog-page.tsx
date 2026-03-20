@@ -14,10 +14,9 @@
  * @pattern Immich virtualized gallery with skeleton placeholders
  * @pattern Ente full-screen viewer with metadata panel
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import {
   catalogMediaUrl,
   catalogThumbnailUrl,
@@ -35,7 +34,7 @@ import {
 } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { DateScroller } from '@/components/date-scroller';
-import { useThumbnailQueue } from '@/lib/thumbnail-queue';
+import { VirtualizedGrid } from '@/components/virtualized-grid';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -56,52 +55,6 @@ function useApiToken(): string | undefined {
     const params = new URLSearchParams(window.location.search);
     return params.get('apiToken') ?? undefined;
   }, []);
-}
-
-// ── Date formatting ────────────────────────────────────────────────────────
-
-const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const FULL_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const DAY_NAMES_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-
-/**
- * Convert an ISO date string (e.g. "2025-06-16") into a human-friendly label.
- *
- * Rules (modeled after Google Photos timeline headers):
- *   • Same calendar day → "Today"
- *   • Previous calendar day → "Yesterday"
- *   • 2–6 days ago → just the day name: "Tuesday", "Wednesday", etc.
- *   • Same year → "Sat 14 Mar" (abbreviated day + day number + month)
- *   • Older → "Sat 14 Mar 2024" (includes year)
- *
- * @pattern Google Photos human-friendly section headers
- */
-function formatSectionDate(dateStr: string): string {
-  // Parse as local date (the YYYY-MM-DD from sectionDate is already local)
-  const parts = dateStr.split('-');
-  const year = Number(parts[0]);
-  const month = Number(parts[1]) - 1; // 0-indexed
-  const day = Number(parts[2]);
-  const date = new Date(year, month, day);
-
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const diffMs = today.getTime() - date.getTime();
-  const diffDays = Math.round(diffMs / 86_400_000);
-
-  if (diffDays === 0) return 'Today';
-  if (diffDays === 1) return 'Yesterday';
-  // 2–6 days ago: just the full day name (Google Photos shows "Tuesday", etc.)
-  if (diffDays > 1 && diffDays < 7) {
-    return DAY_NAMES_FULL[date.getDay()];
-  }
-  // Same year → "Sat 14 Mar" (abbreviated day + day number + month)
-  if (year === now.getFullYear()) {
-    return `${DAY_NAMES[date.getDay()]} ${day} ${SHORT_MONTHS[month]}`;
-  }
-  // Older → "Sat 14 Mar 2024" (includes year)
-  return `${DAY_NAMES[date.getDay()]} ${day} ${SHORT_MONTHS[month]} ${year}`;
 }
 
 // ── Stats bar ──────────────────────────────────────────────────────────────
@@ -730,382 +683,6 @@ function Lightbox({
 
 // ── Thumbnail ──────────────────────────────────────────────────────────────
 
-/**
- * Single grid cell representing one media item. Uses IntersectionObserver to
- * only start loading the thumbnail when the cell is near the viewport (200px
- * margin). This prevents hundreds of concurrent requests when scrolling through
- * thousands of items.
- *
- * Images use the small thumbnail endpoint. Videos keep a lightweight tile with
- * a play affordance and do not request server-side thumbnails in the grid.
- *
- * @pattern Immich skeleton-to-fade thumbnail loading
- * @pattern Google Photos rounded-lg tiles with hover scale
- */
-function Thumbnail({
-  item,
-  apiToken,
-  selected,
-  selectionMode,
-  lightboxIndex,
-  onToggleSelect,
-  onOpenLightbox,
-  onShiftClick,
-}: {
-  item: CatalogItem;
-  apiToken: string | undefined;
-  selected: boolean;
-  selectionMode: boolean;
-  lightboxIndex: number;
-  onToggleSelect: () => void;
-  onOpenLightbox: (index: number) => void;
-  /** Called when the user shift-clicks a thumbnail for range selection. */
-  onShiftClick: (index: number) => void;
-}) {
-  const cellRef = useRef<HTMLDivElement>(null);
-  const [isNearViewport, setIsNearViewport] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [thumbFailed, setThumbFailed] = useState(false);
-  const isVideo = item.mediaType === 'video';
-
-  // Observe when the cell enters a 200px margin around the viewport
-  useEffect(() => {
-    const el = cellRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setIsNearViewport(true);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: '200px' },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  // Both images and videos go through the concurrency-limited queue (~30 at a time).
-  // Videos are now supported via ffmpeg-based frame extraction on the backend.
-  const wantUrl = isNearViewport
-    ? catalogThumbnailUrl(item.encodedKey, 'small', apiToken)
-    : null;
-  const { src: thumbSrc, markComplete } = useThumbnailQueue(wantUrl);
-
-  const handleClick = useCallback((e: React.MouseEvent) => {
-    if (e.shiftKey) {
-      onShiftClick(lightboxIndex);
-      return;
-    }
-    if (selectionMode) onToggleSelect();
-    else onOpenLightbox(lightboxIndex);
-  }, [selectionMode, onToggleSelect, onOpenLightbox, lightboxIndex, onShiftClick]);
-
-  const handleCheckClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    onToggleSelect();
-  }, [onToggleSelect]);
-
-  return (
-    <div
-      ref={cellRef}
-      className={`group relative aspect-square cursor-pointer overflow-hidden rounded-lg bg-slate-200 ${
-        selected ? 'ring-2 ring-blue-500 ring-offset-1' : ''
-      }`}
-      onClick={handleClick}
-      role="gridcell"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          if (e.shiftKey) onShiftClick(lightboxIndex);
-          else if (selectionMode) onToggleSelect();
-          else onOpenLightbox(lightboxIndex);
-        }
-      }}
-      title={item.capturedAt.slice(0, 10)}
-    >
-      {/* Skeleton placeholder – pulsing gray shown until image loads */}
-      {!loaded && (
-        <div className="absolute inset-0 animate-pulse bg-slate-300" />
-      )}
-
-      {/* Render img when the queue grants a slot (images + videos with ffmpeg thumbnails) */}
-      {thumbSrc && !thumbFailed && (
-        <img
-          src={thumbSrc}
-          loading="lazy"
-          decoding="async"
-          className={`h-full w-full select-none object-cover transition-all duration-300 ${
-            loaded ? 'opacity-100' : 'opacity-0'
-          } ${!selectionMode ? 'group-hover:scale-105' : ''} ${selected ? 'brightness-75' : ''}`}
-          onLoad={() => { markComplete(); setLoaded(true); }}
-          onError={() => { markComplete(); setThumbFailed(true); setLoaded(true); }}
-          draggable={false}
-        />
-      )}
-
-      {/* Fallback icon for media whose thumbnail couldn't be generated (HEIC, corrupt, no ffmpeg, etc.) */}
-      {thumbFailed && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-200 text-slate-400">
-          {isVideo ? (
-            <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-              <rect x="2" y="4" width="20" height="16" rx="2" />
-              <path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none" />
-            </svg>
-          ) : (
-            <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none" />
-              <path d="M21 15l-5-5L5 21" />
-            </svg>
-          )}
-          <span className="mt-0.5 text-[9px] leading-tight">
-            {item.key.split('.').pop()?.toUpperCase()}
-          </span>
-        </div>
-      )}
-
-      {/* Video play icon overlay */}
-      {item.mediaType === 'video' && !selected && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div className="rounded-full bg-black/50 p-1.5">
-            <svg className="h-4 w-4 text-white" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          </div>
-        </div>
-      )}
-
-      {/* Checkbox — always visible when selected, hover-only otherwise */}
-      <button
-        type="button"
-        aria-label={selected ? 'Deselect' : 'Select'}
-        onClick={handleCheckClick}
-        className={`absolute left-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full border-2 transition-all ${
-          selected
-            ? 'border-blue-500 bg-blue-500 opacity-100'
-            : 'border-white bg-black/30 opacity-0 group-hover:opacity-100'
-        }`}
-      >
-        {selected && (
-          <svg viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth={2.5} className="h-3 w-3">
-            <path d="M2 6l3 3 5-5" />
-          </svg>
-        )}
-      </button>
-    </div>
-  );
-}
-
-// ── Section header with select-all ────────────────────────────────────────
-
-/**
- * Date section header with a tri-state checkbox (none / some / all selected)
- * and an item count badge. Styled to match Google Photos' prominent date
- * labels that clearly separate timeline sections.
- *
- * @pattern Google Photos date-grouped section with select-all toggle
- */
-function SectionHeader({
-  date,
-  items,
-  selected,
-  onToggleAll,
-}: {
-  date: string;
-  items: CatalogItem[];
-  selected: Set<string>;
-  onToggleAll: (keys: string[], select: boolean) => void;
-}) {
-  const keys = items.map((i) => i.encodedKey);
-  const allSelected = keys.length > 0 && keys.every((k) => selected.has(k));
-  const someSelected = !allSelected && keys.some((k) => selected.has(k));
-
-  return (
-    <div className="flex items-center gap-2.5 py-1.5">
-      <button
-        type="button"
-        onClick={() => onToggleAll(keys, !allSelected)}
-        className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
-          allSelected
-            ? 'border-blue-500 bg-blue-500'
-            : someSelected
-              ? 'border-blue-400 bg-blue-100'
-              : 'border-slate-300 bg-white hover:border-blue-400'
-        }`}
-        aria-label={allSelected ? 'Deselect section' : 'Select section'}
-      >
-        {allSelected && (
-          <svg viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth={2.5} className="h-3 w-3">
-            <path d="M2 6l3 3 5-5" />
-          </svg>
-        )}
-        {someSelected && !allSelected && (
-          <div className="h-2 w-2 rounded-full bg-blue-500" />
-        )}
-      </button>
-      <h2 className="text-base font-bold text-slate-800">{formatSectionDate(date)}</h2>
-      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{items.length}</span>
-    </div>
-  );
-}
-
-// ── Monthly divider card ──────────────────────────────────────────────────
-
-/**
- * Extract "YYYY-MM" from a "YYYY-MM-DD" section date string.
- */
-/**
- * One entry in the flat virtual row list passed to `useWindowVirtualizer`.
- * Each row maps to a single date-section and optionally carries a "Best of
- * Month" divider when this section is the first of its calendar month.
- */
-interface VirtualSectionRow {
-  /** "YYYY-MM-DD" date key for this section */
-  date: string;
-  /** All items belonging to this section */
-  items: CatalogItem[];
-  /** Position of this section in the ordered sections array */
-  sectionIndex: number;
-  /**
-   * Flat index (within `sortedItems`) of the first item in this section.
-   * Used so each Thumbnail knows its lightbox index without additional look-ups.
-   */
-  sectionOffset: number;
-  /** Whether this is the very first section in the list (no top border). */
-  isFirstSection: boolean;
-  /**
-   * When non-null, a "Best of Month" divider should be rendered above the
-   * section header for this row.
-   */
-  monthDivider: {
-    label: string;
-    year: string;
-    itemCount: number;
-    coverItem: CatalogItem | undefined;
-  } | null;
-}
-
-/**
- * Returns the number of grid columns that match the current viewport width,
- * mirroring the Tailwind responsive grid classes used by the photo grid:
- * `grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8`
- */
-function estimateGridColumns(): number {
-  if (typeof window === 'undefined') return 6;
-  if (window.innerWidth >= 1024) return 8; // lg
-  if (window.innerWidth >= 768) return 6;  // md
-  if (window.innerWidth >= 640) return 4;  // sm
-  return 3;
-}
-
-function monthKey(dateStr: string): string {
-  return dateStr.slice(0, 7);
-}
-
-/**
- * Compute month-level grouping info from sections.
- * Returns a Map of "YYYY-MM" → { items: CatalogItem[], label, year }.
- * Used to render "Best of [Month]" divider cards when the month changes.
- */
-function buildMonthGroups(
-  sections: [string, CatalogItem[]][],
-): Map<string, { items: CatalogItem[]; label: string; year: string; coverItem: CatalogItem | undefined }> {
-  const map = new Map<string, { items: CatalogItem[]; label: string; year: string; coverItem: CatalogItem | undefined }>();
-  for (const [date, items] of sections) {
-    const mk = monthKey(date);
-    const existing = map.get(mk);
-    if (existing) {
-      existing.items.push(...items);
-      // Prefer an image cover; keep scanning if we haven't found one yet
-      if (!existing.coverItem || existing.coverItem.mediaType !== 'image') {
-        existing.coverItem = items.find((it) => it.mediaType === 'image') ?? existing.coverItem ?? items[0];
-      }
-    } else {
-      const m = parseInt(date.slice(5, 7), 10) - 1;
-      const coverItem = items.find((it) => it.mediaType === 'image') ?? items[0];
-      map.set(mk, {
-        items: [...items],
-        label: FULL_MONTHS[m],
-        year: date.slice(0, 4),
-        coverItem,
-      });
-    }
-  }
-  return map;
-}
-
-/**
- * "Best of [Month]" cover card — shown at the start of each new month group
- * in the timeline. Uses the first image item as the cover photo, displaying
- * the month name and a highlights count.
- *
- * @pattern Google Photos monthly memories card
- */
-function MonthDivider({
-  monthLabel,
-  year,
-  itemCount,
-  coverItem,
-  apiToken,
-}: {
-  monthLabel: string;
-  year: string;
-  itemCount: number;
-  coverItem: CatalogItem | undefined;
-  apiToken: string | undefined;
-}) {
-  const [imgLoaded, setImgLoaded] = useState(false);
-  const [imgFailed, setImgFailed] = useState(false);
-  const coverUrl = coverItem
-    ? catalogThumbnailUrl(coverItem.encodedKey, 'small', apiToken)
-    : null;
-
-  return (
-    <div className="py-2" data-testid="month-divider">
-      <h2 className="mb-2 text-lg font-bold text-slate-800">{monthLabel}</h2>
-      <div
-        className="relative h-36 w-full max-w-sm overflow-hidden rounded-xl bg-slate-200 sm:h-40"
-        role="img"
-        aria-label={`Best of ${monthLabel} ${year}`}
-      >
-        {/* Cover photo */}
-        {coverUrl && !imgFailed && (
-          <img
-            src={coverUrl}
-            loading="lazy"
-            decoding="async"
-            className={`h-full w-full object-cover transition-opacity duration-500 ${
-              imgLoaded ? 'opacity-100' : 'opacity-0'
-            }`}
-            onLoad={() => setImgLoaded(true)}
-            onError={() => setImgFailed(true)}
-            draggable={false}
-          />
-        )}
-
-        {/* Fallback gradient when no image or failed */}
-        {(!coverUrl || imgFailed) && (
-          <div className="absolute inset-0 bg-gradient-to-br from-slate-300 to-slate-400" />
-        )}
-
-        {/* Dark overlay for text readability */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
-
-        {/* Text overlay */}
-        <div className="absolute bottom-0 left-0 p-3">
-          <p className="text-sm font-semibold text-white drop-shadow-sm">
-            Best of {monthLabel}
-          </p>
-          <p className="text-xs text-white/80">
-            {itemCount} highlight{itemCount !== 1 ? 's' : ''}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ── Skeleton grid ──────────────────────────────────────────────────────────
 
@@ -1291,7 +868,6 @@ export function CatalogPage() {
   const [dragOver, setDragOver] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [showAlbumModal, setShowAlbumModal] = useState(false);
-  const sentinelRef = useRef<HTMLDivElement>(null);
   const sectionRefs = useRef<Map<string, HTMLElement>>(new Map());
 
   /**
@@ -1385,31 +961,8 @@ export function CatalogPage() {
     [sections],
   );
 
-  /**
-   * Month-level grouping used for the "Best of [Month]" divider cards.
-   * Keyed by "YYYY-MM", holds aggregate item list, label, and year.
-   */
-  const monthGroups = useMemo(
-    () => buildMonthGroups(sections),
-    [sections],
-  );
-
-  // ── Infinite scroll via IntersectionObserver ──
-  // A sentinel div at the bottom of the page triggers the next page fetch
-  useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting && itemsQuery.hasNextPage && !itemsQuery.isFetchingNextPage) {
-          void itemsQuery.fetchNextPage();
-        }
-      },
-      { threshold: 0.1 },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [itemsQuery.hasNextPage, itemsQuery.isFetchingNextPage, itemsQuery.fetchNextPage]);
+  // ── Infinite scroll via IntersectionObserver (sentinel) ──
+  // Handled inside VirtualizedGrid component.
 
   // ── Global keyboard shortcuts (when lightbox is closed) ──
   useEffect(() => {
@@ -1544,92 +1097,11 @@ export function CatalogPage() {
   const handleClose = useCallback(() => setLightboxIndex(null), []);
   const handleNavigate = useCallback((i: number) => setLightboxIndex(i), []);
 
-  /**
-   * Flat virtual-row list derived from `sections`.
-   * One row per date-section; each row embeds the flat `sectionOffset` so
-   * Thumbnail components know their lightbox index without a separate look-up.
-   * Month-divider metadata is inlined into the row that opens a new calendar month.
-   */
-  const virtualRows = useMemo<VirtualSectionRow[]>(() => {
-    let offset = 0;
-    return sections.map(([date, items], sectionIndex) => {
-      const prevMonth = sectionIndex > 0 ? monthKey(sections[sectionIndex - 1][0]) : null;
-      const curMonth = monthKey(date);
-      const isNewMonth = sectionIndex === 0 || curMonth !== prevMonth;
-      const mg = monthGroups.get(curMonth);
-
-      const row: VirtualSectionRow = {
-        date,
-        items,
-        sectionIndex,
-        sectionOffset: offset,
-        isFirstSection: sectionIndex === 0,
-        monthDivider:
-          isNewMonth && mg && mg.items.length > 0
-            ? { label: mg.label, year: mg.year, itemCount: mg.items.length, coverItem: mg.coverItem }
-            : null,
-      };
-      offset += items.length;
-      return row;
-    });
-  }, [sections, monthGroups]);
-
-  // ── Virtual-grid scroll margin ──────────────────────────────────────────
-  // `scrollMargin` = distance from the top of the window to the top of the
-  // virtual grid container. `useWindowVirtualizer` needs this to correctly
-  // place items and honour `scrollToIndex`.
-  const gridRef = useRef<HTMLDivElement>(null);
-  const [scrollMargin, setScrollMargin] = useState(0);
-
-  useLayoutEffect(() => {
-    const updateMargin = () => {
-      if (gridRef.current) {
-        setScrollMargin(gridRef.current.getBoundingClientRect().top + window.scrollY);
-      }
-    };
-    updateMargin();
-    window.addEventListener('resize', updateMargin);
-    return () => window.removeEventListener('resize', updateMargin);
-    // Re-measure when the page header layout changes (loading states resolve)
-  }, [itemsQuery.status, statsQuery.status, sortNewestFirst, prefix]);
-
-  // ── Virtualizer ─────────────────────────────────────────────────────────
-  const virtualizer = useWindowVirtualizer({
-    count: virtualRows.length,
-    estimateSize: (i) => {
-      const row = virtualRows[i];
-      // Estimate: optional month-divider card + section header + grid rows.
-      // Column count is inferred from the current viewport to match the
-      // responsive Tailwind grid classes on the photo grid.
-      const dividerH = row.monthDivider ? 220 : 0;
-      const headerH = 56;
-      const cols = estimateGridColumns();
-      // ~136 px per grid row (square tile ~130 px + gap-1 spacing)
-      const gridH = Math.ceil(row.items.length / cols) * 136;
-      return dividerH + headerH + gridH;
-    },
-    // measureElement lets the virtualizer learn the true height after render,
-    // correcting the initial estimate for sections with different item counts.
-    overscan: 2,
-    scrollMargin,
-  });
-
-  // ── Scroll-to-date (passed to DateScroller) ─────────────────────────────
-  // When the user drags the scrubber, this callback jumps to the correct
-  // virtual row even if the target section is not currently in the DOM.
-  // A 60 px upward nudge is applied (matching the sectionRef fallback path)
-  // so the section header always lands just below the visible top of the page.
-  const scrollToDate = useCallback(
-    (date: string) => {
-      const idx = virtualRows.findIndex((r) => r.date === date);
-      if (idx >= 0) {
-        virtualizer.scrollToIndex(idx, { align: 'start', behavior: 'auto' });
-        // Apply offset on the next frame, after the virtualizer has set the position
-        requestAnimationFrame(() => window.scrollBy(0, -60));
-      }
-    },
-    [virtualRows, virtualizer],
-  );
+  // ── Scroll-to-date (wired from VirtualizedGrid via onRegisterScrollToDate) ──
+  const scrollToDateRef = useRef<((date: string) => void) | null>(null);
+  const scrollToDate = useCallback((date: string) => {
+    scrollToDateRef.current?.(date);
+  }, []);
 
   // ── Drag-and-drop visual overlay ──
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -1802,90 +1274,29 @@ export function CatalogPage() {
         <EmptyState prefix={prefix} />
       ) : (
         /*
-         * Virtual grid — only the sections near the viewport are mounted in
-         * the DOM. The outer div acts as the scroll-space placeholder whose
-         * height equals the full estimated content height. Each virtual item
-         * is absolutely positioned via `transform: translateY`.
+         * Row-level virtualized grid — only item rows near the viewport are
+         * mounted in the DOM, keeping node count low even with thousands of
+         * items. VirtualizedGrid handles infinite scroll and sectionRefs.
          *
-         * @pattern Immich section-level virtual list (useWindowVirtualizer)
+         * @pattern Immich row-level virtual list (useWindowVirtualizer)
          */
-        <div
-          ref={gridRef}
-          style={{ position: 'relative', height: virtualizer.getTotalSize() }}
-        >
-          {virtualizer.getVirtualItems().map((vItem) => {
-            const row = virtualRows[vItem.index];
-            return (
-              <div
-                key={vItem.key}
-                data-index={vItem.index}
-                ref={virtualizer.measureElement}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  transform: `translateY(${vItem.start - scrollMargin}px)`,
-                }}
-              >
-                <section
-                  ref={(el) => { if (el) sectionRefs.current.set(row.date, el); else sectionRefs.current.delete(row.date); }}
-                  className={!row.isFirstSection ? 'border-t border-slate-200 pt-4' : ''}
-                >
-                  {/* Monthly "Best of" cover card at the start of each month */}
-                  {row.monthDivider && (
-                    <MonthDivider
-                      monthLabel={row.monthDivider.label}
-                      year={row.monthDivider.year}
-                      itemCount={row.monthDivider.itemCount}
-                      coverItem={row.monthDivider.coverItem}
-                      apiToken={apiToken}
-                    />
-                  )}
-                  <SectionHeader
-                    date={row.date}
-                    items={row.items}
-                    selected={selected}
-                    onToggleAll={toggleSection}
-                  />
-                  {/*
-                    Larger tiles: 3/4/6/8 cols (Google Photos style) with rounded-lg
-                    and gap-1 for minimal spacing between tiles. select-none is applied
-                    per-image to prevent drag selection while keeping dates accessible.
-                  */}
-                  <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8" role="grid" aria-label="Photo grid">
-                    {row.items.map((item, i) => (
-                      <Thumbnail
-                        key={item.encodedKey}
-                        item={item}
-                        apiToken={apiToken}
-                        selected={selected.has(item.encodedKey)}
-                        selectionMode={selectionMode}
-                        lightboxIndex={row.sectionOffset + i}
-                        onToggleSelect={() => toggleSelect(item.encodedKey, row.sectionOffset + i)}
-                        onOpenLightbox={setLightboxIndex}
-                        onShiftClick={handleShiftClick}
-                      />
-                    ))}
-                  </div>
-                </section>
-              </div>
-            );
-          })}
-        </div>
+        <VirtualizedGrid
+          sections={sections}
+          sortedItems={sortedItems}
+          selected={selected}
+          selectionMode={selectionMode}
+          apiToken={apiToken}
+          onToggleSelect={toggleSelect}
+          onOpenLightbox={setLightboxIndex}
+          onShiftClick={handleShiftClick}
+          onToggleSection={toggleSection}
+          sectionRefs={sectionRefs}
+          hasNextPage={!!itemsQuery.hasNextPage}
+          isFetchingNextPage={itemsQuery.isFetchingNextPage}
+          fetchNextPage={() => void itemsQuery.fetchNextPage()}
+          onRegisterScrollToDate={(fn) => { scrollToDateRef.current = fn; }}
+        />
       )}
-
-      {/* ── Infinite scroll sentinel ────────────────────────────────── */}
-      <div ref={sentinelRef} className="flex h-8 items-center justify-center gap-2" role="status">
-        {itemsQuery.isFetchingNextPage && (
-          <>
-            <span className="sr-only">Loading more items</span>
-            <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.3s]" />
-            <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.15s]" />
-            <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" />
-          </>
-        )}
-      </div>
 
       {/* ── Date scroller (right-edge timeline) ─────────────────────── */}
       <DateScroller sections={sections} sectionRefs={sectionRefs} onScrollToDate={scrollToDate} />
