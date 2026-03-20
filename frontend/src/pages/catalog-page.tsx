@@ -14,9 +14,10 @@
  * @pattern Immich virtualized gallery with skeleton placeholders
  * @pattern Ente full-screen viewer with metadata panel
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import {
   catalogMediaUrl,
   catalogThumbnailUrl,
@@ -955,6 +956,50 @@ function SectionHeader({
 /**
  * Extract "YYYY-MM" from a "YYYY-MM-DD" section date string.
  */
+/**
+ * One entry in the flat virtual row list passed to `useWindowVirtualizer`.
+ * Each row maps to a single date-section and optionally carries a "Best of
+ * Month" divider when this section is the first of its calendar month.
+ */
+interface VirtualSectionRow {
+  /** "YYYY-MM-DD" date key for this section */
+  date: string;
+  /** All items belonging to this section */
+  items: CatalogItem[];
+  /** Position of this section in the ordered sections array */
+  sectionIndex: number;
+  /**
+   * Flat index (within `sortedItems`) of the first item in this section.
+   * Used so each Thumbnail knows its lightbox index without additional look-ups.
+   */
+  sectionOffset: number;
+  /** Whether this is the very first section in the list (no top border). */
+  isFirstSection: boolean;
+  /**
+   * When non-null, a "Best of Month" divider should be rendered above the
+   * section header for this row.
+   */
+  monthDivider: {
+    label: string;
+    year: string;
+    itemCount: number;
+    coverItem: CatalogItem | undefined;
+  } | null;
+}
+
+/**
+ * Returns the number of grid columns that match the current viewport width,
+ * mirroring the Tailwind responsive grid classes used by the photo grid:
+ * `grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8`
+ */
+function estimateGridColumns(): number {
+  if (typeof window === 'undefined') return 6;
+  if (window.innerWidth >= 1024) return 8; // lg
+  if (window.innerWidth >= 768) return 6;  // md
+  if (window.innerWidth >= 640) return 4;  // sm
+  return 3;
+}
+
 function monthKey(dateStr: string): string {
   return dateStr.slice(0, 7);
 }
@@ -1499,16 +1544,92 @@ export function CatalogPage() {
   const handleClose = useCallback(() => setLightboxIndex(null), []);
   const handleNavigate = useCallback((i: number) => setLightboxIndex(i), []);
 
-  /** Pre-computed flat-index offset for each section, keyed by date string. */
-  const sectionOffsets = useMemo(() => {
-    const offsets = new Map<string, number>();
+  /**
+   * Flat virtual-row list derived from `sections`.
+   * One row per date-section; each row embeds the flat `sectionOffset` so
+   * Thumbnail components know their lightbox index without a separate look-up.
+   * Month-divider metadata is inlined into the row that opens a new calendar month.
+   */
+  const virtualRows = useMemo<VirtualSectionRow[]>(() => {
     let offset = 0;
-    for (const [date, items] of sections) {
-      offsets.set(date, offset);
+    return sections.map(([date, items], sectionIndex) => {
+      const prevMonth = sectionIndex > 0 ? monthKey(sections[sectionIndex - 1][0]) : null;
+      const curMonth = monthKey(date);
+      const isNewMonth = sectionIndex === 0 || curMonth !== prevMonth;
+      const mg = monthGroups.get(curMonth);
+
+      const row: VirtualSectionRow = {
+        date,
+        items,
+        sectionIndex,
+        sectionOffset: offset,
+        isFirstSection: sectionIndex === 0,
+        monthDivider:
+          isNewMonth && mg && mg.items.length > 0
+            ? { label: mg.label, year: mg.year, itemCount: mg.items.length, coverItem: mg.coverItem }
+            : null,
+      };
       offset += items.length;
-    }
-    return offsets;
-  }, [sections]);
+      return row;
+    });
+  }, [sections, monthGroups]);
+
+  // ── Virtual-grid scroll margin ──────────────────────────────────────────
+  // `scrollMargin` = distance from the top of the window to the top of the
+  // virtual grid container. `useWindowVirtualizer` needs this to correctly
+  // place items and honour `scrollToIndex`.
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+
+  useLayoutEffect(() => {
+    const updateMargin = () => {
+      if (gridRef.current) {
+        setScrollMargin(gridRef.current.getBoundingClientRect().top + window.scrollY);
+      }
+    };
+    updateMargin();
+    window.addEventListener('resize', updateMargin);
+    return () => window.removeEventListener('resize', updateMargin);
+    // Re-measure when the page header layout changes (loading states resolve)
+  }, [itemsQuery.status, statsQuery.status, sortNewestFirst, prefix]);
+
+  // ── Virtualizer ─────────────────────────────────────────────────────────
+  const virtualizer = useWindowVirtualizer({
+    count: virtualRows.length,
+    estimateSize: (i) => {
+      const row = virtualRows[i];
+      // Estimate: optional month-divider card + section header + grid rows.
+      // Column count is inferred from the current viewport to match the
+      // responsive Tailwind grid classes on the photo grid.
+      const dividerH = row.monthDivider ? 220 : 0;
+      const headerH = 56;
+      const cols = estimateGridColumns();
+      // ~136 px per grid row (square tile ~130 px + gap-1 spacing)
+      const gridH = Math.ceil(row.items.length / cols) * 136;
+      return dividerH + headerH + gridH;
+    },
+    // measureElement lets the virtualizer learn the true height after render,
+    // correcting the initial estimate for sections with different item counts.
+    overscan: 2,
+    scrollMargin,
+  });
+
+  // ── Scroll-to-date (passed to DateScroller) ─────────────────────────────
+  // When the user drags the scrubber, this callback jumps to the correct
+  // virtual row even if the target section is not currently in the DOM.
+  // A 60 px upward nudge is applied (matching the sectionRef fallback path)
+  // so the section header always lands just below the visible top of the page.
+  const scrollToDate = useCallback(
+    (date: string) => {
+      const idx = virtualRows.findIndex((r) => r.date === date);
+      if (idx >= 0) {
+        virtualizer.scrollToIndex(idx, { align: 'start', behavior: 'auto' });
+        // Apply offset on the next frame, after the virtualizer has set the position
+        requestAnimationFrame(() => window.scrollBy(0, -60));
+      }
+    },
+    [virtualRows, virtualizer],
+  );
 
   // ── Drag-and-drop visual overlay ──
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -1680,64 +1801,75 @@ export function CatalogPage() {
       ) : sections.length === 0 ? (
         <EmptyState prefix={prefix} />
       ) : (
-        <div className="space-y-6">
-          {sections.map(([date, items], sectionIndex) => {
-            const sectionOffset = sectionOffsets.get(date) ?? 0;
-            const prevMonth = sectionIndex > 0 ? monthKey(sections[sectionIndex - 1][0]) : null;
-            const curMonth = monthKey(date);
-            const isNewMonth = sectionIndex === 0 || curMonth !== prevMonth;
-            const mg = monthGroups.get(curMonth);
-
+        /*
+         * Virtual grid — only the sections near the viewport are mounted in
+         * the DOM. The outer div acts as the scroll-space placeholder whose
+         * height equals the full estimated content height. Each virtual item
+         * is absolutely positioned via `transform: translateY`.
+         *
+         * @pattern Immich section-level virtual list (useWindowVirtualizer)
+         */
+        <div
+          ref={gridRef}
+          style={{ position: 'relative', height: virtualizer.getTotalSize() }}
+        >
+          {virtualizer.getVirtualItems().map((vItem) => {
+            const row = virtualRows[vItem.index];
             return (
-              <section
-                key={date}
-                ref={(el) => { if (el) sectionRefs.current.set(date, el); else sectionRefs.current.delete(date); }}
-                className={sectionIndex > 0 ? 'border-t border-slate-200 pt-4' : ''}
+              <div
+                key={vItem.key}
+                data-index={vItem.index}
+                ref={virtualizer.measureElement}
                 style={{
-                  // Offscreen sections skip layout/paint work, improving scroll
-                  // perf on large catalogs (1000+ items). 500px is the estimated
-                  // height of a typical section (header + ~2-3 grid rows).
-                  contentVisibility: 'auto',
-                  containIntrinsicSize: 'auto 500px',
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  transform: `translateY(${vItem.start - scrollMargin}px)`,
                 }}
               >
-                {/* Monthly "Best of" cover card at the start of each month */}
-                {isNewMonth && mg && mg.items.length > 0 && (
-                  <MonthDivider
-                    monthLabel={mg.label}
-                    year={mg.year}
-                    itemCount={mg.items.length}
-                    coverItem={mg.coverItem}
-                    apiToken={apiToken}
-                  />
-                )}
-                <SectionHeader
-                  date={date}
-                  items={items}
-                  selected={selected}
-                  onToggleAll={toggleSection}
-                />
-                {/*
-                  Larger tiles: 3/4/6/8 cols (Google Photos style) with rounded-lg
-                  and gap-1 for minimal spacing between tiles. select-none is applied
-                  per-image to prevent drag selection while keeping dates accessible.
-                */}
-                <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8" role="grid" aria-label="Photo grid">
-                  {items.map((item, i) => (
-                    <Thumbnail
-                      key={item.encodedKey}
-                      item={item}
+                <section
+                  ref={(el) => { if (el) sectionRefs.current.set(row.date, el); else sectionRefs.current.delete(row.date); }}
+                  className={!row.isFirstSection ? 'border-t border-slate-200 pt-4' : ''}
+                >
+                  {/* Monthly "Best of" cover card at the start of each month */}
+                  {row.monthDivider && (
+                    <MonthDivider
+                      monthLabel={row.monthDivider.label}
+                      year={row.monthDivider.year}
+                      itemCount={row.monthDivider.itemCount}
+                      coverItem={row.monthDivider.coverItem}
                       apiToken={apiToken}
-                      selected={selected.has(item.encodedKey)}
-                      selectionMode={selectionMode}
-                      lightboxIndex={sectionOffset + i}
-                      onToggleSelect={() => toggleSelect(item.encodedKey, sectionOffset + i)}
-                      onOpenLightbox={setLightboxIndex}
-                      onShiftClick={handleShiftClick}
                     />
-                  ))}
-                </div>
-              </section>
+                  )}
+                  <SectionHeader
+                    date={row.date}
+                    items={row.items}
+                    selected={selected}
+                    onToggleAll={toggleSection}
+                  />
+                  {/*
+                    Larger tiles: 3/4/6/8 cols (Google Photos style) with rounded-lg
+                    and gap-1 for minimal spacing between tiles. select-none is applied
+                    per-image to prevent drag selection while keeping dates accessible.
+                  */}
+                  <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8" role="grid" aria-label="Photo grid">
+                    {row.items.map((item, i) => (
+                      <Thumbnail
+                        key={item.encodedKey}
+                        item={item}
+                        apiToken={apiToken}
+                        selected={selected.has(item.encodedKey)}
+                        selectionMode={selectionMode}
+                        lightboxIndex={row.sectionOffset + i}
+                        onToggleSelect={() => toggleSelect(item.encodedKey, row.sectionOffset + i)}
+                        onOpenLightbox={setLightboxIndex}
+                        onShiftClick={handleShiftClick}
+                      />
+                    ))}
+                  </div>
+                </section>
+              </div>
             );
           })}
         </div>
@@ -1756,7 +1888,7 @@ export function CatalogPage() {
       </div>
 
       {/* ── Date scroller (right-edge timeline) ─────────────────────── */}
-      <DateScroller sections={sections} sectionRefs={sectionRefs} />
+      <DateScroller sections={sections} sectionRefs={sectionRefs} onScrollToDate={scrollToDate} />
 
       {/* ── Scroll-to-top FAB (Google Photos pattern) ──────────────── */}
       {showScrollTop && (
