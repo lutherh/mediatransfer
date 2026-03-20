@@ -2,7 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { inferDateFromFilename, extractExifMetadata } from '../utils/exif.js';
+import { inferDateFromFilename, extractExifMetadata, extractVideoCreationDate } from '../utils/exif.js';
 
 const MEDIA_EXTENSIONS = new Set([
   '.jpg', '.jpeg', '.png', '.gif', '.webp',
@@ -205,7 +205,11 @@ async function deriveCapturedDate(
     // EXIF extraction failed — continue to fallback
   }
 
-  // 4. No reliable date found — return undefined so the caller can use
+  // 4. Try video container metadata (MP4/MOV moov/mvhd creation_time)
+  const fromVideo = await extractVideoCreationDate(sourcePath);
+  if (fromVideo) return fromVideo;
+
+  // 5. No reliable date found — return undefined so the caller can use
   //    an 'unknown-date' path rather than silently filing under today's date.
   return undefined;
 }
