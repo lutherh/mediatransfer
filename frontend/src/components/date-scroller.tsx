@@ -27,6 +27,12 @@ export interface DateScrollerProps {
   sections: [string, unknown[]][];
   /** Map of "YYYY-MM-DD" → DOM element for each section, used for scroll-to and visibility detection */
   sectionRefs: React.RefObject<Map<string, HTMLElement>>;
+  /**
+   * Optional callback to programmatically scroll to a section by date string.
+   * When provided, used instead of `scrollIntoView` so that off-screen virtual
+   * sections (not currently in the DOM) can still be scrolled to correctly.
+   */
+  onScrollToDate?: (date: string) => void;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -106,7 +112,7 @@ export function clamp01(v: number): number {
 
 // ── Component ──────────────────────────────────────────────────────────────
 
-export function DateScroller({ sections, sectionRefs }: DateScrollerProps) {
+export function DateScroller({ sections, sectionRefs, onScrollToDate }: DateScrollerProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
@@ -224,15 +230,20 @@ export function DateScroller({ sections, sectionRefs }: DateScrollerProps) {
     (ratio: number) => {
       const date = dateAtRatio(ratio);
       if (!date) return;
-      const el = sectionRefs.current?.get(date);
-      if (el) {
-        el.scrollIntoView({ behavior: 'auto', block: 'start' });
-        window.scrollBy(0, -60);
+      if (onScrollToDate) {
+        // Prefer the virtualizer-aware callback so off-screen sections are reachable
+        onScrollToDate(date);
+      } else {
+        const el = sectionRefs.current?.get(date);
+        if (el) {
+          el.scrollIntoView({ behavior: 'auto', block: 'start' });
+          window.scrollBy(0, -60);
+        }
       }
       setHandleRatio(ratio);
       setTooltipDate(date);
     },
-    [dateAtRatio, sectionRefs],
+    [dateAtRatio, sectionRefs, onScrollToDate],
   );
 
   const handlePointerDown = useCallback(
