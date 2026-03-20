@@ -983,7 +983,7 @@ interface VirtualSectionRow {
     label: string;
     year: string;
     itemCount: number;
-    coverItem: CatalogItem | null;
+    coverItem: CatalogItem | undefined;
   } | null;
 }
 
@@ -1566,7 +1566,7 @@ export function CatalogPage() {
         isFirstSection: sectionIndex === 0,
         monthDivider:
           isNewMonth && mg && mg.items.length > 0
-            ? { label: mg.label, year: mg.year, itemCount: mg.items.length, coverItem: mg.coverItem ?? null }
+            ? { label: mg.label, year: mg.year, itemCount: mg.items.length, coverItem: mg.coverItem }
             : null,
       };
       offset += items.length;
