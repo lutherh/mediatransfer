@@ -8,11 +8,6 @@ export default defineConfig({
     testTimeout: 15000,
     slowTestThreshold: 250,
     pool: 'forks',
-    // Reuse a single fork process for all test files — avoids ~30 cold-start
-    // overheads on Windows where forking is expensive.
-    forks: {
-      singleFork: true,
-    },
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
