@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { createPickerSession, pollPickerSession, fetchPickedItems, type PickedMediaItem } from '@/lib/api';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { createPickerSession, pollPickerSession, fetchPickedItems, ApiError, type PickedMediaItem } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
@@ -10,7 +10,10 @@ type PickPhotosStepProps = {
   onBack: () => void;
 };
 
+const AUTH_ERROR_CODES = new Set(['GOOGLE_NOT_CONNECTED', 'GOOGLE_TOKEN_EXPIRED']);
+
 export function PickPhotosStep({ onPhotosSelected, onBack }: PickPhotosStepProps) {
+  const queryClient = useQueryClient();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [pickerUri, setPickerUri] = useState<string | null>(null);
   const [pickerWindow, setPickerWindow] = useState<Window | null>(null);
@@ -24,6 +27,12 @@ export function PickPhotosStep({ onPhotosSelected, onBack }: PickPhotosStepProps
     onSuccess: (data) => {
       setSessionId(data.sessionId);
       setPickerUri(data.pickerUri ?? null);
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && AUTH_ERROR_CODES.has(error.code)) {
+        queryClient.invalidateQueries({ queryKey: ['google-auth-status'] });
+        onBack();
+      }
     },
   });
 

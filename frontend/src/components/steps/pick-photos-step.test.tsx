@@ -8,12 +8,16 @@ const mockCreatePickerSession = vi.fn();
 const mockPollPickerSession = vi.fn();
 const mockFetchPickedItems = vi.fn();
 
-vi.mock('@/lib/api', () => ({
-  createPickerSession: (...args: unknown[]) => mockCreatePickerSession(...args),
-  pollPickerSession: (...args: unknown[]) => mockPollPickerSession(...args),
-  fetchPickedItems: (...args: unknown[]) => mockFetchPickedItems(...args),
-  deletePickerSession: vi.fn(),
-}));
+vi.mock('@/lib/api', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/lib/api')>();
+  return {
+    ...original,
+    createPickerSession: (...args: unknown[]) => mockCreatePickerSession(...args),
+    pollPickerSession: (...args: unknown[]) => mockPollPickerSession(...args),
+    fetchPickedItems: (...args: unknown[]) => mockFetchPickedItems(...args),
+    deletePickerSession: vi.fn(),
+  };
+});
 
 function renderStep(onPhotosSelected = vi.fn(), onBack = vi.fn()) {
   const queryClient = new QueryClient({

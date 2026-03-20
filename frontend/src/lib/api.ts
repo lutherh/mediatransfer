@@ -493,19 +493,33 @@ export const updateTakeoutWorkDir = (dir: string) =>
 export const resetTakeoutWorkDir = () =>
   resetTakeoutPath('workDir').then((r) => ({ workDir: r.value, reset: r.reset }));
 
-function parseApiErrorMessage(raw: string): string | undefined {
-  if (!raw) return undefined;
+export class ApiError extends Error {
+  constructor(public readonly code: string, message: string) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+function parseApiError(raw: string): { code?: string; message?: string } {
+  if (!raw) return {};
 
   try {
-    const parsed = JSON.parse(raw) as { error?: string };
+    const parsed = JSON.parse(raw) as { error?: string | { code?: string; message?: string } };
     if (parsed?.error && typeof parsed.error === 'string') {
-      return parsed.error;
+      return { message: parsed.error };
+    }
+    if (parsed?.error && typeof parsed.error === 'object') {
+      return { code: parsed.error.code, message: parsed.error.message };
     }
   } catch {
     // plain text response
   }
 
-  return raw;
+  return { message: raw };
+}
+
+function parseApiErrorMessage(raw: string): string | undefined {
+  return parseApiError(raw).message;
 }
 
 async function fetchWithTimeout(
@@ -597,7 +611,11 @@ export async function createPickerSession(): Promise<PickerSession> {
   const response = await fetch(`${API_BASE_URL}/picker/session`, { method: 'POST' });
   if (!response.ok) {
     const raw = await response.text();
-    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to create picker session');
+    const { code, message } = parseApiError(raw);
+    if (code) {
+      throw new ApiError(code, message ?? 'Failed to create picker session');
+    }
+    throw new Error(message ?? 'Failed to create picker session');
   }
   return response.json();
 }

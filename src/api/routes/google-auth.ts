@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import {
   createOAuth2Client,
@@ -133,11 +133,15 @@ export async function registerGoogleAuthRoutes(app: FastifyInstance, env: Env): 
       return reply.code(400).send(apiError('GOOGLE_NOT_CONNECTED', 'Not connected to Google. Please authenticate first.'));
     }
 
-    const session = await pickerClient.createSession();
-    return {
-      sessionId: session.id,
-      pickerUri: session.pickerUri,
-    };
+    try {
+      const session = await pickerClient.createSession();
+      return {
+        sessionId: session.id,
+        pickerUri: session.pickerUri,
+      };
+    } catch (err) {
+      return handlePickerError(err, reply);
+    }
   });
 
   /**
@@ -152,11 +156,15 @@ export async function registerGoogleAuthRoutes(app: FastifyInstance, env: Env): 
       return reply.code(400).send(apiError('GOOGLE_NOT_CONNECTED', 'Not connected to Google.'));
     }
 
-    const session = await pickerClient.getSession(sessionId);
-    return {
-      sessionId: session.id,
-      mediaItemsSet: session.mediaItemsSet,
-    };
+    try {
+      const session = await pickerClient.getSession(sessionId);
+      return {
+        sessionId: session.id,
+        mediaItemsSet: session.mediaItemsSet,
+      };
+    } catch (err) {
+      return handlePickerError(err, reply);
+    }
   });
 
   /**
@@ -173,12 +181,15 @@ export async function registerGoogleAuthRoutes(app: FastifyInstance, env: Env): 
     }
 
     const pageSize = Math.min(Math.max(parseInt(query.pageSize ?? '', 10) || 100, 1), 100);
-    const result = await pickerClient.listPickedMediaItems(sessionId, query.pageToken, pageSize);
-
-    return {
-      mediaItems: result.mediaItems,
-      nextPageToken: result.nextPageToken,
-    };
+    try {
+      const result = await pickerClient.listPickedMediaItems(sessionId, query.pageToken, pageSize);
+      return {
+        mediaItems: result.mediaItems,
+        nextPageToken: result.nextPageToken,
+      };
+    } catch (err) {
+      return handlePickerError(err, reply);
+    }
   });
 
   /**
@@ -193,9 +204,30 @@ export async function registerGoogleAuthRoutes(app: FastifyInstance, env: Env): 
       return reply.code(400).send(apiError('GOOGLE_NOT_CONNECTED', 'Not connected to Google.'));
     }
 
-    await pickerClient.deleteSession(sessionId);
-    return reply.code(204).send();
+    try {
+      await pickerClient.deleteSession(sessionId);
+      return reply.code(204).send();
+    } catch (err) {
+      return handlePickerError(err, reply);
+    }
   });
+}
+
+function isInvalidGrantError(err: unknown): boolean {
+  if (err instanceof Error) {
+    return err.message === 'invalid_grant' || err.message.includes('Token has been expired or revoked');
+  }
+  return false;
+}
+
+async function handlePickerError(err: unknown, reply: FastifyReply) {
+  if (isInvalidGrantError(err)) {
+    await clearStoredTokens();
+    return reply.code(401).send(
+      apiError('GOOGLE_TOKEN_EXPIRED', 'Google authentication has expired or been revoked. Please reconnect your Google account.'),
+    );
+  }
+  throw err;
 }
 
 async function createPickerClient(env: Env): Promise<GooglePhotosPickerClient | null> {
