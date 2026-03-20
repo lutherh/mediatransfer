@@ -272,6 +272,10 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       clearTimeout(currentTimeout);
       currentTimeout = null;
     }
+    // Unref the underlying HTTP server so it doesn't keep the event loop alive
+    // after all tests complete. Safe in production too (close() is only called
+    // during shutdown, at which point we want the process to be able to exit).
+    app.server.unref();
     done();
   });
 
@@ -758,6 +762,8 @@ function runAction(action: TakeoutAction): void {
         persistPipelineState();
       }
     }, ACTION_TIMEOUT_MS);
+    // Don't prevent the process from exiting if the timer is the only active handle.
+    currentTimeout.unref();
 
     child.stdout.on('data', (chunk) => {
       appendOutput(String(chunk));
@@ -916,6 +922,8 @@ function scheduleAutoUploadAction(nextAction: 'scan' | 'upload', env: Env): void
       }
     }
   }, AUTO_UPLOAD_DELAY_MS);
+  // Don't prevent the process from exiting if the timer is the only active handle.
+  autoUploadTimeout.unref();
 }
 
 /** Cancel a pending auto-upload timeout. */
@@ -956,6 +964,8 @@ function ensureAutoUploadPoll(): void {
       runAction('scan');
     }
   }, AUTO_UPLOAD_POLL_INTERVAL_MS);
+  // Don't prevent the process from exiting if the interval is the only active handle.
+  autoUploadPollInterval.unref();
 }
 
 /** Stop the recurring auto-upload poll. */
