@@ -8,7 +8,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 // ── Enums ─────────────────────────────────────────────────────
@@ -105,4 +104,3 @@ model AppSetting {
 
   @@map("app_settings")
 }
-
