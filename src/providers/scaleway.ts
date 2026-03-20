@@ -235,7 +235,7 @@ export class ScalewayProvider implements CloudProvider {
     return Readable.fromWeb(response.Body);
   }
 
-  async upload(key: string, stream: Readable, contentType?: string): Promise<void> {
+  async upload(key: string, stream: Readable, contentType?: string, metadata?: Record<string, string>): Promise<void> {
     const upload = new Upload({
       client: this.client,
       queueSize: this.multipartQueueSize,
@@ -246,6 +246,7 @@ export class ScalewayProvider implements CloudProvider {
         Key: this.fullKey(key),
         Body: stream,
         ContentType: contentType,
+        ...(metadata && Object.keys(metadata).length > 0 ? { Metadata: metadata } : {}),
       },
     });
 

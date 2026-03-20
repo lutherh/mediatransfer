@@ -9,6 +9,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
+import { Agent as HttpsAgent } from 'node:https';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
@@ -312,6 +313,7 @@ export class ScalewayCatalogService implements CatalogService {
   private readonly s3RequestTimeoutMs: number;
   private readonly s3ListMaxRetries: number;
   private statsCache: { data: CatalogStats; expiresAt: number } | null = null;
+  private statsInflight: Promise<CatalogStats> | null = null;
   private readonly thumbCache = new ThumbnailCache();
   private itemsIndexCache: { items: CatalogItem[]; expiresAt: number } | null = null;
   private itemsIndexInflight: Promise<CatalogItem[]> | null = null;
@@ -332,6 +334,10 @@ export class ScalewayCatalogService implements CatalogService {
         },
         forcePathStyle: true,
         requestHandler: new NodeHttpHandler({
+          httpsAgent: new HttpsAgent({
+            keepAlive: true,      // reuse TCP connections – avoids slow-start & TLS handshake per request
+            maxSockets: 25,       // Scaleway recommends parallelism; pool up to 25 concurrent connections
+          }),
           connectionTimeout: 10_000,  // 10s to establish TCP connection
           requestTimeout: 60_000,     // 60s for the response to begin
         }),
@@ -614,56 +620,44 @@ export class ScalewayCatalogService implements CatalogService {
     if (this.statsCache && Date.now() < this.statsCache.expiresAt) {
       return this.statsCache.data;
     }
+    // Dedup concurrent callers — derive stats from the items index.
+    // This avoids a separate full-bucket scan; getItemsIndex() already
+    // lists every object and deduplicates concurrent requests.
+    if (!this.statsInflight) {
+      this.statsInflight = this.getItemsIndex()
+        .then((items) => {
+          let totalBytes = 0;
+          let imageCount = 0;
+          let videoCount = 0;
+          let oldest: Date | null = null;
+          let newest: Date | null = null;
 
-    let totalFiles = 0;
-    let totalBytes = 0;
-    let imageCount = 0;
-    let videoCount = 0;
-    let oldest: Date | null = null;
-    let newest: Date | null = null;
-    let continuationToken: string | undefined;
+          for (const item of items) {
+            totalBytes += item.size;
+            if (item.mediaType === 'image') imageCount++;
+            else videoCount++;
+            const d = new Date(item.capturedAt);
+            if (!oldest || d < oldest) oldest = d;
+            if (!newest || d > newest) newest = d;
+          }
 
-    do {
-      const result = await s3ListWithRetry(this.client, {
-        Bucket: this.bucket,
-        Prefix: this.prefix ? `${this.prefix}/` : undefined,
-        ContinuationToken: continuationToken,
-        MaxKeys: 1000,
-      }, {
-        timeoutMs: this.s3RequestTimeoutMs,
-        maxRetries: this.s3ListMaxRetries,
-      });
+          const stats: CatalogStats = {
+            totalFiles: items.length,
+            totalBytes,
+            imageCount,
+            videoCount,
+            oldestDate: oldest?.toISOString() ?? null,
+            newestDate: newest?.toISOString() ?? null,
+          };
 
-      for (const obj of result.Contents ?? []) {
-        if (!obj.Key || obj.Size === undefined) continue;
-        const key = this.stripPrefix(obj.Key);
-        const type = inferMediaType(key);
-        if (type !== 'image' && type !== 'video') continue;
-
-        totalFiles++;
-        totalBytes += Number(obj.Size);
-        if (type === 'image') imageCount++;
-        else videoCount++;
-
-        const capturedAt = inferCapturedAt(key, obj.LastModified ?? new Date());
-        if (!oldest || capturedAt < oldest) oldest = capturedAt;
-        if (!newest || capturedAt > newest) newest = capturedAt;
-      }
-
-      continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
-    } while (continuationToken);
-
-    const stats: CatalogStats = {
-      totalFiles,
-      totalBytes,
-      imageCount,
-      videoCount,
-      oldestDate: oldest?.toISOString() ?? null,
-      newestDate: newest?.toISOString() ?? null,
-    };
-
-    this.statsCache = { data: stats, expiresAt: Date.now() + STATS_CACHE_TTL_MS };
-    return stats;
+          this.statsCache = { data: stats, expiresAt: Date.now() + STATS_CACHE_TTL_MS };
+          return stats;
+        })
+        .finally(() => {
+          this.statsInflight = null;
+        });
+    }
+    return this.statsInflight;
   }
 
   async listAll(prefix?: string): Promise<CatalogItem[]> {
@@ -921,20 +915,47 @@ function inferMediaType(key: string): 'image' | 'video' | 'other' {
 }
 
 function inferCapturedAt(key: string, fallback: Date): Date {
-  // 1. Prefer the date from the S3 path (YYYY/MM/DD folders) — this was assigned
-  //    during upload from EXIF/sidecar data, so it's the most reliable source.
-  const fromPath = /(?:^|\/)((?:19|20)\d{2})\/(\d{2})\/(\d{2})(?:\/|$)/.exec(key);
-  if (fromPath) {
-    const parsed = asUtcDate(fromPath[1], fromPath[2], fromPath[3], '00', '00', '00');
-    if (parsed) {
-      return parsed;
-    }
+  // Extract candidate dates from both path and filename up front
+  const pathDate = extractDateFromPath(key);
+  const filenameDate = extractDateFromFilename(key);
+
+  // If the path date is from the current year, it's likely the upload date —
+  // prefer the filename date or EXIF (filename is all we can check at list time).
+  const currentYear = new Date().getFullYear();
+  if (pathDate && pathDate.getUTCFullYear() >= currentYear && filenameDate) {
+    return filenameDate;
   }
 
-  // 2. Try filename-embedded timestamps (e.g. IMG_20231215_143022.jpg)
-  //    Use (?<!\d) / (?!\d) boundaries so we don't match inside longer digit runs.
+  // For "unknown-date" paths (new uploads that had no reliable date),
+  // fall through to filename inference.
+  if (key.includes('unknown-date') && filenameDate) {
+    return filenameDate;
+  }
+
+  // Normal priority: path date is most reliable when it's from a past year
+  // (it was derived from EXIF/sidecar during upload).
+  if (pathDate) {
+    return pathDate;
+  }
+
+  if (filenameDate) {
+    return filenameDate;
+  }
+
+  return fallback;
+}
+
+function extractDateFromPath(key: string): Date | undefined {
+  const fromPath = /(?:^|\/)((?:19|20)\d{2})\/(\d{2})\/(\d{2})(?:\/|$)/.exec(key);
+  if (!fromPath) return undefined;
+  return asUtcDate(fromPath[1], fromPath[2], fromPath[3], '00', '00', '00');
+}
+
+function extractDateFromFilename(key: string): Date | undefined {
   const filename = key.split('/').pop() ?? key;
 
+  // Try filename-embedded timestamps (e.g. IMG_20231215_143022.jpg)
+  // Use (?<!\d) / (?!\d) boundaries so we don't match inside longer digit runs.
   const fromFileUnderscore = /(?<!\d)((?:19|20)\d{2})(\d{2})(\d{2})[\sT_-]?(\d{2})(\d{2})(\d{2})(?!\d)/.exec(filename);
   if (fromFileUnderscore) {
     const parsed = asUtcDate(
@@ -945,9 +966,7 @@ function inferCapturedAt(key: string, fallback: Date): Date {
       fromFileUnderscore[5],
       fromFileUnderscore[6],
     );
-    if (parsed) {
-      return parsed;
-    }
+    if (parsed) return parsed;
   }
 
   const fromFileDashed = /(?<!\d)((?:19|20)\d{2})-(\d{2})-(\d{2})[ T_.-]?(\d{2})[.:_-]?(\d{2})[.:_-]?(\d{2})(?!\d)/.exec(filename);
@@ -960,9 +979,7 @@ function inferCapturedAt(key: string, fallback: Date): Date {
       fromFileDashed[5],
       fromFileDashed[6],
     );
-    if (parsed) {
-      return parsed;
-    }
+    if (parsed) return parsed;
   }
 
   const fromFileDateOnly = /(?<!\d)((?:19|20)\d{2})(\d{2})(\d{2})(?!\d)/.exec(filename);
@@ -975,12 +992,10 @@ function inferCapturedAt(key: string, fallback: Date): Date {
       '00',
       '00',
     );
-    if (parsed) {
-      return parsed;
-    }
+    if (parsed) return parsed;
   }
 
-  return fallback;
+  return undefined;
 }
 
 function asUtcDate(
