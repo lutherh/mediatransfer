@@ -361,6 +361,7 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
           entry.destinationKey,
           trackedStream,
           contentTypeForPath(entry.sourcePath),
+          { 'captured-at': entry.capturedAt },
         );
 
         const uploadedBytes = inFlightBytes.get(entry.destinationKey) ?? entry.size;

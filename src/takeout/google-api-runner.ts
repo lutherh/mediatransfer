@@ -203,7 +203,12 @@ async function runGoogleApiSingleBatch(
       await fs.rm(localPath, { force: true });
       deletedLocalCount += 1;
     } else {
-      await destination.upload(destinationKey, createReadStream(localPath), item.mimeType);
+      await destination.upload(
+        destinationKey,
+        createReadStream(localPath),
+        item.mimeType,
+        { 'captured-at': item.createdAt },
+      );
       uploadedCount += 1;
 
       const verified = await verifyUploadedObject(destination, destinationKey, itemSize);
@@ -332,8 +337,11 @@ function buildLocalFileName(item: GoogleApiPendingItem): string {
 
 function buildDestinationKey(item: GoogleApiPendingItem): string {
   const date = new Date(item.createdAt);
-  const fallback = new Date();
-  const dateValue = Number.isNaN(date.getTime()) ? fallback : date;
+  const dateValue = Number.isNaN(date.getTime()) ? undefined : date;
+  if (!dateValue) {
+    const safeName = sanitizeFileName(item.filename);
+    return `transfers/unknown-date/${item.id}-${safeName}`;
+  }
   const year = dateValue.getUTCFullYear();
   const month = String(dateValue.getUTCMonth() + 1).padStart(2, '0');
   const day = String(dateValue.getUTCDate()).padStart(2, '0');
