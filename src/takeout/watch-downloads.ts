@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import { statfs } from 'node:fs/promises';
 import type { CloudProvider } from '../providers/types.js';
 import type { TakeoutConfig } from './config.js';
+import { isCrossDeviceError } from '../utils/errors.js';
 import {
   runTakeoutIncremental,
   type IncrementalOptions,
@@ -348,15 +349,6 @@ async function moveFileSafe(source: string, destination: string): Promise<void> 
       throw error;
     }
   }
-}
-
-function isCrossDeviceError(error: unknown): boolean {
-  return Boolean(
-    error &&
-      typeof error === 'object' &&
-      'code' in error &&
-      (error as { code?: string }).code === 'EXDEV',
-  );
 }
 
 async function getDiskFreeBytes(dirPath: string): Promise<number> {

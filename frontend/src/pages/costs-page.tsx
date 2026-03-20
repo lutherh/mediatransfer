@@ -2,25 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { fetchCloudUsage, type CloudUsageAssumptions, type CloudUsageBucketType } from '@/lib/api';
 import { Card } from '@/components/ui/card';
-
-const BUCKET_TYPE_SETTING_KEY = 'cloudUsage.bucketType';
-
-function readBucketTypeSetting(): CloudUsageBucketType {
-  if (
-    typeof window === 'undefined' ||
-    !window.localStorage ||
-    typeof window.localStorage.getItem !== 'function'
-  ) {
-    return 'standard';
-  }
-
-  const stored = window.localStorage.getItem(BUCKET_TYPE_SETTING_KEY);
-  if (stored === 'standard' || stored === 'infrequent' || stored === 'archive') {
-    return stored;
-  }
-
-  return 'standard';
-}
+import { readBucketTypeSetting, writeBucketTypeSetting } from '@/lib/storage';
 
 export function CostsPage() {
   const [bucketType, setBucketType] = useState<CloudUsageBucketType>(readBucketTypeSetting);
@@ -60,13 +42,7 @@ export function CostsPage() {
 
   const handleBucketTypeChange = (value: CloudUsageBucketType) => {
     setBucketType(value);
-    if (
-      typeof window !== 'undefined' &&
-      window.localStorage &&
-      typeof window.localStorage.setItem === 'function'
-    ) {
-      window.localStorage.setItem(BUCKET_TYPE_SETTING_KEY, value);
-    }
+    writeBucketTypeSetting(value);
   };
 
   return (
