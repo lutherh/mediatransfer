@@ -55,6 +55,7 @@ import { getStoredTokens, setStoredTokens } from './routes/google-token-store.js
 import type { ApiServices } from './types.js';
 import { loadEnv, type Env } from '../config/env.js';
 import { apiError } from './errors.js';
+import { delay } from '../utils/delay.js';
 
 export type CreateApiOptions = {
 	services?: ApiServices;
@@ -502,10 +503,6 @@ function computeItemRetryDelay(attempt: number): number {
 	const exponential = Math.min(baseDelayMs * (2 ** (attempt - 1)), maxDelayMs);
 	const jitter = Math.floor(Math.random() * 120);
 	return Math.min(exponential + jitter, maxDelayMs);
-}
-
-async function delay(ms: number): Promise<void> {
-	await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function transferPickedMediaItemToScaleway(

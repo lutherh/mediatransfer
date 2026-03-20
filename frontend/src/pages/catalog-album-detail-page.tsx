@@ -10,7 +10,7 @@
  *
  * @pattern Google Photos album view
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -23,13 +23,7 @@ import {
   type Album,
 } from '@/lib/api';
 import { Card } from '@/components/ui/card';
-
-function useApiToken(): string | undefined {
-  return useMemo(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('apiToken') ?? undefined;
-  }, []);
-}
+import { useApiToken } from '@/lib/use-api-token';
 
 // ── Item thumbnail ─────────────────────────────────────────────────────────
 

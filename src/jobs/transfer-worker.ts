@@ -2,6 +2,7 @@ import { PassThrough, type Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { CloudProvider } from '../providers/types.js';
 import type { LogLevel } from '../generated/prisma/client.js';
+import { delay as defaultDelay } from '../utils/delay.js';
 
 export type TransferItemTask = {
   key: string;
@@ -99,10 +100,6 @@ function computeRetryDelay(strategy: RetryStrategy, attempt: number): number {
   const exponential = Math.min(strategy.baseDelayMs * (2 ** (attempt - 1)), strategy.maxDelayMs);
   const jitter = Math.floor(Math.random() * Math.max(50, Math.floor(strategy.baseDelayMs * 0.2)));
   return Math.min(exponential + jitter, strategy.maxDelayMs);
-}
-
-async function defaultDelay(delayMs: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 async function transferItemWithRetry(

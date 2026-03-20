@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { formatBytes } from '@/lib/format';
 import { Alert } from '@/components/ui/alert';
 import {
   fetchTakeoutActionStatus,
@@ -652,8 +653,8 @@ export function TakeoutProgressPage() {
                 {archiveHistory.map((record) => (
                   <tr key={record.archiveName} className="border-b border-slate-100 last:border-b-0 align-top">
                     <td className="py-2 pr-3 font-mono text-slate-700 break-all">{record.archiveName}</td>
-                    <td className="py-2 pr-3 text-slate-700 tabular-nums">{formatBytesAsGb(record.archiveSizeBytes)}</td>
-                    <td className="py-2 pr-3 text-slate-700 tabular-nums">{formatBytesAsGb(record.mediaBytes)}</td>
+                    <td className="py-2 pr-3 text-slate-700 tabular-nums">{record.archiveSizeBytes != null ? formatBytes(record.archiveSizeBytes) : 'unknown'}</td>
+                    <td className="py-2 pr-3 text-slate-700 tabular-nums">{record.mediaBytes != null ? formatBytes(record.mediaBytes) : 'unknown'}</td>
                     <td className="py-2 pr-3 text-slate-700 tabular-nums">
                       {record.uploadedCount.toLocaleString()} / {record.entryCount.toLocaleString()}
                     </td>
@@ -993,14 +994,6 @@ function ArchiveNotUploadedReasons({ record }: { record: TakeoutArchiveHistoryEn
       ))}
     </ul>
   );
-}
-
-function formatBytesAsGb(value?: number): string {
-  if (typeof value !== 'number' || Number.isNaN(value) || value <= 0) {
-    return 'unknown';
-  }
-  const gb = value / (1024 ** 3);
-  return `${gb.toFixed(2)} GB`;
 }
 
 // ─── Path row ─────────────────────────────────────────────────────────────────
