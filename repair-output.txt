@@ -1,0 +1,64 @@
+[dotenv@17.3.1] injecting env (40) from .env -- tip: ⚙️  suppress all logs with { quiet: true }
+📂 Loading sidecar metadata from: data/takeout/work/metadata
+   Loaded 485 metadata files, 133100 items, 72934 with valid pre-2026 dates
+   Unique filenames indexed: 26833
+🔍 Scanning S3 for objects under: transfers/2026/03/03/
+   Bucket: photosync
+   Mode: 🔎 DRY RUN (no changes)
+   Video metadata extraction: ENABLED (--video)
+   Found 532 objects under transfers/2026/03/03/
+🔍 Resolving correct dates...
+   532/532 checked — 349 to move (meta:0 side:12 exif:0 vid:337 file:0) | 183 unknown | 0 err
+📊 Date resolution summary:
+   From S3 metadata:    0
+   From sidecar:        12
+   From EXIF:           0
+   From video metadata: 337
+   From filename:       0
+   Already correct:     0
+   No date found:       183 (will stay in place)
+   EXIF errors:         0
+   Resolve errors:      0
+   Total to move:       349
+📦 Sample moves (first 20):
+   [video-meta] transfers/2026/03/03/Archive/58411426220__6C1B957A-8EBB-492F-B716-D8CFC02F7A.MP4
+          → transfers/2019/07/06/Archive/58411426220__6C1B957A-8EBB-492F-B716-D8CFC02F7A.MP4  (2019-07-06T13:57:42.000Z)
+   [sidecar] transfers/2026/03/03/Archive/IMG_0559.JPG
+          → transfers/2019/05/24/Archive/IMG_0559.JPG  (2019-05-24T09:46:26.000Z)
+   [sidecar] transfers/2026/03/03/Archive/IMG_0560.JPG
+          → transfers/2019/05/24/Archive/IMG_0560.JPG  (2019-05-24T09:48:17.000Z)
+   [sidecar] transfers/2026/03/03/Archive/IMG_0795.PNG
+          → transfers/2019/07/04/Archive/IMG_0795.PNG  (2019-07-04T12:42:28.000Z)
+   [sidecar] transfers/2026/03/03/Archive/IMG_0798.JPG
+          → transfers/2019/07/04/Archive/IMG_0798.JPG  (2019-07-04T13:09:41.000Z)
+   [video-meta] transfers/2026/03/03/Archive/IMG_3136.MP4
+          → transfers/2020/07/24/Archive/IMG_3136.MP4  (2020-07-24T14:44:40.000Z)
+   [sidecar] transfers/2026/03/03/Archive/IMG_3438.HEIC
+          → transfers/2024/04/27/Archive/IMG_3438.HEIC  (2024-04-27T08:54:46.000Z)
+   [video-meta] transfers/2026/03/03/Familie_og_venner/IMG_1388_1_.MOV
+          → transfers/2019/10/28/Familie_og_venner/IMG_1388_1_.MOV  (2019-10-28T10:35:12.000Z)
+   [video-meta] transfers/2026/03/03/Familie_og_venner/IMG_1517_1_.MOV
+          → transfers/2019/11/13/Familie_og_venner/IMG_1517_1_.MOV  (2019-11-13T10:42:58.000Z)
+   [video-meta] transfers/2026/03/03/Familie_og_venner/IMG_1605_1_.MOV
+          → transfers/2019/11/25/Familie_og_venner/IMG_1605_1_.MOV  (2019-11-25T11:54:19.000Z)
+   [video-meta] transfers/2026/03/03/Familie_og_venner/IMG_3539.MOV
+          → transfers/2020/12/24/Familie_og_venner/IMG_3539.MOV  (2020-12-24T16:27:42.000Z)
+   [video-meta] transfers/2026/03/03/Familie_og_venner/MOVIE_2_.mp4
+          → transfers/2019/08/13/Familie_og_venner/MOVIE_2_.mp4  (2019-08-13T17:32:43.000Z)
+   [video-meta] transfers/2026/03/03/Familie_og_venner/MOVIE_3_.mp4
+          → transfers/2019/07/24/Familie_og_venner/MOVIE_3_.mp4  (2019-07-24T18:46:51.000Z)
+   [video-meta] transfers/2026/03/03/Familie_og_venner_1_/29f87c587f104b96bff7fb73b25ebcdd.mov
+          → transfers/2019/04/16/Familie_og_venner_1_/29f87c587f104b96bff7fb73b25ebcdd.mov  (2019-04-16T14:12:21.000Z)
+   [video-meta] transfers/2026/03/03/Familie_og_venner_1_/57340663693__5C230181-C7C6-4C73-89E8-5EF6DC6900.MOV
+          → transfers/2019/03/04/Familie_og_venner_1_/57340663693__5C230181-C7C6-4C73-89E8-5EF6DC6900.MOV  (2019-03-04T15:37:17.000Z)
+   [video-meta] transfers/2026/03/03/Familie_og_venner_1_/60024862-CE75-4AB2-957E-02EDA448B4D0.mp4
+          → transfers/2019/04/21/Familie_og_venner_1_/60024862-CE75-4AB2-957E-02EDA448B4D0.mp4  (2019-04-21T08:18:37.000Z)
+   [video-meta] transfers/2026/03/03/Familie_og_venner_1_/69817566075__A8BBDED3-EA2D-4EF2-99D7-F0233A7BC7.MOV
+          → transfers/2023/02/15/Familie_og_venner_1_/69817566075__A8BBDED3-EA2D-4EF2-99D7-F0233A7BC7.MOV  (2023-02-15T17:41:00.000Z)
+   [video-meta] transfers/2026/03/03/Familie_og_venner_1_/69817678304__CDB2532F-AA12-4824-A9BB-902E3ED427.MOV
+          → transfers/2023/02/15/Familie_og_venner_1_/69817678304__CDB2532F-AA12-4824-A9BB-902E3ED427.MOV  (2023-02-15T17:59:43.000Z)
+   [video-meta] transfers/2026/03/03/Familie_og_venner_1_/70042089179__FDE2BD6B-8692-4D12-B2A1-9080669AEC.MOV
+          → transfers/2023/03/13/Familie_og_venner_1_/70042089179__FDE2BD6B-8692-4D12-B2A1-9080669AEC.MOV  (2023-03-13T17:21:31.000Z)
+   [video-meta] transfers/2026/03/03/Familie_og_venner_1_/70042107841__4CE2868E-B25B-45EA-8AA0-F01DEFE2A6.MOV
+          → transfers/2023/03/13/Familie_og_venner_1_/70042107841__4CE2868E-B25B-45EA-8AA0-F01DEFE2A6.MOV  (2023-03-13T17:24:38.000Z)
+⚠️  DRY RUN — no changes made. Run with --apply to execute 349 moves.
