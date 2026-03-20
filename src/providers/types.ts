@@ -48,8 +48,9 @@ export interface CloudProvider {
    * @param key  Destination key / path in the bucket.
    * @param stream  The data to upload.
    * @param contentType  Optional MIME type.
+   * @param metadata  Optional custom metadata (stored as x-amz-meta-* headers).
    */
-  upload(key: string, stream: Readable, contentType?: string): Promise<void>;
+  upload(key: string, stream: Readable, contentType?: string, metadata?: Record<string, string>): Promise<void>;
 
   /**
    * Delete a single object by key.
