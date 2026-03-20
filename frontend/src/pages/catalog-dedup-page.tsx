@@ -13,22 +13,8 @@ import {
   type DupScanProgress,
 } from '@/lib/api';
 import { Card } from '@/components/ui/card';
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(2)} GB`;
-  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
-  if (bytes >= 1_024) return `${(bytes / 1_024).toFixed(1)} KB`;
-  return `${bytes} B`;
-}
-
-function useApiToken(): string | undefined {
-  return useMemo(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('apiToken') ?? undefined;
-  }, []);
-}
+import { formatBytes } from '@/lib/format';
+import { useApiToken } from '@/lib/use-api-token';
 
 function basename(key: string): string {
   return key.split('/').pop() ?? key;

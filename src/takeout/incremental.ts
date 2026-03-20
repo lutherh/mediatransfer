@@ -2,6 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { CloudProvider } from '../providers/types.js';
 import type { TakeoutConfig } from './config.js';
+import { isFileNotFoundError, isCrossDeviceError } from '../utils/errors.js';
 import {
   discoverTakeoutArchives,
   extractArchive,
@@ -485,7 +486,7 @@ async function moveArchiveToCompletedDir(archivePath: string, completedDir: stri
   try {
     await fs.rename(archivePath, destinationPath);
   } catch (error) {
-    if (!isCrossDeviceRenameError(error)) throw error;
+    if (!isCrossDeviceError(error)) throw error;
     // Cross-device (e.g. external HD): copy then delete
     await fs.copyFile(archivePath, destinationPath);
     await fs.unlink(archivePath);
@@ -522,23 +523,8 @@ async function getUniqueDestinationPath(directory: string, fileName: string): Pr
   }
 }
 
-export function isCrossDeviceRenameError(error: unknown): boolean {
-  return Boolean(
-    error
-    && typeof error === 'object'
-    && 'code' in error
-    && (error as { code?: string }).code === 'EXDEV',
-  );
-}
-
-function isFileNotFoundError(error: unknown): boolean {
-  return Boolean(
-    error
-    && typeof error === 'object'
-    && 'code' in error
-    && (error as { code?: string }).code === 'ENOENT',
-  );
-}
+/** @deprecated Use `isCrossDeviceError` from `../utils/errors.js` instead. */
+export { isCrossDeviceError as isCrossDeviceRenameError } from '../utils/errors.js';
 
 function isNoSpaceLeftError(error: unknown): boolean {
   return Boolean(

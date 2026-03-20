@@ -23,13 +23,7 @@ import {
   type Album,
 } from '@/lib/api';
 import { Card } from '@/components/ui/card';
-
-function useApiToken(): string | undefined {
-  return useMemo(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('apiToken') ?? undefined;
-  }, []);
-}
+import { useApiToken } from '@/lib/use-api-token';
 
 // ── Item thumbnail ─────────────────────────────────────────────────────────
 

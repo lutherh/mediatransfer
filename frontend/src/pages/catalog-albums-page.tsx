@@ -6,7 +6,7 @@
  *
  * @pattern Google Photos albums grid
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -18,13 +18,7 @@ import {
   type Album,
 } from '@/lib/api';
 import { Card } from '@/components/ui/card';
-
-function useApiToken(): string | undefined {
-  return useMemo(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('apiToken') ?? undefined;
-  }, []);
-}
+import { useApiToken } from '@/lib/use-api-token';
 
 // ── Album card ─────────────────────────────────────────────────────────────
 

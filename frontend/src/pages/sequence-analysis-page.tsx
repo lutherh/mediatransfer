@@ -4,19 +4,12 @@ import { Link } from 'react-router-dom';
 import { Card } from '@/components/ui/card';
 import { Alert } from '@/components/ui/alert';
 import { fetchSequenceAnalysis, type SequenceGroup, type SequenceAnalysis, type ArchiveDetail } from '@/lib/api';
+import { formatBytes } from '@/lib/format';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function formatArchiveName(prefix: string, exportNumber: number, seq: number, ext: string): string {
   return `${prefix}-${exportNumber}-${String(seq).padStart(3, '0')}${ext}`;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  const value = bytes / Math.pow(1024, i);
-  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 // ── Summary cards ──────────────────────────────────────────────────────────

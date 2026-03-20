@@ -35,27 +35,8 @@ import {
 import { Card } from '@/components/ui/card';
 import { DateScroller } from '@/components/date-scroller';
 import { VirtualizedGrid } from '@/components/virtualized-grid';
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-/** Format raw byte count into a human-readable string (B / KB / MB / GB). */
-function formatBytes(bytes: number): string {
-  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(2)} GB`;
-  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
-  if (bytes >= 1_024) return `${(bytes / 1_024).toFixed(1)} KB`;
-  return `${bytes} B`;
-}
-
-/**
- * Read an optional `apiToken` query-parameter from the URL. Memoized so the
- * URLSearchParams parse happens only once per mount.
- */
-function useApiToken(): string | undefined {
-  return useMemo(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('apiToken') ?? undefined;
-  }, []);
-}
+import { formatBytes } from '@/lib/format';
+import { useApiToken } from '@/lib/use-api-token';
 
 // ── Stats bar ──────────────────────────────────────────────────────────────
 

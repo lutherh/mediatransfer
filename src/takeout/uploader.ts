@@ -4,6 +4,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import { Transform, type Readable } from 'node:stream';
 import type { CloudProvider } from '../providers/types.js';
 import type { ManifestEntry } from './manifest.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 export type UploadStateItem = {
   status: 'uploaded' | 'skipped' | 'failed';
@@ -681,10 +682,6 @@ function contentTypeForPath(filePath: string): string | undefined {
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function toErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /**
