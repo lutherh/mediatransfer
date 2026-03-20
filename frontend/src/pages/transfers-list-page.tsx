@@ -3,33 +3,8 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { fetchCloudUsage, fetchTransfers, type CloudUsageBucketType } from '@/lib/api';
 import { Card } from '@/components/ui/card';
-
-const BUCKET_TYPE_SETTING_KEY = 'cloudUsage.bucketType';
-
-function readBucketTypeSetting(): CloudUsageBucketType {
-  if (
-    typeof window === 'undefined' ||
-    !window.localStorage ||
-    typeof window.localStorage.getItem !== 'function'
-  ) {
-    return 'standard';
-  }
-
-  const stored = window.localStorage.getItem(BUCKET_TYPE_SETTING_KEY);
-  if (stored === 'standard' || stored === 'infrequent' || stored === 'archive') {
-    return stored;
-  }
-
-  return 'standard';
-}
-
-const STATUS_STYLES: Record<string, string> = {
-  PENDING: 'bg-amber-50 text-amber-700 border border-amber-200',
-  IN_PROGRESS: 'bg-blue-50 text-blue-700 border border-blue-200',
-  COMPLETED: 'bg-green-50 text-green-700 border border-green-200',
-  FAILED: 'bg-red-50 text-red-700 border border-red-200',
-  CANCELLED: 'bg-slate-100 text-slate-600 border border-slate-200',
-};
+import { STATUS_STYLES } from '@/lib/transfer-styles';
+import { readBucketTypeSetting, writeBucketTypeSetting } from '@/lib/storage';
 
 export function TransfersListPage() {
   const [bucketType, setBucketType] = useState<CloudUsageBucketType>(readBucketTypeSetting);
@@ -48,13 +23,7 @@ export function TransfersListPage() {
 
   const handleBucketTypeChange = (value: CloudUsageBucketType) => {
     setBucketType(value);
-    if (
-      typeof window !== 'undefined' &&
-      window.localStorage &&
-      typeof window.localStorage.setItem === 'function'
-    ) {
-      window.localStorage.setItem(BUCKET_TYPE_SETTING_KEY, value);
-    }
+    writeBucketTypeSetting(value);
   };
 
   if (isLoading) {

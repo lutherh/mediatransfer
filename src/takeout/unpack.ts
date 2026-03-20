@@ -3,13 +3,9 @@ import fs from 'node:fs/promises';
 import extractZip from 'extract-zip';
 import { extract as extractTar } from 'tar';
 import { partialFileHash } from './manifest.js';
+import { MEDIA_EXTENSIONS } from '../utils/media-extensions.js';
 
 const ARCHIVE_EXTENSIONS = ['.zip', '.tar', '.tgz', '.tar.gz'] as const;
-const MEDIA_EXTENSIONS = new Set([
-  '.jpg', '.jpeg', '.png', '.gif', '.webp',
-  '.heic', '.heif', '.avif', '.dng', '.tif', '.tiff',
-  '.mp4', '.mov', '.avi', '.m4v', '.3gp', '.mkv', '.webm',
-]);
 
 export type ArchiveExtractor = (archivePath: string, destinationDir: string) => Promise<void>;
 
@@ -454,13 +450,6 @@ export function detectArchiveParts(archivePaths: string[]): { partNumbers: numbe
     partNumbers: partNumbers.sort((a, b) => a - b),
     isMultiPart: partNumbers.length > 0,
   };
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 async function getTotalArchiveSize(archivePaths: string[]): Promise<number> {

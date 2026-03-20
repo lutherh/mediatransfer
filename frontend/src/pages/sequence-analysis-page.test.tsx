@@ -303,7 +303,7 @@ describe('SequenceAnalysisPage', () => {
       const square = screen.getByTitle(/^#1 — Completed/);
       expect(square).toBeInTheDocument();
       // Tooltip includes size and entry count
-      expect(square.getAttribute('title')).toContain('1.0 GB');
+      expect(square.getAttribute('title')).toContain('1.00 GB');
       expect(square.getAttribute('title')).toContain('500 entries');
     });
   });

@@ -3,12 +3,7 @@ import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { inferDateFromFilename, extractExifMetadata, extractVideoCreationDate } from '../utils/exif.js';
-
-const MEDIA_EXTENSIONS = new Set([
-  '.jpg', '.jpeg', '.png', '.gif', '.webp',
-  '.heic', '.heif', '.avif', '.dng', '.tif', '.tiff',
-  '.mp4', '.mov', '.avi', '.m4v', '.3gp', '.mkv', '.webm',
-]);
+import { MEDIA_EXTENSIONS } from '../utils/media-extensions.js';
 
 export type ManifestEntry = {
   sourcePath: string;
