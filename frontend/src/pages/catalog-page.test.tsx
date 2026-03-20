@@ -66,6 +66,36 @@ vi.mock('@/components/date-scroller', () => ({
   DateScroller: () => <div data-testid="date-scroller-mock" />,
 }));
 
+// Mock @tanstack/react-virtual to render all rows in jsdom (no real scroll measurement)
+vi.mock('@tanstack/react-virtual', () => ({
+  useWindowVirtualizer: ({ count, estimateSize }: { count: number; estimateSize: (i: number) => number }) => {
+    const items = Array.from({ length: count }, (_, i) => ({
+      index: i,
+      key: i,
+      start: Array.from({ length: i }, (__, j) => estimateSize(j)).reduce((a, b) => a + b, 0),
+      size: estimateSize(i),
+    }));
+    return {
+      getVirtualItems: () => items,
+      getTotalSize: () => items.reduce((sum, item) => sum + item.size, 0),
+      measureElement: () => {},
+      scrollToIndex: vi.fn(),
+      options: { scrollMargin: 0 },
+    };
+  },
+}));
+
+// jsdom does not implement ResizeObserver — provide a no-op stub
+Object.defineProperty(window, 'ResizeObserver', {
+  writable: true,
+  configurable: true,
+  value: vi.fn(() => ({
+    observe: vi.fn(),
+    unobserve: vi.fn(),
+    disconnect: vi.fn(),
+  })),
+});
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function renderCatalogPage() {
@@ -88,6 +118,8 @@ function renderCatalogPage() {
 describe('CatalogPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Reset localStorage so sort preference from one test doesn't bleed into the next
+    localStorage.clear();
   });
 
   it('renders the page heading and subtext', async () => {
