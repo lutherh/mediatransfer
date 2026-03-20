@@ -272,6 +272,10 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       clearTimeout(currentTimeout);
       currentTimeout = null;
     }
+    // Unref the underlying HTTP server so it doesn't keep the event loop alive
+    // after all tests complete. Safe in production too (close() is only called
+    // during shutdown, at which point we want the process to be able to exit).
+    app.server.unref();
     done();
   });
 

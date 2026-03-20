@@ -118,6 +118,8 @@ function renderCatalogPage() {
 describe('CatalogPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Reset localStorage so sort preference from one test doesn't bleed into the next
+    localStorage.clear();
   });
 
   it('renders the page heading and subtext', async () => {
