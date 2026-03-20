@@ -43,6 +43,7 @@
   "devDependencies": {
     "@types/node": "^25.3.0",
     "@vitest/coverage-v8": "^4.0.18",
+    "music-metadata": "^11.12.3",
     "prisma": "^6.19.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",

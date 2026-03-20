@@ -24,6 +24,10 @@ import {
   fetchCatalogExif,
   fetchCatalogItems,
   fetchCatalogStats,
+  fetchAlbums,
+  createAlbum,
+  updateAlbum,
+  type Album,
   type CatalogItem,
   type CatalogStats,
   type ExifData,
@@ -122,6 +126,155 @@ function StatsBar({ stats }: { stats: CatalogStats }) {
   );
 }
 
+// ── Add to Album modal ────────────────────────────────────────────────────
+
+/**
+ * Modal dialog that lets the user pick an existing album (or create a new one)
+ * to add the current selection to.
+ *
+ * @pattern Google Photos "Add to album" picker
+ */
+function AddToAlbumModal({
+  onClose,
+  onAdd,
+  apiToken,
+}: {
+  onClose: () => void;
+  onAdd: (albumId: string) => void;
+  apiToken: string | undefined;
+}) {
+  const queryClient = useQueryClient();
+  const [newAlbumMode, setNewAlbumMode] = useState(false);
+  const [newAlbumName, setNewAlbumName] = useState('');
+
+  const albumsQuery = useQuery({
+    queryKey: ['albums'],
+    queryFn: () => fetchAlbums(apiToken),
+    staleTime: 30_000,
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (name: string) => createAlbum(name, apiToken),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ['albums'] });
+      onAdd(result.id);
+    },
+  });
+
+  const albums = albumsQuery.data?.albums ?? [];
+
+  const handleCreateSubmit = useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault();
+      const trimmed = newAlbumName.trim();
+      if (trimmed) createMutation.mutate(trimmed);
+    },
+    [newAlbumName, createMutation],
+  );
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-full max-w-sm rounded-xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+          <h2 className="text-sm font-semibold text-slate-900">Add to Album</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full p-1 text-slate-400 hover:bg-slate-100"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4">
+              <path d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="max-h-64 overflow-y-auto p-2">
+          {albumsQuery.isLoading && (
+            <div className="space-y-1 p-2">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-10 animate-pulse rounded-lg bg-slate-100" />
+              ))}
+            </div>
+          )}
+
+          {albums.length === 0 && !albumsQuery.isLoading && !newAlbumMode && (
+            <p className="py-4 text-center text-sm text-slate-500">No albums yet</p>
+          )}
+
+          {albums.map((album: Album) => (
+            <button
+              key={album.id}
+              type="button"
+              onClick={() => onAdd(album.id)}
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-slate-50"
+            >
+              <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-400">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-5 w-5">
+                  <rect x="2" y="2" width="20" height="20" rx="3" />
+                  <path d="M2 14l5-5 4 4 3-3 8 8" />
+                </svg>
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-slate-900">{album.name}</p>
+                <p className="text-xs text-slate-500">{album.keys.length.toLocaleString()} photo{album.keys.length !== 1 ? 's' : ''}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <div className="border-t border-slate-200 p-3">
+          {newAlbumMode ? (
+            <form onSubmit={handleCreateSubmit} className="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="New album name"
+                autoFocus
+                value={newAlbumName}
+                onChange={(e) => setNewAlbumName(e.target.value)}
+                maxLength={200}
+                className="min-w-0 flex-1 rounded-md border border-slate-300 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <button
+                type="submit"
+                disabled={!newAlbumName.trim() || createMutation.isPending}
+                className="rounded-md bg-blue-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {createMutation.isPending ? '…' : 'Create'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setNewAlbumMode(false)}
+                className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setNewAlbumMode(true)}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="h-4 w-4">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              New album
+            </button>
+          )}
+          {createMutation.isError && (
+            <p className="mt-1.5 text-xs text-red-600">
+              {createMutation.error instanceof Error ? createMutation.error.message : 'Failed to create album'}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Selection toolbar ──────────────────────────────────────────────────────
 
 /**
@@ -140,6 +293,7 @@ function SelectionBar({
   confirmDelete,
   onConfirmDelete,
   onCancelConfirm,
+  onAddToAlbum,
 }: {
   count: number;
   totalItems: number;
@@ -150,6 +304,7 @@ function SelectionBar({
   confirmDelete: boolean;
   onConfirmDelete: () => void;
   onCancelConfirm: () => void;
+  onAddToAlbum: () => void;
 }) {
   return (
     <div className="sticky top-0 z-40 flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 shadow-sm">
@@ -201,16 +356,30 @@ function SelectionBar({
             </button>
           </>
         ) : (
-          <button
-            type="button"
-            onClick={onDelete}
-            className="flex items-center gap-1.5 rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3.5 w-3.5">
-              <path d="M3 6h18M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2" />
-            </svg>
-            Delete
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={onAddToAlbum}
+              className="flex items-center gap-1.5 rounded-md border border-blue-300 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3.5 w-3.5">
+                <rect x="2" y="2" width="20" height="20" rx="3" />
+                <path d="M2 14l5-5 4 4 3-3 8 8" />
+                <path d="M18 8v8M14 12h8" />
+              </svg>
+              Add to Album
+            </button>
+            <button
+              type="button"
+              onClick={onDelete}
+              className="flex items-center gap-1.5 rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3.5 w-3.5">
+                <path d="M3 6h18M19 6l-1 14H6L5 6M10 11v6M14 11v6M9 6V4h6v2" />
+              </svg>
+              Delete
+            </button>
+          </>
         )}
       </div>
     </div>
@@ -1076,6 +1245,7 @@ export function CatalogPage() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
+  const [showAlbumModal, setShowAlbumModal] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const sectionRefs = useRef<Map<string, HTMLElement>>(new Map());
 
@@ -1307,6 +1477,25 @@ export function CatalogPage() {
     },
   });
 
+  // ── Add to album mutation ──
+  // Map from encodedKey → raw S3 key for converting selection to album keys
+  const encodedToKey = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const item of allItems) m.set(item.encodedKey, item.key);
+    return m;
+  }, [allItems]);
+
+  const addToAlbumMutation = useMutation({
+    mutationFn: (albumId: string) => {
+      const rawKeys = [...selected].map((ek) => encodedToKey.get(ek) ?? ek);
+      return updateAlbum(albumId, { addKeys: rawKeys }, apiToken);
+    },
+    onSuccess: () => {
+      setShowAlbumModal(false);
+      void queryClient.invalidateQueries({ queryKey: ['albums'] });
+    },
+  });
+
   const handleClose = useCallback(() => setLightboxIndex(null), []);
   const handleNavigate = useCallback((i: number) => setLightboxIndex(i), []);
 
@@ -1359,12 +1548,20 @@ export function CatalogPage() {
           <h1 className="text-lg font-semibold sm:text-xl">Catalog</h1>
           <p className="text-xs text-slate-500">Your photos and videos, organized by date.</p>
         </div>
-        <Link
-          to="/catalog/dedup"
-          className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-        >
-          🔍 Dedup
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/catalog/albums"
+            className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          >
+            📁 Albums
+          </Link>
+          <Link
+            to="/catalog/dedup"
+            className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          >
+            🔍 Dedup
+          </Link>
+        </div>
       </div>
 
       {/* ── Selection toolbar ───────────────────────────────────────── */}
@@ -1379,6 +1576,16 @@ export function CatalogPage() {
           confirmDelete={confirmDelete}
           onConfirmDelete={() => deleteMutation.mutate([...selected])}
           onCancelConfirm={() => setConfirmDelete(false)}
+          onAddToAlbum={() => setShowAlbumModal(true)}
+        />
+      )}
+
+      {/* ── Add to Album modal ───────────────────────────────────────── */}
+      {showAlbumModal && (
+        <AddToAlbumModal
+          apiToken={apiToken}
+          onClose={() => setShowAlbumModal(false)}
+          onAdd={(albumId) => addToAlbumMutation.mutate(albumId)}
         />
       )}
 
