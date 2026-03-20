@@ -86,14 +86,16 @@ vi.mock('@tanstack/react-virtual', () => ({
 }));
 
 // jsdom does not implement ResizeObserver — provide a no-op stub
+class MockResizeObserver {
+  observe(_target: Element) {}
+  unobserve(_target: Element) {}
+  disconnect() {}
+}
+
 Object.defineProperty(window, 'ResizeObserver', {
   writable: true,
   configurable: true,
-  value: vi.fn(() => ({
-    observe: vi.fn(),
-    unobserve: vi.fn(),
-    disconnect: vi.fn(),
-  })),
+  value: MockResizeObserver,
 });
 
 // ── Helpers ────────────────────────────────────────────────────────────────
