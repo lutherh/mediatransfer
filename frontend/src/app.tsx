@@ -10,6 +10,8 @@ import { OAuthCallbackPage } from '@/pages/oauth-callback-page';
 import { CostsPage } from '@/pages/costs-page';
 import { CatalogPage } from '@/pages/catalog-page';
 import { CatalogDedupPage } from '@/pages/catalog-dedup-page';
+import { CatalogAlbumsPage } from '@/pages/catalog-albums-page';
+import { CatalogAlbumDetailPage } from '@/pages/catalog-album-detail-page';
 import { UploadPage } from '@/pages/upload-page';
 import { SequenceAnalysisPage } from '@/pages/sequence-analysis-page';
 
@@ -29,6 +31,8 @@ export function App() {
             <Route element={<TransfersListPage />} path="transfers" />
             <Route element={<CatalogPage />} path="catalog" />
             <Route element={<CatalogDedupPage />} path="catalog/dedup" />
+            <Route element={<CatalogAlbumsPage />} path="catalog/albums" />
+            <Route element={<CatalogAlbumDetailPage />} path="catalog/albums/:albumId" />
             <Route element={<CostsPage />} path="costs" />
             <Route element={<SequenceAnalysisPage />} path="takeout/sequences" />
             <Route element={<NewTransferPage />} path="transfers/new" />

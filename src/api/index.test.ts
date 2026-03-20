@@ -802,7 +802,7 @@ describe('api server', () => {
     });
 
     expect(mediaRes.statusCode).toBe(200);
-    expect(services.catalog?.getObject).toHaveBeenCalledWith(longEncodedKey);
+    expect(services.catalog?.getObject).toHaveBeenCalledWith(longEncodedKey, undefined);
 
     await app.close();
   });
@@ -828,6 +828,37 @@ describe('api server', () => {
 
     await app.close();
   });
+
+  it('returns 206 partial content for Range requests on catalog media', async () => {
+    const services = createServices();
+    services.catalog!.getObject = vi.fn(async (_key: string, range?: string) => ({
+      stream: Readable.from([Buffer.from('partial')]),
+      contentType: 'video/mp4',
+      etag: '"mock-etag-video"',
+      lastModified: '2026-02-20T10:00:00.000Z',
+      contentLength: 7,
+      contentRange: range ? 'bytes 0-6/1000000' : undefined,
+    }));
+
+    const app = await createApiServer({ services });
+
+    const mediaRes = await app.inject({
+      method: 'GET',
+      url: '/catalog/media/MjAyNi8wMi8yMC92aWRlby5tcDQ',
+      headers: { range: 'bytes=0-6' },
+    });
+
+    expect(mediaRes.statusCode).toBe(206);
+    expect(mediaRes.headers['content-range']).toBe('bytes 0-6/1000000');
+    expect(mediaRes.headers['accept-ranges']).toBe('bytes');
+    expect(services.catalog?.getObject).toHaveBeenCalledWith(
+      'MjAyNi8wMi8yMC92aWRlby5tcDQ',
+      'bytes=0-6',
+    );
+
+    await app.close();
+  });
+
 
   it('rejects malformed encoded media key', async () => {
     const services = createServices();
