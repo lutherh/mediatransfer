@@ -104,6 +104,42 @@ type SidecarDate = {
 // Map: lowercase media filename → array of possible dates
 const sidecarDates = new Map<string, SidecarDate[]>();
 
+// ── Logging ─────────────────────────────────────────────────────
+
+type LogRecord = {
+  s3_old_path: string;
+  s3_new_path: string;
+  captured_date: string;
+  source_archive: string;
+  sidecar_path: string;
+  status: 'moved' | 'failed' | 'skipped';
+};
+
+const logRecords: LogRecord[] = [];
+const archiveStats = new Map<string, { total: number; moved: number; failed: number }>();
+
+async function ensureRepairsDir(): Promise<void> {
+  const dir = path.join(process.cwd(), 'repairs');
+  await fsPromises.mkdir(dir, { recursive: true });
+}
+
+async function writeLogFile(): Promise<string> {
+  const timestamp = new Date().toISOString().slice(0, 10);
+  const logFile = path.join(process.cwd(), 'repairs', `tgz-sidecar-repairs-${timestamp}.log`);
+  
+  // Header + TSV records
+  const tsv = [
+    'S3_OLD_PATH\tS3_NEW_PATH\tCAPTURED_DATE\tSOURCE_ARCHIVE\tSIDECAR_PATH\tSTATUS',
+    ...logRecords.map(r =>
+      [r.s3_old_path, r.s3_new_path, r.captured_date, r.source_archive, r.sidecar_path, r.status]
+        .join('\t')
+    ),
+  ].join('\n');
+  
+  await fsPromises.writeFile(logFile, tsv, 'utf-8');
+  return logFile;
+}
+
 /**
  * Given a sidecar path like "photo.jpg.supplemental-metadata.json",
  * return the media filename it refers to ("photo.jpg").
@@ -338,6 +374,7 @@ type MoveOp = {
   newKey: string;
   correctDate: string;
   sidecarPath: string;
+  sourceArchive: string;
 };
 
 const moves: MoveOp[] = [];
@@ -401,6 +438,7 @@ for (const obj of objects) {
     newKey,
     correctDate: best.date.toISOString(),
     sidecarPath: best.sidecarPath,
+    sourceArchive: best.archiveFile,
   });
   matched++;
 }
@@ -423,6 +461,7 @@ for (const move of moves.slice(0, 20)) {
   console.log(`   ${move.oldKey}`);
   console.log(`     → ${move.newKey}  (${move.correctDate})`);
   console.log(`     sidecar: ${move.sidecarPath}`);
+  console.log(`     archive: ${move.sourceArchive}`);
 }
 
 if (!apply) {
@@ -446,6 +485,14 @@ async function executeMoveOp(move: MoveOp): Promise<void> {
     try {
       await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: sourceFullKey }));
     } catch {
+      logRecords.push({
+        s3_old_path: move.oldKey,
+        s3_new_path: move.newKey,
+        captured_date: move.correctDate,
+        source_archive: move.sourceArchive,
+        sidecar_path: move.sidecarPath,
+        status: 'skipped',
+      });
       moveCompleted++;
       return;
     }
@@ -473,9 +520,40 @@ async function executeMoveOp(move: MoveOp): Promise<void> {
       new DeleteObjectCommand({ Bucket: bucket, Key: sourceFullKey }),
     );
 
+    logRecords.push({
+      s3_old_path: move.oldKey,
+      s3_new_path: move.newKey,
+      captured_date: move.correctDate,
+      source_archive: move.sourceArchive,
+      sidecar_path: move.sidecarPath,
+      status: 'moved',
+    });
+
     moveCompleted++;
+    
+    // Track archive stats
+    const stats = archiveStats.get(move.sourceArchive) ?? { total: 0, moved: 0, failed: 0 };
+    stats.total++;
+    stats.moved++;
+    archiveStats.set(move.sourceArchive, stats);
   } catch (err) {
     moveErrors++;
+    
+    logRecords.push({
+      s3_old_path: move.oldKey,
+      s3_new_path: move.newKey,
+      captured_date: move.correctDate,
+      source_archive: move.sourceArchive,
+      sidecar_path: move.sidecarPath,
+      status: 'failed',
+    });
+    
+    // Track archive stats
+    const stats = archiveStats.get(move.sourceArchive) ?? { total: 0, moved: 0, failed: 0 };
+    stats.total++;
+    stats.failed++;
+    archiveStats.set(move.sourceArchive, stats);
+    
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`\n   ❌ ${move.oldKey} → ${move.newKey}: ${msg}`);
   }
@@ -497,6 +575,27 @@ console.log('\n');
 console.log('📊 Move results:');
 console.log(`   Moved:  ${moveCompleted}`);
 console.log(`   Failed: ${moveErrors}`);
+
+// Write log file
+await ensureRepairsDir();
+const logFile = await writeLogFile();
+console.log(`\n📝 Detailed log: ${logFile}`);
+
+// Show summary by archive
+if (archiveStats.size > 0) {
+  console.log('\n📦 Repairs by archive:');
+  const sortedArchives = Array.from(archiveStats.entries())
+    .sort((a, b) => b[1].moved - a[1].moved);
+  
+  for (const [archive, stats] of sortedArchives.slice(0, 20)) {
+    const percentage = stats.total > 0 ? ((stats.moved / stats.total) * 100).toFixed(0) : '0';
+    console.log(`   ${archive}: ${stats.moved}/${stats.total} (${percentage}%)`);
+  }
+  
+  if (sortedArchives.length > 20) {
+    console.log(`   ... and ${sortedArchives.length - 20} more archives`);
+  }
+}
 
 if (moveErrors > 0) {
   console.log('\n⚠️  Some moves failed. Re-run the script to retry.');
