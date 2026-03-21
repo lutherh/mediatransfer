@@ -586,19 +586,19 @@ function Lightbox({
         {/* Action buttons */}
         <div className="flex items-center gap-1 sm:gap-3">
           <button
-            className="flex h-10 w-10 items-center justify-center rounded-full text-lg text-white/80 hover:text-white active:bg-white/10"
+            className="flex h-11 w-11 items-center justify-center rounded-full text-lg text-white/80 hover:text-white active:bg-white/10"
             onClick={handleDownload}
             aria-label="Download"
             title="Download (D)"
           >⬇</button>
           <button
-            className={`flex h-10 w-10 items-center justify-center rounded-full text-lg hover:text-white active:bg-white/10 ${showInfo ? 'text-blue-400' : 'text-white/80'}`}
+            className={`flex h-11 w-11 items-center justify-center rounded-full text-lg hover:text-white active:bg-white/10 ${showInfo ? 'text-blue-400' : 'text-white/80'}`}
             onClick={() => setShowInfo((v) => !v)}
             aria-label="Toggle info"
             title="Info (I)"
           >ⓘ</button>
           <button
-            className="flex h-10 w-10 items-center justify-center rounded-full text-xl font-bold text-white/80 hover:text-white active:bg-white/10"
+            className="flex h-11 w-11 items-center justify-center rounded-full text-xl font-bold text-white/80 hover:text-white active:bg-white/10"
             onClick={onClose}
             aria-label="Close"
             title="Close (Esc)"
