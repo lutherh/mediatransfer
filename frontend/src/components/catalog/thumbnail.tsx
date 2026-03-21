@@ -3,6 +3,8 @@ import { catalogThumbnailUrl } from '@/lib/api';
 import { useThumbnailQueue, isThumbnailFailed, markThumbnailFailed } from '@/lib/thumbnail-queue';
 import type { CatalogItem } from '@/lib/api';
 
+const THUMBNAIL_UNSUPPORTED_EXTENSIONS = new Set(['heic', 'heif']);
+
 /**
  * Single grid cell representing one media item. Since the parent virtualizer
  * guarantees this cell is near the viewport when mounted, thumbnails load
@@ -36,12 +38,21 @@ export function Thumbnail({
 }) {
   const [loaded, setLoaded] = useState(false);
   const isVideo = item.mediaType === 'video';
+  const filename = item.key.split('/').pop() ?? item.key;
+  const lastDot = filename.lastIndexOf('.');
+  const extension =
+    lastDot > 0 && lastDot < filename.length - 1
+      ? filename.slice(lastDot + 1).toLowerCase()
+      : '';
+  const shouldSkipThumbnail = isVideo || THUMBNAIL_UNSUPPORTED_EXTENSIONS.has(extension);
 
   // The virtualizer ensures this cell is visible — load immediately.
-  const wantUrl = catalogThumbnailUrl(item.encodedKey, 'small', apiToken);
-  const alreadyFailed = isThumbnailFailed(wantUrl);
-  const [thumbFailed, setThumbFailed] = useState(alreadyFailed);
-  const { src: thumbSrc, markComplete } = useThumbnailQueue(alreadyFailed ? null : wantUrl);
+  // Skip known unsupported formats up front to avoid noisy 415 thumbnail requests.
+  const wantUrl = shouldSkipThumbnail ? null : catalogThumbnailUrl(item.encodedKey, 'small', apiToken);
+  const alreadyFailed = wantUrl ? isThumbnailFailed(wantUrl) : false;
+  const skipThumbnail = !wantUrl || alreadyFailed;
+  const [thumbFailed, setThumbFailed] = useState(skipThumbnail);
+  const { src: thumbSrc, markComplete } = useThumbnailQueue(skipThumbnail ? null : wantUrl);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
     if (e.shiftKey) {
@@ -90,7 +101,14 @@ export function Thumbnail({
             loaded ? 'opacity-100' : 'opacity-0'
           } ${!selectionMode ? 'group-hover:scale-105' : ''} ${selected ? 'brightness-75' : ''}`}
           onLoad={() => { markComplete(); setLoaded(true); }}
-          onError={() => { markComplete(); markThumbnailFailed(wantUrl); setThumbFailed(true); setLoaded(true); }}
+          onError={() => {
+            markComplete();
+            if (wantUrl) {
+              markThumbnailFailed(wantUrl);
+            }
+            setThumbFailed(true);
+            setLoaded(true);
+          }}
           draggable={false}
         />
       )}
