@@ -271,10 +271,9 @@ async function ensureDependencies() {
     await runCommand(npmCmd, ['ci'], rootDir);
   }
 
-  if (!existsSync(path.join(frontendDir, 'node_modules'))) {
-    console.log('Installing frontend dependencies...');
-    await runCommand(npmCmd, ['ci'], frontendDir);
-  }
+  // Always run npm install for frontend to catch any missing packages
+  console.log('Installing frontend dependencies...');
+  await runCommand(npmCmd, ['install'], frontendDir);
 }
 
 async function runSetup() {
