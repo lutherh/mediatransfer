@@ -18,6 +18,7 @@ export type VirtualRow =
       type: 'section-header';
       date: string;          // "2025-06-16"
       items: CatalogItem[];  // all items in this section (for select-all checkbox)
+      isFirst: boolean;      // true for the very first section-header in the list
     }
   | {
       type: 'items-row';
@@ -55,6 +56,7 @@ export function buildRowModel(
   const rows: VirtualRow[] = [];
   let globalIndex = 0;
   let prevMonthKey: string | null = null;
+  let isFirstSection = true;
 
   for (const [date, items] of sections) {
     const curMonthKey = date.slice(0, 7); // "2025-06"
@@ -73,7 +75,8 @@ export function buildRowModel(
       prevMonthKey = curMonthKey;
     }
 
-    rows.push({ type: 'section-header', date, items });
+    rows.push({ type: 'section-header', date, items, isFirst: isFirstSection });
+    isFirstSection = false;
 
     for (let i = 0; i < items.length; i += cols) {
       rows.push({

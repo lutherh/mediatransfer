@@ -16,7 +16,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   catalogMediaUrl,
   catalogThumbnailUrl,
@@ -934,11 +934,13 @@ export function CatalogPage() {
       fetchCatalogItems({ token: pageParam as string | undefined, prefix: prefix || undefined, max: 100, sort: sortDirection, apiToken }),
     getNextPageParam: (lastPage) => lastPage.nextToken,
     initialPageParam: undefined as string | undefined,
-    staleTime: 60_000,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
     retry: 3,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10_000),
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+    placeholderData: keepPreviousData,
   });
 
   /** All loaded items across every fetched page (unsorted). */
@@ -1300,7 +1302,6 @@ export function CatalogPage() {
          */
         <VirtualizedGrid
           sections={sections}
-          sortedItems={sortedItems}
           selected={selected}
           selectionMode={selectionMode}
           apiToken={apiToken}

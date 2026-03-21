@@ -27,7 +27,10 @@ const pending: PendingRequest[] = [];
 
 function drainQueue(): void {
   while (active < MAX_CONCURRENT && pending.length > 0) {
-    const request = pending.shift();
+    // LIFO: most recently requested thumbnails (closest to viewport) load first.
+    // When scrolling back and forth, this prioritizes visible cells over
+    // stale requests from rows the user has already scrolled past.
+    const request = pending.pop();
     if (!request) return;
     active++;
     request.resolve(createLease());
