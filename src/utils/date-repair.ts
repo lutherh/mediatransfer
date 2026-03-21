@@ -17,7 +17,10 @@ import type { SidecarMetadata } from '../takeout/archive-metadata.js';
  *  - Informal date strings like `"19 Jul 2025, 14:27:41 UTC"`
  */
 export function parseSidecarDate(sidecar: SidecarMetadata): Date | undefined {
-  return parseDateField(sidecar.photoTakenTime) ?? parseDateField(sidecar.creationTime);
+  // Only use photoTakenTime for cross-file date resolution.
+  // creationTime is when the photo was added to Google Photos, not when it
+  // was captured — using it would assign upload dates to unrelated files.
+  return parseDateField(sidecar.photoTakenTime);
 }
 
 function parseDateField(value: string | undefined): Date | undefined {
@@ -36,11 +39,14 @@ function parseDateField(value: string | undefined): Date | undefined {
 // ── Date validation ─────────────────────────────────────────────
 
 /**
- * Returns true if the date is in 2026 or later — indicating it's
- * likely the upload/extraction timestamp rather than a real capture date.
+ * Returns true if the date is clearly not a real capture date:
+ * - Before 1990 (pre-consumer digital cameras)
+ * - More than 1 day in the future (likely a clock error or bogus metadata)
  */
 export function isWrongDate(date: Date): boolean {
-  return date.getUTCFullYear() >= 2026;
+  if (date.getUTCFullYear() < 1990) return true;
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  return date > tomorrow;
 }
 
 // ── Path helpers ────────────────────────────────────────────────
