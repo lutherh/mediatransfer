@@ -20,12 +20,6 @@
 import * as dotenv from 'dotenv';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import {
-  S3Client,
-  CopyObjectCommand,
-  DeleteObjectCommand,
-  HeadObjectCommand,
-} from '@aws-sdk/client-s3';
 import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
 import {
   buildManifest,
@@ -35,10 +29,10 @@ import {
 } from '../src/takeout/manifest.js';
 import type { UploadState } from '../src/takeout/uploader.js';
 import {
-  resolveScalewayEndpoint,
-  resolveScalewaySigningRegion,
-  validateScalewayConfig,
-} from '../src/providers/scaleway.js';
+  readNumberArg,
+  createS3Helpers,
+  s3Move,
+} from './lib/repair-helpers.js';
 
 dotenv.config();
 
@@ -48,48 +42,11 @@ const args = process.argv.slice(2);
 const apply = args.includes('--apply');
 const concurrency = readNumberArg(args, '--concurrency') ?? 4;
 
-function readNumberArg(argv: string[], flag: string): number | undefined {
-  const idx = argv.indexOf(flag);
-  if (idx < 0 || idx + 1 >= argv.length) return undefined;
-  const val = Number(argv[idx + 1]);
-  return Number.isFinite(val) ? val : undefined;
-}
-
-function readStringArg(argv: string[], flag: string): string | undefined {
-  const idx = argv.indexOf(flag);
-  if (idx < 0 || idx + 1 >= argv.length) return undefined;
-  return argv[idx + 1];
-}
-
 // ── Load config ─────────────────────────────────────────────────
 
 const pathOverrides = parseTakeoutPathArgs(args);
 const config = loadTakeoutConfig(undefined, pathOverrides);
-const scwConfig = validateScalewayConfig({
-  provider: 'scaleway',
-  region: process.env.SCW_REGION,
-  bucket: process.env.SCW_BUCKET,
-  accessKey: process.env.SCW_ACCESS_KEY,
-  secretKey: process.env.SCW_SECRET_KEY,
-  prefix: process.env.SCW_PREFIX,
-});
-
-const s3 = new S3Client({
-  region: resolveScalewaySigningRegion(scwConfig.region),
-  endpoint: resolveScalewayEndpoint(scwConfig.region),
-  credentials: {
-    accessKeyId: scwConfig.accessKey,
-    secretAccessKey: scwConfig.secretKey,
-  },
-  forcePathStyle: true,
-});
-
-const bucket = scwConfig.bucket;
-const prefix = scwConfig.prefix ?? '';
-
-function fullKey(key: string): string {
-  return prefix ? `${prefix}/${key}` : key;
-}
+const { s3, bucket, fullKey } = createS3Helpers();
 
 // ── Step 1: Load old manifest, rebuild with fixed logic ──────────
 
@@ -200,36 +157,9 @@ let errors = 0;
 const failedMoves: MoveOp[] = [];
 
 async function executeMoveOp(move: MoveOp): Promise<void> {
-  const sourceFullKey = fullKey(move.oldKey);
-  const destFullKey = fullKey(move.newKey);
+  const result = await s3Move(s3, bucket, fullKey(move.oldKey), fullKey(move.newKey));
 
-  try {
-    // Check source exists first
-    try {
-      await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: sourceFullKey }));
-    } catch {
-      // Source doesn't exist — maybe already moved or deleted. Update state anyway.
-      completed++;
-      return;
-    }
-
-    // Copy to new location
-    await s3.send(
-      new CopyObjectCommand({
-        Bucket: bucket,
-        CopySource: `${bucket}/${sourceFullKey}`,
-        Key: destFullKey,
-      }),
-    );
-
-    // Delete old location
-    await s3.send(
-      new DeleteObjectCommand({
-        Bucket: bucket,
-        Key: sourceFullKey,
-      }),
-    );
-
+  if (result.ok) {
     // Update upload state: remove old key, add new key
     const oldState = uploadState.items[move.oldKey];
     if (oldState) {
@@ -239,13 +169,11 @@ async function executeMoveOp(move: MoveOp): Promise<void> {
         updatedAt: new Date().toISOString(),
       };
     }
-
     completed++;
-  } catch (err) {
+  } else {
     errors++;
     failedMoves.push(move);
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`   ❌ Failed: ${move.oldKey} → ${move.newKey}: ${msg}`);
+    console.error(`   ❌ Failed: ${move.oldKey} → ${move.newKey}: ${result.error}`);
   }
 
   if ((completed + errors) % 50 === 0 || completed + errors === moves.length) {

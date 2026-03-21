@@ -24,19 +24,21 @@ import * as dotenv from 'dotenv';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  S3Client,
   ListObjectsV2Command,
   GetObjectCommand,
-  CopyObjectCommand,
-  DeleteObjectCommand,
-  HeadObjectCommand,
 } from '@aws-sdk/client-s3';
-import {
-  resolveScalewayEndpoint,
-  resolveScalewaySigningRegion,
-  validateScalewayConfig,
-} from '../src/providers/scaleway.js';
 import { extractExifMetadata, inferDateFromFilename } from '../src/utils/exif.js';
+import {
+  readNumberArg,
+  readStringArg,
+  createS3Helpers,
+  toDatePath,
+  computeNewKey,
+  isSuspiciousDate,
+  isMediaFile,
+  isVideoFile,
+  s3Move,
+} from './lib/repair-helpers.js';
 
 dotenv.config();
 
@@ -50,52 +52,9 @@ const concurrency = readNumberArg(args, '--concurrency') ?? 8;
 const scanPrefix = readStringArg(args, '--prefix') ?? String(new Date().getFullYear());
 const metadataDir = readStringArg(args, '--metadata-dir');
 
-function readNumberArg(argv: string[], flag: string): number | undefined {
-  const idx = argv.indexOf(flag);
-  if (idx < 0 || idx + 1 >= argv.length) return undefined;
-  const val = Number(argv[idx + 1]);
-  return Number.isFinite(val) ? val : undefined;
-}
-
-function readStringArg(argv: string[], flag: string): string | undefined {
-  const idx = argv.indexOf(flag);
-  if (idx < 0 || idx + 1 >= argv.length) return undefined;
-  return argv[idx + 1];
-}
-
 // ── Load config ─────────────────────────────────────────────────
 
-const scwConfig = validateScalewayConfig({
-  provider: 'scaleway',
-  region: process.env.SCW_REGION,
-  bucket: process.env.SCW_BUCKET,
-  accessKey: process.env.SCW_ACCESS_KEY,
-  secretKey: process.env.SCW_SECRET_KEY,
-  prefix: process.env.SCW_PREFIX,
-});
-
-const s3 = new S3Client({
-  region: resolveScalewaySigningRegion(scwConfig.region),
-  endpoint: resolveScalewayEndpoint(scwConfig.region),
-  credentials: {
-    accessKeyId: scwConfig.accessKey,
-    secretAccessKey: scwConfig.secretKey,
-  },
-  forcePathStyle: true,
-});
-
-const bucket = scwConfig.bucket;
-const s3Prefix = scwConfig.prefix ?? '';
-
-function fullKey(key: string): string {
-  return s3Prefix ? `${s3Prefix}/${key}` : key;
-}
-
-function stripPrefix(key: string): string {
-  if (!s3Prefix) return key;
-  const prefixed = `${s3Prefix}/`;
-  return key.startsWith(prefixed) ? key.slice(prefixed.length) : key;
-}
+const { s3, bucket, fullKey, stripPrefix } = createS3Helpers();
 
 // ── Load sidecar metadata (optional) ────────────────────────────
 
@@ -162,13 +121,7 @@ if (metadataDir) {
 
 // ── Video metadata helper ───────────────────────────────────────
 
-const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'm4v', '3gp']);
 const enableVideo = args.includes('--video');
-
-function isVideoFile(key: string): boolean {
-  const ext = key.split('.').pop()?.toLowerCase() ?? '';
-  return VIDEO_EXTENSIONS.has(ext);
-}
 
 function mimeForExt(ext: string): string {
   const map: Record<string, string> = {
@@ -390,44 +343,6 @@ let exifErrors = 0;
 let alreadyCorrect = 0;
 let processed = 0;
 
-const MEDIA_EXTENSIONS = new Set([
-  'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'dng', 'tif', 'tiff',
-  'mp4', 'mov', 'avi', 'm4v', '3gp', 'mkv', 'webm',
-]);
-
-function toDatePath(date: Date): string {
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(date.getUTCDate()).padStart(2, '0');
-  return `${year}/${month}/${day}`;
-}
-
-function computeNewKey(oldKey: string, newDatePath: string): string {
-  // oldKey: transfers/2026/03/15/AlbumName/IMG_1234.JPG
-  //      or transfers/unknown-date/AlbumName/IMG_1234.JPG
-  // We want: transfers/{newDatePath}/rest...
-
-  if (oldKey.includes('unknown-date/')) {
-    const rest = oldKey.split('unknown-date/')[1];
-    return `transfers/${newDatePath}/${rest}`;
-  }
-
-  // Standard date path: transfers/YYYY/MM/DD/...
-  const parts = oldKey.split('/');
-  // parts[0] = 'transfers', [1] = year, [2] = month, [3] = day, [4+] = rest
-  const rest = parts.slice(4).join('/');
-  return `transfers/${newDatePath}/${rest}`;
-}
-
-function isSuspiciousDate(date: Date): boolean {
-  return date.getUTCFullYear() >= new Date().getFullYear();
-}
-
-function isMediaFile(key: string): boolean {
-  const ext = key.split('.').pop()?.toLowerCase() ?? '';
-  return MEDIA_EXTENSIONS.has(ext);
-}
-
 async function resolveDate(obj: S3Object): Promise<MoveOp | null> {
   const { key: oldKey, size: fileSize } = obj;
   const filename = oldKey.split('/').pop() ?? '';
@@ -603,46 +518,14 @@ let moveCompleted = 0;
 let moveErrors = 0;
 
 async function executeMoveOp(move: MoveOp): Promise<void> {
-  const sourceFullKey = fullKey(move.oldKey);
-  const destFullKey = fullKey(move.newKey);
-
-  try {
-    // Check source still exists
-    try {
-      await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: sourceFullKey }));
-    } catch {
-      moveCompleted++;
-      return; // Already moved or deleted
-    }
-
-    // Copy to new location, preserving metadata + adding captured-at
-    await s3.send(
-      new CopyObjectCommand({
-        Bucket: bucket,
-        CopySource: `${bucket}/${sourceFullKey}`,
-        Key: destFullKey,
-        MetadataDirective: 'REPLACE',
-        Metadata: { 'captured-at': move.correctDate },
-      }),
-    );
-
-    // Verify the copy arrived
-    try {
-      await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: destFullKey }));
-    } catch {
-      throw new Error(`Copy verification failed for ${move.newKey}`);
-    }
-
-    // Delete old location
-    await s3.send(
-      new DeleteObjectCommand({ Bucket: bucket, Key: sourceFullKey }),
-    );
-
+  const result = await s3Move(s3, bucket, fullKey(move.oldKey), fullKey(move.newKey), {
+    'captured-at': move.correctDate,
+  });
+  if (result.ok) {
     moveCompleted++;
-  } catch (err) {
+  } else {
     moveErrors++;
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`\n   ❌ ${move.oldKey} → ${move.newKey}: ${msg}`);
+    console.error(`\n   ❌ ${move.oldKey} → ${move.newKey}: ${result.error}`);
   }
 }
 
