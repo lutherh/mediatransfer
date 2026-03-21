@@ -38,17 +38,21 @@ export function Thumbnail({
 }) {
   const [loaded, setLoaded] = useState(false);
   const isVideo = item.mediaType === 'video';
-  const extension = item.key.split('.').pop()?.toLowerCase();
-  const shouldRequestThumbnail = !isVideo && !THUMBNAIL_UNSUPPORTED_EXTENSIONS.has(extension ?? '');
+  const filename = item.key.split('/').pop() ?? item.key;
+  const lastDot = filename.lastIndexOf('.');
+  const extension =
+    lastDot > 0 && lastDot < filename.length - 1
+      ? filename.slice(lastDot + 1).toLowerCase()
+      : '';
+  const shouldSkipThumbnail = isVideo || THUMBNAIL_UNSUPPORTED_EXTENSIONS.has(extension);
 
   // The virtualizer ensures this cell is visible — load immediately.
   // Skip known unsupported formats up front to avoid noisy 415 thumbnail requests.
-  const wantUrl = shouldRequestThumbnail
-    ? catalogThumbnailUrl(item.encodedKey, 'small', apiToken)
-    : null;
-  const alreadyFailed = wantUrl ? isThumbnailFailed(wantUrl) : true;
-  const [thumbFailed, setThumbFailed] = useState(alreadyFailed);
-  const { src: thumbSrc, markComplete } = useThumbnailQueue(alreadyFailed || !wantUrl ? null : wantUrl);
+  const wantUrl = shouldSkipThumbnail ? null : catalogThumbnailUrl(item.encodedKey, 'small', apiToken);
+  const alreadyFailed = wantUrl ? isThumbnailFailed(wantUrl) : false;
+  const skipThumbnail = !wantUrl || alreadyFailed;
+  const [thumbFailed, setThumbFailed] = useState(skipThumbnail);
+  const { src: thumbSrc, markComplete } = useThumbnailQueue(skipThumbnail ? null : wantUrl);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
     if (e.shiftKey) {
