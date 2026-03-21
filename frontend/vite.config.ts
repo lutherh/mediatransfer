@@ -10,6 +10,7 @@ export default defineConfig({
     },
   },
   server: {
+    host: true,
     hmr: {
       // Use a dedicated path for HMR WebSocket so query params (e.g. ?token=)
       // don't interfere with the WebSocket handshake
