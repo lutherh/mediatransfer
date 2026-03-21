@@ -25,8 +25,15 @@ import {
   HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
-import { loadAllArchiveMetadata, type SidecarMetadata } from '../src/takeout/archive-metadata.js';
+import { loadAllArchiveMetadata } from '../src/takeout/archive-metadata.js';
 import { extractExifMetadata, inferDateFromFilename, extractVideoCreationDateFromBuffer, extractVideoCreationDateFromMoov } from '../src/utils/exif.js';
+import {
+  parseSidecarDate,
+  isWrongDate,
+  isVideoKey,
+  buildSidecarLookup,
+  resolveSidecar,
+} from '../src/utils/date-repair.js';
 import type { UploadState } from '../src/takeout/uploader.js';
 import {
   readNumberArg,
@@ -58,16 +65,12 @@ console.log('📂 Loading archive metadata...');
 const allMetadata = await loadAllArchiveMetadata(metadataDir);
 console.log(`   ${allMetadata.length} archive metadata files loaded`);
 
-// Build lookup: destinationKey → sidecar metadata
-const sidecarByKey = new Map<string, SidecarMetadata>();
-for (const meta of allMetadata) {
-  for (const item of meta.items) {
-    if (item.sidecar) {
-      sidecarByKey.set(item.destinationKey, item.sidecar);
-    }
-  }
-}
-console.log(`   ${sidecarByKey.size} items with sidecar metadata`);
+// Build three-level sidecar lookup from all archive metadata
+const allItems = allMetadata.flatMap(m => m.items);
+const sidecarLookup = buildSidecarLookup(allItems);
+console.log(`   ${sidecarLookup.byKey.size} items with sidecar metadata`);
+console.log(`   ${sidecarLookup.byAlbumFile.size} unique album+filename sidecar entries`);
+console.log(`   ${sidecarLookup.byBasename.size} unique basename sidecar entries`);
 
 // ── Step 2: Load upload state, find items to fix ─────────────────
 
@@ -105,12 +108,6 @@ console.log(`   (Will download EXIF/video headers from S3 for files without side
 
 const EXIF_READ_BYTES = 256 * 1024;
 const MAX_MOOV_READ = 2 * 1024 * 1024; // 2 MB max moov atom read
-const VIDEO_EXT = new Set(['mp4', 'mov', 'm4v', '3gp', '3g2', 'avi', 'mkv', 'webm']);
-
-function isVideoKey(key: string): boolean {
-  const ext = key.split('.').pop()?.toLowerCase() ?? '';
-  return VIDEO_EXT.has(ext);
-}
 
 const moves: MoveOp[] = [];
 let fromSidecar = 0;
@@ -119,43 +116,15 @@ let fromFilename = 0;
 let fromVideo = 0;
 let noDateFound = 0;
 let exifErrors = 0;
+let s3Missing = 0;
 let processed = 0;
-
-function parseSidecarDate(sidecar: SidecarMetadata): Date | undefined {
-  // photoTakenTime as unix timestamp string
-  if (sidecar.photoTakenTime) {
-    const ts = Number(sidecar.photoTakenTime);
-    if (Number.isFinite(ts) && ts > 0) {
-      return new Date(ts * 1000);
-    }
-    // Try as ISO string
-    const d = new Date(sidecar.photoTakenTime);
-    if (!Number.isNaN(d.getTime())) return d;
-  }
-  if (sidecar.creationTime) {
-    const ts = Number(sidecar.creationTime);
-    if (Number.isFinite(ts) && ts > 0) {
-      return new Date(ts * 1000);
-    }
-    const d = new Date(sidecar.creationTime);
-    if (!Number.isNaN(d.getTime())) return d;
-  }
-  return undefined;
-}
-
-function isWrongDate(date: Date): boolean {
-  const year = date.getUTCFullYear();
-  // If the date is 2026 it's probably extraction time, not capture time
-  // But some photos legitimately from 2026 Jan/Feb/Mar could be valid
-  // We only fix dates that point to the future or match the extraction window
-  return year >= 2026;
-}
 
 async function resolveDate(oldKey: string): Promise<MoveOp | null> {
   const filename = oldKey.split('/').pop() ?? '';
 
-  // 1. Try sidecar metadata
-  const sidecar = sidecarByKey.get(oldKey);
+  // 1. Try sidecar metadata — three-level lookup:
+  //    a) exact destinationKey, b) album+filename, c) unique basename
+  const sidecar = resolveSidecar(sidecarLookup, oldKey);
   if (sidecar) {
     const date = parseSidecarDate(sidecar);
     if (date && !isWrongDate(date)) {
@@ -261,8 +230,15 @@ async function resolveDate(oldKey: string): Promise<MoveOp | null> {
         }
       }
     }
-  } catch {
-    exifErrors++;
+  } catch (err: any) {
+    if (err.Code === 'NoSuchKey' || err.name === 'NoSuchKey') {
+      s3Missing++;
+    } else {
+      exifErrors++;
+      if (exifErrors <= 5) {
+        console.error(`\n   ⚠ S3 error for ${oldKey}: ${err.Code ?? err.name ?? 'unknown'} — ${String(err.message).slice(0, 120)}`);
+      }
+    }
   }
 
   noDateFound++;
@@ -282,7 +258,7 @@ for (let i = 0; i < wrongDateKeys.length; i += concurrency) {
     process.stdout.write(
       `\r   ${processed}/${wrongDateKeys.length} checked — ` +
         `${moves.length} to move (sidecar: ${fromSidecar}, exif: ${fromExif}, video: ${fromVideo}, filename: ${fromFilename}) ` +
-        `| ${noDateFound} undetermined | ${exifErrors} errors`,
+        `| ${noDateFound} undetermined | ${s3Missing} missing | ${exifErrors} errors`,
     );
   }
 }
@@ -294,7 +270,8 @@ console.log(`   From EXIF:     ${fromExif}`);
 console.log(`   From video:    ${fromVideo}`);
 console.log(`   From filename: ${fromFilename}`);
 console.log(`   No date found: ${noDateFound} (will stay in transfers/2026/)`);
-console.log(`   EXIF errors:   ${exifErrors}`);
+console.log(`   S3 missing:    ${s3Missing} (objects deleted/moved previously)`);
+console.log(`   Other errors:  ${exifErrors}`);
 console.log(`   Total to move: ${moves.length}`);
 
 if (moves.length === 0) {
