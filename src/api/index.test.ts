@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Readable } from 'node:stream';
-import { TransferStatus } from '../generated/prisma/client.js';
+import { TransferStatus } from '../generated/prisma/index.js';
 import { createApiServer } from './index.js';
 import type { ApiServices } from './types.js';
 import { clearEnvCache } from '../config/env.js';

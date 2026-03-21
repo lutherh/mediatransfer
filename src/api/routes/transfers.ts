@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { TransferStatus } from '../../generated/prisma/client.js';
+import { TransferStatus } from '../../generated/prisma/index.js';
 import type { JobsService, QueueService } from '../types.js';
 import { apiError } from '../errors.js';
 

@@ -1,7 +1,7 @@
 import { PassThrough, type Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { CloudProvider } from '../providers/types.js';
-import type { LogLevel } from '../generated/prisma/client.js';
+import type { LogLevel } from '../generated/prisma/index.js';
 import { delay as defaultDelay } from '../utils/delay.js';
 
 export type TransferItemTask = {

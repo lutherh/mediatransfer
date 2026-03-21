@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createJob, getJobById, listJobs, updateJob, deleteJob } from './jobs.js';
 import type { CreateJobInput, UpdateJobInput } from './jobs.js';
-import { TransferStatus } from '../generated/prisma/client.js';
+import { TransferStatus } from '../generated/prisma/index.js';
 
 // ── Mock Prisma client ────────────────────────────────────────
 

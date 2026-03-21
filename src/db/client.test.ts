@@ -5,7 +5,7 @@ import {
   setPrismaClient,
   resetPrismaClient,
 } from './client.js';
-import type { PrismaClient } from '../generated/prisma/client.js';
+import type { PrismaClient } from '../generated/prisma/index.js';
 
 describe('db/client — singleton management', () => {
   beforeEach(() => {

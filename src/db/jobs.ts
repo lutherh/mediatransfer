@@ -1,5 +1,5 @@
-import type { PrismaClient } from '../generated/prisma/client.js';
-import type { TransferJob, TransferStatus } from '../generated/prisma/client.js';
+import type { PrismaClient } from '../generated/prisma/index.js';
+import type { TransferJob, TransferStatus } from '../generated/prisma/index.js';
 import type { InputJsonValue } from '@prisma/client/runtime/client';
 import { getPrismaClient } from './client.js';
 

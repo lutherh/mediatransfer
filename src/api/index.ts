@@ -39,7 +39,7 @@ import {
 	listProviderNames,
 	validateScalewayConfig,
 } from '../providers/index.js';
-import { TransferStatus } from '../generated/prisma/client.js';
+import { TransferStatus } from '../generated/prisma/index.js';
 import { ScalewayCatalogService } from '../catalog/scaleway-catalog.js';
 import { registerHealthRoutes } from './health.js';
 import { registerCredentialsRoutes } from './routes/credentials.js';
