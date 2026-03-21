@@ -1,5 +1,5 @@
-import type { PrismaClient } from '../generated/prisma/client.js';
-import type { CloudCredential } from '../generated/prisma/client.js';
+import type { PrismaClient } from '../generated/prisma/index.js';
+import type { CloudCredential } from '../generated/prisma/index.js';
 import { getPrismaClient } from './client.js';
 import { decryptStringAsync, encryptStringAsync } from '../utils/crypto.js';
 

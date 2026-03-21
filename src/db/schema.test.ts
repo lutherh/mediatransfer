@@ -3,12 +3,12 @@ import {
   PrismaClient,
   TransferStatus,
   LogLevel,
-} from '../generated/prisma/client.js';
+} from '../generated/prisma/index.js';
 import type {
   TransferJob,
   CloudCredential,
   TransferLog,
-} from '../generated/prisma/client.js';
+} from '../generated/prisma/index.js';
 
 describe('Prisma schema', () => {
   // ── Client instantiation ────────────────────────────────────

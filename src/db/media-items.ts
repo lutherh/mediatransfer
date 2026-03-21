@@ -1,4 +1,4 @@
-import type { PrismaClient, MediaItem } from '../generated/prisma/client.js';
+import type { PrismaClient, MediaItem } from '../generated/prisma/index.js';
 import { getPrismaClient } from './client.js';
 
 export type CreateMediaItemInput = {

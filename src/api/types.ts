@@ -1,5 +1,5 @@
 import type { BulkTransferResult } from '../jobs/bulk-transfer.js';
-import type { TransferJob, TransferStatus, CloudCredential, TransferLog, MediaItem } from '../generated/prisma/client.js';
+import type { TransferJob, TransferStatus, CloudCredential, TransferLog, MediaItem } from '../generated/prisma/index.js';
 import type { CatalogItem, CatalogObject, CatalogStats, DeleteResult, AlbumsManifest, DuplicateGroup, DeduplicateResult, ThumbnailSize, ThumbnailResult } from '../catalog/scaleway-catalog.js';
 import type { Readable } from 'node:stream';
 import type { CreateMediaItemInput, ListMediaItemsFilter } from '../db/media-items.js';
