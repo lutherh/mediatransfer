@@ -20,10 +20,9 @@ describe('parseSidecarDate', () => {
     expect(d.toISOString()).toBe('2023-11-14T22:13:20.000Z');
   });
 
-  it('parses a unix timestamp (seconds) from creationTime when photoTakenTime absent', () => {
+  it('returns undefined when only creationTime is present (not used for cross-file resolution)', () => {
     const sidecar: SidecarMetadata = { creationTime: '1700000000' };
-    const d = parseSidecarDate(sidecar)!;
-    expect(d.toISOString()).toBe('2023-11-14T22:13:20.000Z');
+    expect(parseSidecarDate(sidecar)).toBeUndefined();
   });
 
   it('prefers photoTakenTime over creationTime', () => {
@@ -59,13 +58,12 @@ describe('parseSidecarDate', () => {
     expect(d.getUTCDate()).toBe(3);
   });
 
-  it('falls back to creationTime when photoTakenTime is unparseable', () => {
+  it('returns undefined when photoTakenTime is unparseable (does not fall back to creationTime)', () => {
     const sidecar: SidecarMetadata = {
       photoTakenTime: 'not-a-date-at-all',
       creationTime: '1700000000',
     };
-    const d = parseSidecarDate(sidecar)!;
-    expect(d.toISOString()).toBe('2023-11-14T22:13:20.000Z');
+    expect(parseSidecarDate(sidecar)).toBeUndefined();
   });
 
   it('returns undefined when both fields are absent', () => {
@@ -94,20 +92,27 @@ describe('parseSidecarDate', () => {
     // Number("-100") = -100 which is not > 0, falls to new Date("-100") → year 100 BC-ish
     const d = parseSidecarDate(sidecar)!;
     expect(d).toBeInstanceOf(Date);
-    // These ancient dates will be caught by isWrongDate (false) and still produce
-    // a valid move — but this is fine because they won't match "2026+" check
+    // These ancient dates will be caught by isWrongDate (true for pre-1990)
   });
 });
 
 // ── isWrongDate ─────────────────────────────────────────────────
 
 describe('isWrongDate', () => {
-  it('returns true for year 2026', () => {
-    expect(isWrongDate(new Date('2026-03-15T00:00:00Z'))).toBe(true);
+  it('returns true for far-future date (2040)', () => {
+    expect(isWrongDate(new Date('2040-03-15T00:00:00Z'))).toBe(true);
   });
 
-  it('returns true for year 2027', () => {
-    expect(isWrongDate(new Date('2027-01-01T00:00:00Z'))).toBe(true);
+  it('returns true for pre-1990 date', () => {
+    expect(isWrongDate(new Date('1989-12-31T23:59:59Z'))).toBe(true);
+  });
+
+  it('returns true for year 1970 (unix epoch)', () => {
+    expect(isWrongDate(new Date('1970-01-01T00:00:00Z'))).toBe(true);
+  });
+
+  it('returns false for current year date (2026)', () => {
+    expect(isWrongDate(new Date('2026-03-15T00:00:00Z'))).toBe(false);
   });
 
   it('returns false for 2025', () => {
@@ -122,8 +127,8 @@ describe('isWrongDate', () => {
     expect(isWrongDate(new Date('2000-01-01T00:00:00Z'))).toBe(false);
   });
 
-  it('returns false for year 1970 (unix epoch)', () => {
-    expect(isWrongDate(new Date('1970-01-01T00:00:00Z'))).toBe(false);
+  it('returns false for 1990 (boundary)', () => {
+    expect(isWrongDate(new Date('1990-01-01T00:00:00Z'))).toBe(false);
   });
 });
 
@@ -361,8 +366,14 @@ describe('end-to-end key rewrite', () => {
     expect(newKey).toBe('transfers/2016/05/26/Familie_og_venner_1_/IMG_0643.MOV');
   });
 
-  it('rejects sidecar with 2026 date', () => {
+  it('accepts sidecar with current-year date (2026)', () => {
     const sidecar: SidecarMetadata = { photoTakenTime: '15 Mar 2026, 10:00:00 UTC' };
+    const date = parseSidecarDate(sidecar)!;
+    expect(isWrongDate(date)).toBe(false);
+  });
+
+  it('rejects sidecar with far-future date', () => {
+    const sidecar: SidecarMetadata = { photoTakenTime: '15 Mar 2040, 10:00:00 UTC' };
     const date = parseSidecarDate(sidecar)!;
     expect(isWrongDate(date)).toBe(true);
   });

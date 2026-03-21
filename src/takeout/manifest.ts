@@ -175,10 +175,15 @@ async function deriveCapturedDate(
   sourcePath: string,
   sidecarPath: string | undefined,
 ): Promise<Date | undefined> {
-  // 1. Prefer the Google Takeout sidecar JSON (photoTakenTime / creationTime)
+  // Read sidecar dates once — used at two priority levels below
+  let sidecarDates: SidecarDates | undefined;
   if (sidecarPath) {
-    const fromSidecar = await readSidecarDate(sidecarPath);
-    if (fromSidecar && !isWrongDate(fromSidecar)) return fromSidecar;
+    sidecarDates = await readSidecarDates(sidecarPath);
+  }
+
+  // 1. Prefer photoTakenTime from Google Takeout sidecar (actual capture timestamp)
+  if (sidecarDates?.photoTakenDate && !isWrongDate(sidecarDates.photoTakenDate)) {
+    return sidecarDates.photoTakenDate;
   }
 
   // 2. Try to infer capture date from the filename (e.g. 20201217_155747.mp4, IMG_20231215_143022.MOV)
@@ -205,44 +210,65 @@ async function deriveCapturedDate(
   const fromVideo = await extractVideoCreationDate(sourcePath);
   if (fromVideo && !isWrongDate(fromVideo)) return fromVideo;
 
-  // 5. No reliable date found — return undefined so the caller can use
+  // 5. Sidecar creationTime as last resort — only when photoTakenTime was absent.
+  //    creationTime is "when added to Google Photos", not capture date, so it's
+  //    less reliable but better than nothing when all other sources fail.
+  if (sidecarDates && !sidecarDates.hasPhotoTakenTime &&
+      sidecarDates.creationDate && !isWrongDate(sidecarDates.creationDate)) {
+    return sidecarDates.creationDate;
+  }
+
+  // 6. No reliable date found — return undefined so the caller can use
   //    an 'unknown-date' path rather than silently filing under today's date.
   return undefined;
 }
 
-async function readSidecarDate(sidecarPath: string): Promise<Date | undefined> {
+type SidecarDates = {
+  photoTakenDate?: Date;
+  creationDate?: Date;
+  /** Whether the photoTakenTime field existed in the sidecar JSON at all */
+  hasPhotoTakenTime: boolean;
+};
+
+async function readSidecarDates(sidecarPath: string): Promise<SidecarDates> {
   try {
     const raw = await fs.readFile(sidecarPath, 'utf8');
     const parsed = JSON.parse(raw) as Record<string, unknown>;
 
-    const timestampCandidates = [
-      getNestedString(parsed, ['photoTakenTime', 'timestamp']),
-      getNestedString(parsed, ['creationTime', 'timestamp']),
-      getNestedString(parsed, ['image', 'creationTime', 'timestamp']),
-    ];
+    const hasPhotoTakenTime = 'photoTakenTime' in parsed;
+    const photoTakenDate = parseSidecarField(parsed, ['photoTakenTime']);
+    const creationDate = parseSidecarField(parsed, ['creationTime'])
+      ?? parseSidecarField(parsed, ['image', 'creationTime']);
 
-    for (const candidate of timestampCandidates) {
-      if (!candidate) continue;
-      const asNumber = Number(candidate);
-      if (Number.isFinite(asNumber) && asNumber > 0) {
-        return new Date(asNumber * 1000);
-      }
-    }
-
-    const isoCandidates = [
-      getNestedString(parsed, ['photoTakenTime', 'formatted']),
-      getNestedString(parsed, ['creationTime', 'formatted']),
-      getNestedString(parsed, ['creationTime']),
-    ];
-
-    for (const candidate of isoCandidates) {
-      if (!candidate) continue;
-      const date = new Date(candidate);
-      if (!Number.isNaN(date.getTime())) return date;
-    }
+    return { photoTakenDate, creationDate, hasPhotoTakenTime };
   } catch (err) {
     console.debug('[manifest] Failed to parse sidecar metadata', err);
-    // ignore malformed sidecar and fall back to file metadata
+    return { hasPhotoTakenTime: false };
+  }
+}
+
+function parseSidecarField(obj: Record<string, unknown>, fieldPath: string[]): Date | undefined {
+  // Try numeric timestamp (seconds since epoch)
+  const timestamp = getNestedString(obj, [...fieldPath, 'timestamp']);
+  if (timestamp) {
+    const asNumber = Number(timestamp);
+    if (Number.isFinite(asNumber) && asNumber > 0) {
+      return new Date(asNumber * 1000);
+    }
+  }
+
+  // Try formatted date string
+  const formatted = getNestedString(obj, [...fieldPath, 'formatted']);
+  if (formatted) {
+    const d = new Date(formatted);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+
+  // Try direct string value (some sidecars store dates as plain strings)
+  const direct = getNestedString(obj, fieldPath);
+  if (direct) {
+    const d = new Date(direct);
+    if (!Number.isNaN(d.getTime())) return d;
   }
 
   return undefined;
