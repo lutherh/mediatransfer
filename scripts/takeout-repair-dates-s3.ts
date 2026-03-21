@@ -21,21 +21,18 @@ import * as dotenv from 'dotenv';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import {
-  S3Client,
   GetObjectCommand,
-  CopyObjectCommand,
-  DeleteObjectCommand,
-  HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
 import { loadAllArchiveMetadata, type SidecarMetadata } from '../src/takeout/archive-metadata.js';
 import { extractExifMetadata, inferDateFromFilename } from '../src/utils/exif.js';
 import type { UploadState } from '../src/takeout/uploader.js';
 import {
-  resolveScalewayEndpoint,
-  resolveScalewaySigningRegion,
-  validateScalewayConfig,
-} from '../src/providers/scaleway.js';
+  readNumberArg,
+  createS3Helpers,
+  toDatePath,
+  s3Move,
+} from './lib/repair-helpers.js';
 
 dotenv.config();
 
@@ -46,42 +43,11 @@ const apply = args.includes('--apply');
 const concurrency = readNumberArg(args, '--concurrency') ?? 8;
 const saveEvery = readNumberArg(args, '--save-every') ?? 500;
 
-function readNumberArg(argv: string[], flag: string): number | undefined {
-  const idx = argv.indexOf(flag);
-  if (idx < 0 || idx + 1 >= argv.length) return undefined;
-  const val = Number(argv[idx + 1]);
-  return Number.isFinite(val) ? val : undefined;
-}
-
 // ── Load config ─────────────────────────────────────────────────
 
 const pathOverrides = parseTakeoutPathArgs(args);
 const config = loadTakeoutConfig(undefined, pathOverrides);
-const scwConfig = validateScalewayConfig({
-  provider: 'scaleway',
-  region: process.env.SCW_REGION,
-  bucket: process.env.SCW_BUCKET,
-  accessKey: process.env.SCW_ACCESS_KEY,
-  secretKey: process.env.SCW_SECRET_KEY,
-  prefix: process.env.SCW_PREFIX,
-});
-
-const s3 = new S3Client({
-  region: resolveScalewaySigningRegion(scwConfig.region),
-  endpoint: resolveScalewayEndpoint(scwConfig.region),
-  credentials: {
-    accessKeyId: scwConfig.accessKey,
-    secretAccessKey: scwConfig.secretKey,
-  },
-  forcePathStyle: true,
-});
-
-const bucket = scwConfig.bucket;
-const s3Prefix = scwConfig.prefix ?? '';
-
-function fullKey(key: string): string {
-  return s3Prefix ? `${s3Prefix}/${key}` : key;
-}
+const { s3, bucket, fullKey } = createS3Helpers();
 
 // ── Step 1: Load archive metadata for sidecar dates ──────────────
 
@@ -144,13 +110,6 @@ let noDateFound = 0;
 let exifErrors = 0;
 let processed = 0;
 
-function toDatePath(date: Date): string {
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(date.getUTCDate()).padStart(2, '0');
-  return `${year}/${month}/${day}`;
-}
-
 function parseSidecarDate(sidecar: SidecarMetadata): Date | undefined {
   // photoTakenTime as unix timestamp string
   if (sidecar.photoTakenTime) {
@@ -171,16 +130,6 @@ function parseSidecarDate(sidecar: SidecarMetadata): Date | undefined {
     if (!Number.isNaN(d.getTime())) return d;
   }
   return undefined;
-}
-
-function computeNewKey(oldKey: string, newDatePath: string): string {
-  // oldKey: transfers/2026/03/15/AlbumName/IMG_1234.JPG
-  // We want:  transfers/{newDatePath}/AlbumName/IMG_1234.JPG
-  // The date portion is always transfers/YYYY/MM/DD/...
-  const parts = oldKey.split('/');
-  // parts[0] = 'transfers', [1] = year, [2] = month, [3] = day, [4+] = rest
-  const rest = parts.slice(4).join('/');
-  return `transfers/${newDatePath}/${rest}`;
 }
 
 function isWrongDate(date: Date): boolean {
@@ -327,36 +276,9 @@ let moveErrors = 0;
 const failedMoves: MoveOp[] = [];
 
 async function executeMoveOp(move: MoveOp): Promise<void> {
-  const sourceFullKey = fullKey(move.oldKey);
-  const destFullKey = fullKey(move.newKey);
+  const result = await s3Move(s3, bucket, fullKey(move.oldKey), fullKey(move.newKey));
 
-  try {
-    // Check source exists
-    try {
-      await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: sourceFullKey }));
-    } catch {
-      // Already moved or deleted — just update state
-      moveCompleted++;
-      return;
-    }
-
-    // Copy to new location
-    await s3.send(
-      new CopyObjectCommand({
-        Bucket: bucket,
-        CopySource: `${bucket}/${sourceFullKey}`,
-        Key: destFullKey,
-      }),
-    );
-
-    // Delete old location
-    await s3.send(
-      new DeleteObjectCommand({
-        Bucket: bucket,
-        Key: sourceFullKey,
-      }),
-    );
-
+  if (result.ok) {
     // Update state: remove old key, add new key
     const oldState = uploadState.items[move.oldKey];
     if (oldState) {
@@ -366,13 +288,11 @@ async function executeMoveOp(move: MoveOp): Promise<void> {
         updatedAt: new Date().toISOString(),
       };
     }
-
     moveCompleted++;
-  } catch (err) {
+  } else {
     moveErrors++;
     failedMoves.push(move);
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`\n   ❌ ${move.oldKey} → ${move.newKey}: ${msg}`);
+    console.error(`\n   ❌ ${move.oldKey} → ${move.newKey}: ${result.error}`);
   }
 }
 

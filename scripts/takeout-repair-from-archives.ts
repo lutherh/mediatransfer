@@ -21,22 +21,17 @@ import * as dotenv from 'dotenv';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import os from 'node:os';
-import {
-  S3Client,
-  CopyObjectCommand,
-  DeleteObjectCommand,
-  HeadObjectCommand,
-} from '@aws-sdk/client-s3';
 import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
 import { buildManifest, type ManifestEntry } from '../src/takeout/manifest.js';
 import { extractArchive } from '../src/takeout/unpack.js';
 import { normalizeTakeoutMediaRoot } from '../src/takeout/unpack.js';
 import type { UploadState } from '../src/takeout/uploader.js';
 import {
-  resolveScalewayEndpoint,
-  resolveScalewaySigningRegion,
-  validateScalewayConfig,
-} from '../src/providers/scaleway.js';
+  readNumberArg,
+  readStringArg,
+  createS3Helpers,
+  s3Move,
+} from './lib/repair-helpers.js';
 
 dotenv.config();
 
@@ -49,50 +44,13 @@ const saveEvery = readNumberArg(args, '--save-every') ?? 200;
 const startAt = readNumberArg(args, '--start-at') ?? 0;
 const archiveDirArg = readStringArg(args, '--archive-dir');
 
-function readNumberArg(argv: string[], flag: string): number | undefined {
-  const idx = argv.indexOf(flag);
-  if (idx < 0 || idx + 1 >= argv.length) return undefined;
-  const val = Number(argv[idx + 1]);
-  return Number.isFinite(val) ? val : undefined;
-}
-
-function readStringArg(argv: string[], flag: string): string | undefined {
-  const idx = argv.indexOf(flag);
-  if (idx < 0 || idx + 1 >= argv.length) return undefined;
-  return argv[idx + 1];
-}
-
 // ── Load config ─────────────────────────────────────────────────
 
 const pathOverrides = parseTakeoutPathArgs(args);
 const config = loadTakeoutConfig(undefined, pathOverrides);
 const archiveDir = archiveDirArg ?? 'D:\\archive-already-uploaded';
 
-const scwConfig = validateScalewayConfig({
-  provider: 'scaleway',
-  region: process.env.SCW_REGION,
-  bucket: process.env.SCW_BUCKET,
-  accessKey: process.env.SCW_ACCESS_KEY,
-  secretKey: process.env.SCW_SECRET_KEY,
-  prefix: process.env.SCW_PREFIX,
-});
-
-const s3 = new S3Client({
-  region: resolveScalewaySigningRegion(scwConfig.region),
-  endpoint: resolveScalewayEndpoint(scwConfig.region),
-  credentials: {
-    accessKeyId: scwConfig.accessKey,
-    secretAccessKey: scwConfig.secretKey,
-  },
-  forcePathStyle: true,
-});
-
-const bucket = scwConfig.bucket;
-const s3Prefix = scwConfig.prefix ?? '';
-
-function fullKey(key: string): string {
-  return s3Prefix ? `${s3Prefix}/${key}` : key;
-}
+const { s3, bucket, fullKey } = createS3Helpers();
 
 // ── Step 1: Load state, identify wrong-date files ────────────────
 
@@ -352,36 +310,9 @@ let moveErrors = 0;
 const failedMoves: MoveOp[] = [];
 
 async function executeMoveOp(move: MoveOp): Promise<void> {
-  const sourceFullKey = fullKey(move.oldKey);
-  const destFullKey = fullKey(move.newKey);
+  const result = await s3Move(s3, bucket, fullKey(move.oldKey), fullKey(move.newKey));
 
-  try {
-    // Check source exists
-    try {
-      await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: sourceFullKey }));
-    } catch {
-      // Already moved or deleted — just update state
-      moveCompleted++;
-      return;
-    }
-
-    // Copy to new location
-    await s3.send(
-      new CopyObjectCommand({
-        Bucket: bucket,
-        CopySource: `${bucket}/${sourceFullKey}`,
-        Key: destFullKey,
-      }),
-    );
-
-    // Delete old location
-    await s3.send(
-      new DeleteObjectCommand({
-        Bucket: bucket,
-        Key: sourceFullKey,
-      }),
-    );
-
+  if (result.ok) {
     // Update state: remove old key, add new key
     const oldState = uploadState.items[move.oldKey];
     if (oldState) {
@@ -391,13 +322,11 @@ async function executeMoveOp(move: MoveOp): Promise<void> {
         updatedAt: new Date().toISOString(),
       };
     }
-
     moveCompleted++;
-  } catch (err) {
+  } else {
     moveErrors++;
     failedMoves.push(move);
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`\n   ❌ ${move.oldKey} → ${move.newKey}: ${msg}`);
+    console.error(`\n   ❌ ${move.oldKey} → ${move.newKey}: ${result.error}`);
   }
 }
 
