@@ -71,6 +71,31 @@ function spawnProcess(command, args, cwd) {
   });
 }
 
+/**
+ * Validate the Prisma schema for known Prisma 7 incompatibilities.
+ * Prisma 7 no longer allows `url` inside the `datasource` block — the
+ * connection URL must be configured in prisma.config.ts instead.
+ * Catch this early with a clear message rather than a cryptic P1012 error.
+ */
+function validatePrismaSchema() {
+  const schemaPath = path.join(rootDir, 'prisma', 'schema.prisma');
+  if (!existsSync(schemaPath)) return;
+
+  const content = readFileSync(schemaPath, 'utf8');
+
+  // Simple regex: look for `url` assignment inside a `datasource` block
+  const datasourceBlock = content.match(/datasource\s+\w+\s*\{([^}]*)}/s);
+  if (datasourceBlock && /^\s*url\s*=/m.test(datasourceBlock[1])) {
+    console.error(
+      '\n❌  prisma/schema.prisma contains a `url` property in the datasource block.\n' +
+      '    Prisma 7 no longer supports this. The connection URL must be set in\n' +
+      '    prisma.config.ts (which already has it). Remove the `url` line from\n' +
+      '    the datasource block to fix this.\n',
+    );
+    process.exit(1);
+  }
+}
+
 function ensureEncryptionSecret(envPath) {
   const placeholderValues = new Set(['change-me-to-a-random-secret', 'change-me', '']);
   const raw = readFileSync(envPath, 'utf8');
@@ -296,6 +321,7 @@ async function runSetup() {
   await runCommand('docker', ['compose', 'up', '-d', 'postgres', 'redis'], rootDir);
 
   console.log('Generating Prisma client...');
+  validatePrismaSchema();
   await runCommand(npmCmd, ['run', 'prisma:generate'], rootDir);
 }
 
