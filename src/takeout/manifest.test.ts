@@ -189,6 +189,61 @@ describe('takeout/manifest', () => {
       expect(entry.datePath).toBe('2020/12/17');
     });
   });
+
+  it('rejects sidecar date that looks like upload/extraction time (year >= 2026)', async () => {
+    await withTempDir(async (dir) => {
+      const mediaRoot = path.join(dir, 'Google Photos', 'Album');
+      await fs.mkdir(mediaRoot, { recursive: true });
+
+      const mediaPath = path.join(mediaRoot, 'photo.jpg');
+      await fs.writeFile(mediaPath, 'img');
+      // Sidecar with a 2026 date (extraction timestamp, not capture date)
+      await fs.writeFile(
+        `${mediaPath}.json`,
+        JSON.stringify({
+          photoTakenTime: {
+            timestamp: '1773763200', // 2026-03-15T00:00:00Z
+          },
+        }),
+      );
+
+      const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
+      // Should reject 2026 date and fall through to unknown-date
+      expect(entry.datePath).toBe('unknown-date');
+    });
+  });
+
+  it('rejects EXIF date that looks like extraction time (year >= 2026)', async () => {
+    await withTempDir(async (dir) => {
+      const mediaRoot = path.join(dir, 'Google Photos', 'Album');
+      await fs.mkdir(mediaRoot, { recursive: true });
+
+      // Build a minimal JPEG with EXIF DateTimeOriginal = "2026:03:15 10:00:00"
+      const jpeg = Buffer.from([
+        0xFF, 0xD8,                                           // SOI
+        0xFF, 0xE1, 0x00, 0x48,                               // APP1 marker + length
+        0x45, 0x78, 0x69, 0x66, 0x00, 0x00,                   // "Exif\0\0"
+        0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00,       // TIFF LE header, IFD0 at 8
+        0x01, 0x00,                                           // IFD0: 1 entry
+        0x69, 0x87, 0x04, 0x00, 0x01, 0x00, 0x00, 0x00,       //   ExifIFD tag, LONG, count=1
+        0x1A, 0x00, 0x00, 0x00,                               //   value: offset 26
+        0x00, 0x00, 0x00, 0x00,                               // next IFD: none
+        0x01, 0x00,                                           // ExifIFD: 1 entry
+        0x03, 0x90, 0x02, 0x00, 0x14, 0x00, 0x00, 0x00,       //   DateTimeOriginal, ASCII, 20 chars
+        0x2C, 0x00, 0x00, 0x00,                               //   value: offset 44
+        0x00, 0x00, 0x00, 0x00,                               // next IFD: none
+        ...Buffer.from('2026:03:15 10:00:00\0'),               // DateTimeOriginal value (2026!)
+        0xFF, 0xD9,                                           // EOI
+      ]);
+
+      const mediaPath = path.join(mediaRoot, 'random.jpg');
+      await fs.writeFile(mediaPath, jpeg);
+
+      const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
+      // Should reject the 2026 EXIF date
+      expect(entry.datePath).toBe('unknown-date');
+    });
+  });
 });
 
 // ── Deduplication tests ───────────────────────────────────────────────────────
