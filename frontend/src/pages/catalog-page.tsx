@@ -342,7 +342,7 @@ function InfoPanel({ item, apiToken }: { item: CatalogItem; apiToken: string | u
 
   return (
     <div
-      className="absolute bottom-0 right-0 top-0 z-20 w-72 overflow-y-auto border-l border-white/10 bg-black/80 p-4 backdrop-blur-sm"
+      className="absolute z-20 overflow-y-auto bg-black/80 p-4 backdrop-blur-sm inset-x-0 bottom-0 max-h-[50vh] border-t border-white/10 sm:inset-x-auto sm:max-h-none sm:right-0 sm:top-0 sm:w-72 sm:border-l sm:border-t-0"
       onClick={(e) => e.stopPropagation()}
       role="complementary"
       aria-label="File details"
@@ -524,6 +524,27 @@ function Lightbox({
     });
   }, []);
 
+  // ── Touch swipe navigation (mobile) ──
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }
+  }, []);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (!touchStartRef.current || e.changedTouches.length !== 1) return;
+    const dx = e.changedTouches[0].clientX - touchStartRef.current.x;
+    const dy = e.changedTouches[0].clientY - touchStartRef.current.y;
+    touchStartRef.current = null;
+    // Only treat as swipe if horizontal movement dominates and exceeds threshold
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      if (dx > 0 && index > 0) onNavigate(index - 1);
+      else if (dx < 0 && index < items.length - 1) onNavigate(index + 1);
+    }
+  }, [index, items.length, onNavigate]);
+
   // Extract filename from the key for the toolbar display
   const filename = item.key.split('/').pop() ?? item.key;
 
@@ -532,6 +553,8 @@ function Lightbox({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/85"
       onClick={onClose}
       onMouseMove={resetToolbarTimer}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
       role="dialog"
       aria-label="Media viewer"
     >
@@ -553,21 +576,21 @@ function Lightbox({
         </span>
 
         {/* Action buttons */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1 sm:gap-3">
           <button
-            className="text-lg text-white/80 hover:text-white"
+            className="flex h-10 w-10 items-center justify-center rounded-full text-lg text-white/80 hover:text-white active:bg-white/10"
             onClick={handleDownload}
             aria-label="Download"
             title="Download (D)"
           >⬇</button>
           <button
-            className={`text-lg hover:text-white ${showInfo ? 'text-blue-400' : 'text-white/80'}`}
+            className={`flex h-10 w-10 items-center justify-center rounded-full text-lg hover:text-white active:bg-white/10 ${showInfo ? 'text-blue-400' : 'text-white/80'}`}
             onClick={() => setShowInfo((v) => !v)}
             aria-label="Toggle info"
             title="Info (I)"
           >ⓘ</button>
           <button
-            className="text-xl font-bold text-white/80 hover:text-white"
+            className="flex h-10 w-10 items-center justify-center rounded-full text-xl font-bold text-white/80 hover:text-white active:bg-white/10"
             onClick={onClose}
             aria-label="Close"
             title="Close (Esc)"
@@ -575,17 +598,17 @@ function Lightbox({
         </div>
       </div>
 
-      {/* ── Navigation arrows ──────────────────────────────────────── */}
+      {/* ── Navigation arrows (hidden on mobile — use swipe instead) ── */}
       {index > 0 && (
         <button
-          className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/40 px-3 py-2 text-3xl text-white hover:bg-black/60"
+          className="absolute left-2 top-1/2 z-10 hidden -translate-y-1/2 rounded-full bg-black/40 px-3 py-2 text-3xl text-white hover:bg-black/60 sm:block"
           onClick={(e) => { e.stopPropagation(); onNavigate(index - 1); }}
           aria-label="Previous"
         >‹</button>
       )}
       {index < items.length - 1 && (
         <button
-          className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/40 px-3 py-2 text-3xl text-white hover:bg-black/60"
+          className="absolute right-2 top-1/2 z-10 hidden -translate-y-1/2 rounded-full bg-black/40 px-3 py-2 text-3xl text-white hover:bg-black/60 sm:block"
           onClick={(e) => { e.stopPropagation(); onNavigate(index + 1); }}
           aria-label="Next"
         >›</button>

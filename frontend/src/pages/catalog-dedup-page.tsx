@@ -530,7 +530,7 @@ export function CatalogDedupPage() {
             <p className="text-sm font-medium text-slate-700">Scanning all objects…</p>
 
             {/* Progress bar */}
-            <div className="w-full max-w-md px-4">
+            <div className="w-full max-w-sm px-4 sm:max-w-md">
               <div className="h-3 w-full overflow-hidden rounded-full bg-slate-200">
                 <div
                   className="h-full rounded-full bg-blue-600 transition-all duration-300 ease-out"
