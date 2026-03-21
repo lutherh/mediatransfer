@@ -183,6 +183,56 @@ function parseMvhdCreationTime(moovBuf: Buffer): Date | null {
 }
 
 /**
+ * Extract creation date from a video buffer (MP4/MOV/M4V/3GP) by parsing
+ * the moov/mvhd atom. Works with partial buffers (e.g. first 256 KB from S3).
+ *
+ * If the moov atom is beyond the buffer (common when it's after mdat),
+ * returns `{ date: null, moovOffset }` so the caller can fetch the moov
+ * range from S3 and retry with `extractVideoCreationDateFromMoov`.
+ */
+export function extractVideoCreationDateFromBuffer(buf: Buffer): {
+  date: Date | null;
+  /** Set when moov wasn't in the buffer but its offset could be computed from mdat size. */
+  moovOffset?: number;
+} {
+  if (buf.length < 8) return { date: null };
+
+  const atoms = scanAtoms(buf);
+
+  // moov in the scanned range
+  const moovAtom = atoms.find(a => a.type === 'moov');
+  if (moovAtom) {
+    const moovEnd = moovAtom.offset + moovAtom.size;
+    if (moovEnd <= buf.length) {
+      const moovBuf = buf.subarray(moovAtom.offset, moovEnd);
+      return { date: parseMvhdCreationTime(moovBuf) };
+    }
+    // moov starts in buffer but extends beyond — can't parse fully
+    return { date: null, moovOffset: moovAtom.offset };
+  }
+
+  // moov not found — calculate its offset from mdat size
+  const mdatAtom = atoms.find(a => a.type === 'mdat');
+  if (mdatAtom && mdatAtom.size > 0) {
+    const moovOffset = mdatAtom.offset + mdatAtom.size;
+    return { date: null, moovOffset };
+  }
+
+  return { date: null };
+}
+
+/**
+ * Parse creation date from a buffer that starts at the moov atom.
+ * Use after fetching the range indicated by `extractVideoCreationDateFromBuffer().moovOffset`.
+ */
+export function extractVideoCreationDateFromMoov(moovBuf: Buffer): Date | null {
+  if (moovBuf.length >= 8 && moovBuf.toString('ascii', 4, 8) === 'moov') {
+    return parseMvhdCreationTime(moovBuf);
+  }
+  return null;
+}
+
+/**
  * Extract creation date from a video container (MP4/MOV/M4V/3GP) by parsing
  * the moov/mvhd atom directly from disk.
  *
