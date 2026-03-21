@@ -192,35 +192,56 @@ describe('takeout/manifest', () => {
     });
   });
 
-  it('rejects sidecar date that looks like upload/extraction time (year >= 2026)', async () => {
+  it('rejects sidecar date that is impossibly far in the future', async () => {
     await withTempDir(async (dir) => {
       const mediaRoot = path.join(dir, 'Google Photos', 'Album');
       await fs.mkdir(mediaRoot, { recursive: true });
 
       const mediaPath = path.join(mediaRoot, 'photo.jpg');
       await fs.writeFile(mediaPath, 'img');
-      // Sidecar with a 2026 date (extraction timestamp, not capture date)
+      // Sidecar with a far-future date (clearly wrong)
       await fs.writeFile(
         `${mediaPath}.json`,
         JSON.stringify({
           photoTakenTime: {
-            timestamp: '1773763200', // 2026-03-15T00:00:00Z
+            timestamp: '2208988800', // 2040-01-01T00:00:00Z
           },
         }),
       );
 
       const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
-      // Should reject 2026 date and fall through to unknown-date
+      // Should reject far-future date and fall through to unknown-date
       expect(entry.datePath).toBe('unknown-date');
     });
   });
 
-  it('rejects EXIF date that looks like extraction time (year >= 2026)', async () => {
+  it('accepts sidecar date from current year (2026)', async () => {
     await withTempDir(async (dir) => {
       const mediaRoot = path.join(dir, 'Google Photos', 'Album');
       await fs.mkdir(mediaRoot, { recursive: true });
 
-      // Build a minimal JPEG with EXIF DateTimeOriginal = "2026:03:15 10:00:00"
+      const mediaPath = path.join(mediaRoot, 'photo.jpg');
+      await fs.writeFile(mediaPath, 'img');
+      await fs.writeFile(
+        `${mediaPath}.json`,
+        JSON.stringify({
+          photoTakenTime: {
+            timestamp: '1773532800', // 2026-03-15T00:00:00Z
+          },
+        }),
+      );
+
+      const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
+      expect(entry.datePath).toBe('2026/03/15');
+    });
+  });
+
+  it('rejects EXIF date that is impossibly far in the future', async () => {
+    await withTempDir(async (dir) => {
+      const mediaRoot = path.join(dir, 'Google Photos', 'Album');
+      await fs.mkdir(mediaRoot, { recursive: true });
+
+      // Build a minimal JPEG with EXIF DateTimeOriginal = "2040:03:15 10:00:00"
       const jpeg = Buffer.from([
         0xFF, 0xD8,                                           // SOI
         0xFF, 0xE1, 0x00, 0x48,                               // APP1 marker + length
@@ -234,7 +255,7 @@ describe('takeout/manifest', () => {
         0x03, 0x90, 0x02, 0x00, 0x14, 0x00, 0x00, 0x00,       //   DateTimeOriginal, ASCII, 20 chars
         0x2C, 0x00, 0x00, 0x00,                               //   value: offset 44
         0x00, 0x00, 0x00, 0x00,                               // next IFD: none
-        ...Buffer.from('2026:03:15 10:00:00\0'),               // DateTimeOriginal value (2026!)
+        ...Buffer.from('2040:03:15 10:00:00\0'),               // DateTimeOriginal value (2040!)
         0xFF, 0xD9,                                           // EOI
       ]);
 
@@ -242,7 +263,7 @@ describe('takeout/manifest', () => {
       await fs.writeFile(mediaPath, jpeg);
 
       const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
-      // Should reject the 2026 EXIF date
+      // Should reject the 2040 EXIF date
       expect(entry.datePath).toBe('unknown-date');
     });
   });
@@ -557,8 +578,8 @@ function makeEntry(overrides: Partial<ManifestEntry> & { destinationKey: string 
     relativePath: 'Album/test.jpg',
     size: 1000,
     mtimeMs: Date.now(),
-    capturedAt: '2026-03-15T00:00:00.000Z',
-    datePath: '2026/03/15',
+    capturedAt: '2040-03-15T00:00:00.000Z',
+    datePath: '2040/03/15',
     ...overrides,
   };
 }
@@ -600,18 +621,18 @@ describe('refineDatesFromMetadata', () => {
   it('resolves date for -edited file from non-edited sidecar', () => {
     const entries = [
       makeEntry({
-        destinationKey: 'transfers/2026/03/15/Album/IMG_1234-edited.jpg',
-        capturedAt: '2026-03-15T00:00:00.000Z',
-        datePath: '2026/03/15',
+        destinationKey: 'transfers/2040/03/15/Album/IMG_1234-edited.jpg',
+        capturedAt: '2040-03-15T00:00:00.000Z',
+        datePath: '2040/03/15',
       }),
     ];
 
     const metadata = makeMetadata([
       {
-        destinationKey: 'transfers/2026/03/15/Album/IMG_1234-edited.jpg',
+        destinationKey: 'transfers/2040/03/15/Album/IMG_1234-edited.jpg',
         relativePath: 'Album/IMG_1234-edited.jpg',
         sizeBytes: 1000,
-        capturedAt: '2026-03-15T00:00:00.000Z',
+        capturedAt: '2040-03-15T00:00:00.000Z',
       },
       {
         destinationKey: 'transfers/2020/11/25/Album/IMG_1234.jpg',
@@ -632,18 +653,18 @@ describe('refineDatesFromMetadata', () => {
   it('resolves date via stem cross-extension (MP4 from JPG sidecar)', () => {
     const entries = [
       makeEntry({
-        destinationKey: 'transfers/2026/03/15/Album/IMG_0917.MP4',
-        capturedAt: '2026-03-15T00:00:00.000Z',
-        datePath: '2026/03/15',
+        destinationKey: 'transfers/2040/03/15/Album/IMG_0917.MP4',
+        capturedAt: '2040-03-15T00:00:00.000Z',
+        datePath: '2040/03/15',
       }),
     ];
 
     const metadata = makeMetadata([
       {
-        destinationKey: 'transfers/2026/03/15/Album/IMG_0917.MP4',
+        destinationKey: 'transfers/2040/03/15/Album/IMG_0917.MP4',
         relativePath: 'Album/IMG_0917.MP4',
         sizeBytes: 50000,
-        capturedAt: '2026-03-15T00:00:00.000Z',
+        capturedAt: '2040-03-15T00:00:00.000Z',
       },
       {
         destinationKey: 'transfers/2022/10/01/Album/IMG_0917.JPG',
@@ -664,19 +685,19 @@ describe('refineDatesFromMetadata', () => {
   it('resolves date via album median when no sidecar match', () => {
     const entries = [
       makeEntry({
-        destinationKey: 'transfers/2026/03/15/Vacation/random_file.gif',
-        capturedAt: '2026-03-15T00:00:00.000Z',
-        datePath: '2026/03/15',
+        destinationKey: 'transfers/2040/03/15/Vacation/random_file.gif',
+        capturedAt: '2040-03-15T00:00:00.000Z',
+        datePath: '2040/03/15',
       }),
     ];
 
     const metadata = makeMetadata([
       {
-        destinationKey: 'transfers/2026/03/15/Vacation/random_file.gif',
+        destinationKey: 'transfers/2040/03/15/Vacation/random_file.gif',
         relativePath: 'Vacation/random_file.gif',
         album: 'Vacation',
         sizeBytes: 500,
-        capturedAt: '2026-03-15T00:00:00.000Z',
+        capturedAt: '2040-03-15T00:00:00.000Z',
       },
       {
         destinationKey: 'transfers/2019/08/10/Vacation/IMG_001.jpg',
@@ -714,19 +735,19 @@ describe('refineDatesFromMetadata', () => {
   it('does not use album median when fewer than 2 dated peers', () => {
     const entries = [
       makeEntry({
-        destinationKey: 'transfers/2026/03/15/Tiny/file.gif',
-        capturedAt: '2026-03-15T00:00:00.000Z',
-        datePath: '2026/03/15',
+        destinationKey: 'transfers/2040/03/15/Tiny/file.gif',
+        capturedAt: '2040-03-15T00:00:00.000Z',
+        datePath: '2040/03/15',
       }),
     ];
 
     const metadata = makeMetadata([
       {
-        destinationKey: 'transfers/2026/03/15/Tiny/file.gif',
+        destinationKey: 'transfers/2040/03/15/Tiny/file.gif',
         relativePath: 'Tiny/file.gif',
         album: 'Tiny',
         sizeBytes: 500,
-        capturedAt: '2026-03-15T00:00:00.000Z',
+        capturedAt: '2040-03-15T00:00:00.000Z',
       },
       {
         destinationKey: 'transfers/2019/01/01/Tiny/one.jpg',
@@ -746,7 +767,7 @@ describe('refineDatesFromMetadata', () => {
     const entries = [
       makeEntry({
         destinationKey: 'transfers/unknown-date/Album/IMG_5555.MOV',
-        capturedAt: '2026-03-15T00:00:00.000Z',
+        capturedAt: '2040-03-15T00:00:00.000Z',
         datePath: 'unknown-date',
       }),
     ];
@@ -756,7 +777,7 @@ describe('refineDatesFromMetadata', () => {
         destinationKey: 'transfers/unknown-date/Album/IMG_5555.MOV',
         relativePath: 'Album/IMG_5555.MOV',
         sizeBytes: 10000,
-        capturedAt: '2026-03-15T00:00:00.000Z',
+        capturedAt: '2040-03-15T00:00:00.000Z',
       },
       {
         destinationKey: 'transfers/2021/06/15/Album/IMG_5555.JPG',
@@ -776,18 +797,18 @@ describe('refineDatesFromMetadata', () => {
   it('prefers edited-to-original over stem cross-extension', () => {
     const entries = [
       makeEntry({
-        destinationKey: 'transfers/2026/03/15/Album/IMG_1234-edited.PNG',
-        capturedAt: '2026-03-15T00:00:00.000Z',
-        datePath: '2026/03/15',
+        destinationKey: 'transfers/2040/03/15/Album/IMG_1234-edited.PNG',
+        capturedAt: '2040-03-15T00:00:00.000Z',
+        datePath: '2040/03/15',
       }),
     ];
 
     const metadata = makeMetadata([
       {
-        destinationKey: 'transfers/2026/03/15/Album/IMG_1234-edited.PNG',
+        destinationKey: 'transfers/2040/03/15/Album/IMG_1234-edited.PNG',
         relativePath: 'Album/IMG_1234-edited.PNG',
         sizeBytes: 1000,
-        capturedAt: '2026-03-15T00:00:00.000Z',
+        capturedAt: '2040-03-15T00:00:00.000Z',
       },
       {
         destinationKey: 'transfers/2020/05/01/Album/IMG_1234.PNG',
