@@ -67,6 +67,21 @@ describe('buildRowModel', () => {
     expect(dividers).toHaveLength(2);
   });
 
+  it('marks only the first section-header with isFirst=true', () => {
+    const sections: [string, CatalogItem[]][] = [
+      ['2025-06-16', [makeItem({ sectionDate: '2025-06-16' })]],
+      ['2025-06-15', [makeItem({ sectionDate: '2025-06-15' })]],
+      ['2024-03-10', [makeItem({ sectionDate: '2024-03-10' })]],
+    ];
+    const rows = buildRowModel(sections, 4);
+    const headers = rows.filter((r) => r.type === 'section-header') as
+      Array<Extract<typeof rows[number], { type: 'section-header' }>>;
+    expect(headers).toHaveLength(3);
+    expect(headers[0].isFirst).toBe(true);
+    expect(headers[1].isFirst).toBe(false);
+    expect(headers[2].isFirst).toBe(false);
+  });
+
   it('computes startIndex correctly across sections', () => {
     const sections: [string, CatalogItem[]][] = [
       ['2025-06-16', [
@@ -124,7 +139,7 @@ describe('estimateRowHeight', () => {
   });
 
   it('returns 52 for section-header', () => {
-    const row: VirtualRow = { type: 'section-header', date: '2025-06-16', items: [] };
+    const row: VirtualRow = { type: 'section-header', date: '2025-06-16', items: [], isFirst: false };
     expect(estimateRowHeight(row, 1024, 8)).toBe(52);
   });
 
