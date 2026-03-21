@@ -9,7 +9,6 @@ import { MonthDivider } from '@/components/catalog/month-divider';
 
 export interface VirtualizedGridProps {
   sections: [string, CatalogItem[]][];
-  sortedItems: CatalogItem[];
   selected: Set<string>;
   selectionMode: boolean;
   apiToken: string | undefined;
@@ -95,7 +94,7 @@ export function VirtualizedGrid({
       (i: number) => estimateRowHeight(rowModel[i], containerWidth, cols),
       [rowModel, containerWidth, cols],
     ),
-    overscan: 5,
+    overscan: 10,
     scrollMargin,
   });
 
@@ -132,7 +131,7 @@ export function VirtualizedGrid({
         if (el) sectionRefs.current.set(row.date, el);
       }
     }
-  });
+  }, [virtualItems, rowModel, sectionRefs]);
 
   return (
     <div ref={containerRef}>
@@ -145,12 +144,6 @@ export function VirtualizedGrid({
       >
         {virtualItems.map((vItem) => {
           const row = rowModel[vItem.index];
-
-          // Determine if a border-t should appear above this section-header
-          // (all section-headers except the very first one in the list)
-          const isFirstSectionHeader =
-            row.type === 'section-header' &&
-            !rowModel.slice(0, vItem.index).some((r) => r.type === 'section-header');
 
           return (
             <div
@@ -177,7 +170,7 @@ export function VirtualizedGrid({
               )}
 
               {row.type === 'section-header' && (
-                <div className={!isFirstSectionHeader ? 'border-t border-slate-200 pt-4' : ''}>
+                <div className={!row.isFirst ? 'border-t border-slate-200 pt-4' : ''}>
                   <SectionHeader
                     date={row.date}
                     items={row.items}
