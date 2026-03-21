@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { inferDateFromFilename, extractExifMetadata, extractVideoCreationDate } from '../utils/exif.js';
-import { isWrongDate } from '../utils/date-repair.js';
+import { isWrongDate, parseSidecarDate } from '../utils/date-repair.js';
 import { MEDIA_EXTENSIONS } from '../utils/media-extensions.js';
 
 export type ManifestEntry = {
@@ -288,6 +288,158 @@ async function exists(filePath: string): Promise<boolean> {
     }
     return false;
   }
+}
+
+// ── Post-build date refinement using archive metadata ────────────────────────
+
+import type { ArchiveMetadata, SidecarMetadata } from './archive-metadata.js';
+
+export type RefineDateResult = {
+  /** Updated entries (mutated in place for performance). */
+  entries: ManifestEntry[];
+  /** How many entries had their date improved. */
+  refinedCount: number;
+  /** Breakdown by resolution strategy. */
+  breakdown: {
+    editedToOriginal: number;
+    stemCrossExtension: number;
+    albumMedian: number;
+  };
+};
+
+/**
+ * Second-pass date resolution using archive metadata sidecars.
+ *
+ * Runs after `buildManifest()` + `extractAndPersistArchiveMetadata()` to fix
+ * entries that ended up with wrong dates (mtime / extraction date) because
+ * their sidecar couldn't be found via local file path matching.
+ *
+ * Additional strategies (not available during first-pass `deriveCapturedDate`):
+ *
+ *   1. **Edited → non-edited sidecar** — `IMG_1234-edited.jpg` gets date from
+ *      `IMG_1234.jpg`'s sidecar.
+ *   2. **Stem cross-extension** — `IMG_0917.MP4` gets date from `IMG_0917.JPG`'s
+ *      sidecar when the same photo/video pair exists.
+ *   3. **Album median** — Files in an album with many dated items get the
+ *      album's median capture date as a fallback.
+ */
+export function refineDatesFromMetadata(
+  entries: ManifestEntry[],
+  metadata: ArchiveMetadata,
+): RefineDateResult {
+  const breakdown = { editedToOriginal: 0, stemCrossExtension: 0, albumMedian: 0 };
+  let refinedCount = 0;
+
+  // Build sidecar lookup maps from metadata items that have dates
+  const sidecarByBasename = new Map<string, SidecarMetadata[]>();
+  const sidecarByStem = new Map<string, SidecarMetadata[]>();
+
+  for (const item of metadata.items) {
+    if (!item.sidecar || (!item.sidecar.photoTakenTime && !item.sidecar.creationTime)) continue;
+    const basename = item.destinationKey.split('/').pop()!;
+    const stem = basename.replace(/\.[^.]+$/, '');
+
+    if (!sidecarByBasename.has(basename)) sidecarByBasename.set(basename, []);
+    sidecarByBasename.get(basename)!.push(item.sidecar);
+
+    if (!sidecarByStem.has(stem)) sidecarByStem.set(stem, []);
+    sidecarByStem.get(stem)!.push(item.sidecar);
+  }
+
+  // Build album median dates
+  const albumDates = new Map<string, Date[]>();
+  for (const item of metadata.items) {
+    if (!item.album || !item.sidecar) continue;
+    const d = parseSidecarDate(item.sidecar);
+    if (d && !isWrongDate(d)) {
+      if (!albumDates.has(item.album)) albumDates.set(item.album, []);
+      albumDates.get(item.album)!.push(d);
+    }
+  }
+  const albumMedian = new Map<string, Date>();
+  for (const [album, dates] of albumDates) {
+    if (dates.length < 2) continue; // Need at least 2 dated peers
+    dates.sort((a, b) => a.getTime() - b.getTime());
+    albumMedian.set(album, dates[Math.floor(dates.length / 2)]);
+  }
+
+  // Build item→album lookup for our entries
+  const itemAlbum = new Map<string, string>();
+  for (const item of metadata.items) {
+    if (item.album) itemAlbum.set(item.destinationKey, item.album);
+  }
+
+  // Process entries that have wrong dates
+  for (const entry of entries) {
+    const entryDate = new Date(entry.capturedAt);
+    if (!isWrongDate(entryDate) && entry.datePath !== 'unknown-date') continue;
+
+    const filename = entry.destinationKey.split('/').pop() ?? '';
+    const stem = filename.replace(/\.[^.]+$/, '');
+    let resolvedDate: Date | undefined;
+    let source: 'editedToOriginal' | 'stemCrossExtension' | 'albumMedian' | undefined;
+
+    // Strategy 1: Edited → non-edited sidecar
+    if (filename.includes('-edited')) {
+      const nonEditedName = filename.replace('-edited', '');
+      const entries1 = sidecarByBasename.get(nonEditedName);
+      if (entries1?.length === 1) {
+        const d = parseSidecarDate(entries1[0]);
+        if (d && !isWrongDate(d)) {
+          resolvedDate = d;
+          source = 'editedToOriginal';
+        }
+      }
+      if (!resolvedDate) {
+        // Also try cross-extension for the non-edited stem
+        const nonEditedStem = nonEditedName.replace(/\.[^.]+$/, '');
+        const stemEntries = sidecarByStem.get(nonEditedStem);
+        if (stemEntries?.length === 1) {
+          const d = parseSidecarDate(stemEntries[0]);
+          if (d && !isWrongDate(d)) {
+            resolvedDate = d;
+            source = 'editedToOriginal';
+          }
+        }
+      }
+    }
+
+    // Strategy 2: Stem cross-extension
+    if (!resolvedDate) {
+      const stemEntries = sidecarByStem.get(stem);
+      if (stemEntries?.length === 1) {
+        const d = parseSidecarDate(stemEntries[0]);
+        if (d && !isWrongDate(d)) {
+          resolvedDate = d;
+          source = 'stemCrossExtension';
+        }
+      }
+    }
+
+    // Strategy 3: Album median
+    if (!resolvedDate) {
+      const album = itemAlbum.get(entry.destinationKey);
+      if (album) {
+        const median = albumMedian.get(album);
+        if (median) {
+          resolvedDate = median;
+          source = 'albumMedian';
+        }
+      }
+    }
+
+    if (resolvedDate && source) {
+      const newDatePath = toDatePath(resolvedDate);
+      const albumFile = entry.destinationKey.split('/').slice(4).join('/');
+      entry.capturedAt = resolvedDate.toISOString();
+      entry.datePath = newDatePath;
+      entry.destinationKey = `transfers/${newDatePath}/${albumFile || sanitizeRelativePath(entry.relativePath)}`;
+      breakdown[source]++;
+      refinedCount++;
+    }
+  }
+
+  return { entries, refinedCount, breakdown };
 }
 
 // ── Content-based manifest deduplication ─────────────────────────────────────

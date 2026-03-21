@@ -8,9 +8,11 @@ import {
   deduplicateManifest,
   partialFileHash,
   persistManifestJsonl,
+  refineDatesFromMetadata,
   scoreEntryForKeep,
   type ManifestEntry,
 } from './manifest.js';
+import type { ArchiveMetadata, MediaItemMetadata } from './archive-metadata.js';
 
 async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mediatransfer-manifest-'));
@@ -544,5 +546,262 @@ describe('buildManifest – corrupted directory resilience', () => {
         await cleanupUnreadableDir(unreadable);
       }
     });
+  });
+});
+
+// ── refineDatesFromMetadata tests ─────────────────────────────────────────────
+
+function makeEntry(overrides: Partial<ManifestEntry> & { destinationKey: string }): ManifestEntry {
+  return {
+    sourcePath: '/tmp/test.jpg',
+    relativePath: 'Album/test.jpg',
+    size: 1000,
+    mtimeMs: Date.now(),
+    capturedAt: '2026-03-15T00:00:00.000Z',
+    datePath: '2026/03/15',
+    ...overrides,
+  };
+}
+
+function makeMetadata(items: MediaItemMetadata[]): ArchiveMetadata {
+  return {
+    version: 1,
+    archiveName: 'test.tgz',
+    extractedAt: new Date().toISOString(),
+    albums: {},
+    items,
+    duplicates: [],
+  };
+}
+
+describe('refineDatesFromMetadata', () => {
+  it('does not modify entries with valid dates', () => {
+    const entries = [
+      makeEntry({
+        destinationKey: 'transfers/2020/07/15/Album/IMG_1234.jpg',
+        capturedAt: '2020-07-15T12:00:00.000Z',
+        datePath: '2020/07/15',
+      }),
+    ];
+
+    const metadata = makeMetadata([{
+      destinationKey: 'transfers/2020/07/15/Album/IMG_1234.jpg',
+      relativePath: 'Album/IMG_1234.jpg',
+      sizeBytes: 1000,
+      capturedAt: '2020-07-15T12:00:00.000Z',
+      sidecar: { photoTakenTime: '15 Jul 2020, 12:00:00 UTC' },
+    }]);
+
+    const result = refineDatesFromMetadata(entries, metadata);
+    expect(result.refinedCount).toBe(0);
+    expect(entries[0].datePath).toBe('2020/07/15');
+  });
+
+  it('resolves date for -edited file from non-edited sidecar', () => {
+    const entries = [
+      makeEntry({
+        destinationKey: 'transfers/2026/03/15/Album/IMG_1234-edited.jpg',
+        capturedAt: '2026-03-15T00:00:00.000Z',
+        datePath: '2026/03/15',
+      }),
+    ];
+
+    const metadata = makeMetadata([
+      {
+        destinationKey: 'transfers/2026/03/15/Album/IMG_1234-edited.jpg',
+        relativePath: 'Album/IMG_1234-edited.jpg',
+        sizeBytes: 1000,
+        capturedAt: '2026-03-15T00:00:00.000Z',
+      },
+      {
+        destinationKey: 'transfers/2020/11/25/Album/IMG_1234.jpg',
+        relativePath: 'Album/IMG_1234.jpg',
+        sizeBytes: 2000,
+        capturedAt: '2020-11-25T10:00:00.000Z',
+        sidecar: { photoTakenTime: '25 Nov 2020, 10:00:00 UTC' },
+      },
+    ]);
+
+    const result = refineDatesFromMetadata(entries, metadata);
+    expect(result.refinedCount).toBe(1);
+    expect(result.breakdown.editedToOriginal).toBe(1);
+    expect(entries[0].datePath).toBe('2020/11/25');
+    expect(entries[0].destinationKey).toBe('transfers/2020/11/25/Album/IMG_1234-edited.jpg');
+  });
+
+  it('resolves date via stem cross-extension (MP4 from JPG sidecar)', () => {
+    const entries = [
+      makeEntry({
+        destinationKey: 'transfers/2026/03/15/Album/IMG_0917.MP4',
+        capturedAt: '2026-03-15T00:00:00.000Z',
+        datePath: '2026/03/15',
+      }),
+    ];
+
+    const metadata = makeMetadata([
+      {
+        destinationKey: 'transfers/2026/03/15/Album/IMG_0917.MP4',
+        relativePath: 'Album/IMG_0917.MP4',
+        sizeBytes: 50000,
+        capturedAt: '2026-03-15T00:00:00.000Z',
+      },
+      {
+        destinationKey: 'transfers/2022/10/01/Album/IMG_0917.JPG',
+        relativePath: 'Album/IMG_0917.JPG',
+        sizeBytes: 3000,
+        capturedAt: '2022-10-01T10:10:00.000Z',
+        sidecar: { photoTakenTime: '1 Oct 2022, 10:10:04 UTC' },
+      },
+    ]);
+
+    const result = refineDatesFromMetadata(entries, metadata);
+    expect(result.refinedCount).toBe(1);
+    expect(result.breakdown.stemCrossExtension).toBe(1);
+    expect(entries[0].datePath).toBe('2022/10/01');
+    expect(entries[0].destinationKey).toBe('transfers/2022/10/01/Album/IMG_0917.MP4');
+  });
+
+  it('resolves date via album median when no sidecar match', () => {
+    const entries = [
+      makeEntry({
+        destinationKey: 'transfers/2026/03/15/Vacation/random_file.gif',
+        capturedAt: '2026-03-15T00:00:00.000Z',
+        datePath: '2026/03/15',
+      }),
+    ];
+
+    const metadata = makeMetadata([
+      {
+        destinationKey: 'transfers/2026/03/15/Vacation/random_file.gif',
+        relativePath: 'Vacation/random_file.gif',
+        album: 'Vacation',
+        sizeBytes: 500,
+        capturedAt: '2026-03-15T00:00:00.000Z',
+      },
+      {
+        destinationKey: 'transfers/2019/08/10/Vacation/IMG_001.jpg',
+        relativePath: 'Vacation/IMG_001.jpg',
+        album: 'Vacation',
+        sizeBytes: 2000,
+        capturedAt: '2019-08-10T00:00:00.000Z',
+        sidecar: { photoTakenTime: '10 Aug 2019, 10:00:00 UTC' },
+      },
+      {
+        destinationKey: 'transfers/2019/08/12/Vacation/IMG_002.jpg',
+        relativePath: 'Vacation/IMG_002.jpg',
+        album: 'Vacation',
+        sizeBytes: 2000,
+        capturedAt: '2019-08-12T00:00:00.000Z',
+        sidecar: { photoTakenTime: '12 Aug 2019, 14:00:00 UTC' },
+      },
+      {
+        destinationKey: 'transfers/2019/08/14/Vacation/IMG_003.jpg',
+        relativePath: 'Vacation/IMG_003.jpg',
+        album: 'Vacation',
+        sizeBytes: 2000,
+        capturedAt: '2019-08-14T00:00:00.000Z',
+        sidecar: { photoTakenTime: '14 Aug 2019, 09:00:00 UTC' },
+      },
+    ]);
+
+    const result = refineDatesFromMetadata(entries, metadata);
+    expect(result.refinedCount).toBe(1);
+    expect(result.breakdown.albumMedian).toBe(1);
+    // Median of Aug 10, 12, 14 → Aug 12
+    expect(entries[0].datePath).toBe('2019/08/12');
+  });
+
+  it('does not use album median when fewer than 2 dated peers', () => {
+    const entries = [
+      makeEntry({
+        destinationKey: 'transfers/2026/03/15/Tiny/file.gif',
+        capturedAt: '2026-03-15T00:00:00.000Z',
+        datePath: '2026/03/15',
+      }),
+    ];
+
+    const metadata = makeMetadata([
+      {
+        destinationKey: 'transfers/2026/03/15/Tiny/file.gif',
+        relativePath: 'Tiny/file.gif',
+        album: 'Tiny',
+        sizeBytes: 500,
+        capturedAt: '2026-03-15T00:00:00.000Z',
+      },
+      {
+        destinationKey: 'transfers/2019/01/01/Tiny/one.jpg',
+        relativePath: 'Tiny/one.jpg',
+        album: 'Tiny',
+        sizeBytes: 1000,
+        capturedAt: '2019-01-01T00:00:00.000Z',
+        sidecar: { photoTakenTime: '1 Jan 2019, 00:00:00 UTC' },
+      },
+    ]);
+
+    const result = refineDatesFromMetadata(entries, metadata);
+    expect(result.refinedCount).toBe(0);
+  });
+
+  it('handles unknown-date entries', () => {
+    const entries = [
+      makeEntry({
+        destinationKey: 'transfers/unknown-date/Album/IMG_5555.MOV',
+        capturedAt: '2026-03-15T00:00:00.000Z',
+        datePath: 'unknown-date',
+      }),
+    ];
+
+    const metadata = makeMetadata([
+      {
+        destinationKey: 'transfers/unknown-date/Album/IMG_5555.MOV',
+        relativePath: 'Album/IMG_5555.MOV',
+        sizeBytes: 10000,
+        capturedAt: '2026-03-15T00:00:00.000Z',
+      },
+      {
+        destinationKey: 'transfers/2021/06/15/Album/IMG_5555.JPG',
+        relativePath: 'Album/IMG_5555.JPG',
+        sizeBytes: 3000,
+        capturedAt: '2021-06-15T00:00:00.000Z',
+        sidecar: { photoTakenTime: '15 Jun 2021, 08:30:00 UTC' },
+      },
+    ]);
+
+    const result = refineDatesFromMetadata(entries, metadata);
+    expect(result.refinedCount).toBe(1);
+    expect(result.breakdown.stemCrossExtension).toBe(1);
+    expect(entries[0].datePath).toBe('2021/06/15');
+  });
+
+  it('prefers edited-to-original over stem cross-extension', () => {
+    const entries = [
+      makeEntry({
+        destinationKey: 'transfers/2026/03/15/Album/IMG_1234-edited.PNG',
+        capturedAt: '2026-03-15T00:00:00.000Z',
+        datePath: '2026/03/15',
+      }),
+    ];
+
+    const metadata = makeMetadata([
+      {
+        destinationKey: 'transfers/2026/03/15/Album/IMG_1234-edited.PNG',
+        relativePath: 'Album/IMG_1234-edited.PNG',
+        sizeBytes: 1000,
+        capturedAt: '2026-03-15T00:00:00.000Z',
+      },
+      {
+        destinationKey: 'transfers/2020/05/01/Album/IMG_1234.PNG',
+        relativePath: 'Album/IMG_1234.PNG',
+        sizeBytes: 2000,
+        capturedAt: '2020-05-01T00:00:00.000Z',
+        sidecar: { photoTakenTime: '1 May 2020, 10:00:00 UTC' },
+      },
+    ]);
+
+    const result = refineDatesFromMetadata(entries, metadata);
+    expect(result.refinedCount).toBe(1);
+    // Should be editedToOriginal, not stemCrossExtension
+    expect(result.breakdown.editedToOriginal).toBe(1);
+    expect(result.breakdown.stemCrossExtension).toBe(0);
   });
 });

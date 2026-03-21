@@ -13,6 +13,7 @@ import {
   buildManifest,
   loadManifestJsonl,
   persistManifestJsonl,
+  refineDatesFromMetadata,
   type ManifestEntry,
 } from './manifest.js';
 import {
@@ -27,7 +28,8 @@ import {
   persistReportCsv,
   persistReportJson,
 } from './report.js';
-import { extractAndPersistArchiveMetadata } from './archive-metadata.js';
+import { extractAndPersistArchiveMetadata, loadArchiveMetadata } from './archive-metadata.js';
+import type { ArchiveMetadata } from './archive-metadata.js';
 import { DEFAULT_MANIFEST_FILE } from './runner.js';
 
 // ─── Archive-level state tracking ──────────────────────────────────────────
@@ -148,6 +150,17 @@ async function persistArchiveMetadataBestEffort(
   }
 }
 
+async function loadArchiveMetadataBestEffort(
+  metadataDir: string,
+  archiveName: string,
+): Promise<ArchiveMetadata | undefined> {
+  try {
+    return await loadArchiveMetadata(metadataDir, archiveName);
+  } catch {
+    return undefined;
+  }
+}
+
 export type IncrementalResult = {
   totalArchives: number;
   processedArchives: number;
@@ -253,6 +266,14 @@ export async function runTakeoutIncremental(
         }
         // Save album + sidecar + duplicate metadata before cleanup
         await persistArchiveMetadataBestEffort(extractDir, entries, archiveName, metadataDir);
+        // Refine dates using archive metadata (edited→original, cross-extension, album median)
+        const archiveMeta = await loadArchiveMetadataBestEffort(metadataDir, archiveName);
+        if (archiveMeta) {
+          const { refinedCount, breakdown } = refineDatesFromMetadata(entries, archiveMeta);
+          if (refinedCount > 0) {
+            console.log(`[incremental] Date refinement for ${archiveName}: ${refinedCount} entries improved`, breakdown);
+          }
+        }
         // Process entries from the root
         archiveSummary = await processArchiveEntries(
           entries,
@@ -278,6 +299,15 @@ export async function runTakeoutIncremental(
 
         // Save album + sidecar + duplicate metadata before cleanup
         await persistArchiveMetadataBestEffort(extractDir, allEntries, archiveName, metadataDir);
+
+        // Refine dates using archive metadata (edited→original, cross-extension, album median)
+        const archiveMeta = await loadArchiveMetadataBestEffort(metadataDir, archiveName);
+        if (archiveMeta) {
+          const { refinedCount, breakdown } = refineDatesFromMetadata(allEntries, archiveMeta);
+          if (refinedCount > 0) {
+            console.log(`[incremental] Date refinement for ${archiveName}: ${refinedCount} entries improved`, breakdown);
+          }
+        }
 
         archiveSummary = await processArchiveEntries(
           allEntries,
