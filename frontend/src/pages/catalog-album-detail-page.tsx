@@ -43,7 +43,11 @@ function AlbumThumb({
   onCheckClick: () => void;
 }) {
   const encodedKey = useMemo(() => encodeS3Key(s3Key), [s3Key]);
-  const thumbUrl = catalogThumbnailUrl(encodedKey, 'small', apiToken);
+  const ext = s3Key.split('.').pop()?.toLowerCase() ?? '';
+  const isBrowserNative = ext === 'heic' || ext === 'heif';
+  const thumbUrl = isBrowserNative
+    ? catalogMediaUrl(encodedKey, apiToken)
+    : catalogThumbnailUrl(encodedKey, 'small', apiToken);
   const [failed, setFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
@@ -122,7 +126,11 @@ function AlbumLightbox({
 }) {
   const s3Key = keys[index];
   const encodedKey = encodeS3Key(s3Key);
-  const thumbUrl = catalogThumbnailUrl(encodedKey, 'large', apiToken);
+  const ext = s3Key.split('.').pop()?.toLowerCase() ?? '';
+  const isBrowserNative = ext === 'heic' || ext === 'heif';
+  const thumbUrl = isBrowserNative
+    ? catalogMediaUrl(encodedKey, apiToken)
+    : catalogThumbnailUrl(encodedKey, 'large', apiToken);
   const mediaUrl = catalogMediaUrl(encodedKey, apiToken);
   const [useFull, setUseFull] = useState(false);
   const [failed, setFailed] = useState(false);
