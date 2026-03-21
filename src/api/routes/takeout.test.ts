@@ -233,21 +233,20 @@ describe('takeout routes', () => {
   });
 
   it('returns 400 for unknown action and 202 for known action', async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      stdout: EventEmitter;
-      stderr: EventEmitter;
-      kill: ReturnType<typeof vi.fn>;
-    };
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    child.kill = vi.fn();
-
     spawnMock.mockImplementation(() => {
+      const c = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      c.stdout = new EventEmitter();
+      c.stderr = new EventEmitter();
+      c.kill = vi.fn();
       queueMicrotask(() => {
-        child.stdout.emit('data', 'scan output\n');
-        child.emit('close', 0);
+        c.stdout.emit('data', 'scan output\n');
+        c.emit('close', 0);
       });
-      return child;
+      return c;
     });
 
     const app = Fastify();
@@ -381,21 +380,20 @@ describe('takeout routes', () => {
   // â”€â”€â”€ Custom inputDir is passed to spawned scripts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('spawned action commands include --input-dir when custom dir is set', async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      stdout: EventEmitter;
-      stderr: EventEmitter;
-      kill: ReturnType<typeof vi.fn>;
-    };
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    child.kill = vi.fn();
-
     spawnMock.mockImplementation(() => {
+      const c = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      c.stdout = new EventEmitter();
+      c.stderr = new EventEmitter();
+      c.kill = vi.fn();
       queueMicrotask(() => {
-        child.stdout.emit('data', 'scan output\n');
-        child.emit('close', 0);
+        c.stdout.emit('data', 'scan output\n');
+        c.emit('close', 0);
       });
-      return child;
+      return c;
     });
 
     const customInput = path.join(tempDir, 'my-archives');
@@ -579,21 +577,20 @@ describe('takeout routes', () => {
   // â”€â”€â”€ Custom workDir is passed to spawned scripts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('spawned action commands include --work-dir when custom dir is set', async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      stdout: EventEmitter;
-      stderr: EventEmitter;
-      kill: ReturnType<typeof vi.fn>;
-    };
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    child.kill = vi.fn();
-
     spawnMock.mockImplementation(() => {
+      const c = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      c.stdout = new EventEmitter();
+      c.stderr = new EventEmitter();
+      c.kill = vi.fn();
       queueMicrotask(() => {
-        child.stdout.emit('data', 'scan output\n');
-        child.emit('close', 0);
+        c.stdout.emit('data', 'scan output\n');
+        c.emit('close', 0);
       });
-      return child;
+      return c;
     });
 
     const customWork = path.join(tempDir, 'my-work');
@@ -624,21 +621,20 @@ describe('takeout routes', () => {
   // â”€â”€â”€ Custom archiveDir adds --move-archives for upload/resume â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('spawned upload command includes --move-archives and --archive-dir when archiveDir is set', async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      stdout: EventEmitter;
-      stderr: EventEmitter;
-      kill: ReturnType<typeof vi.fn>;
-    };
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    child.kill = vi.fn();
-
     spawnMock.mockImplementation(() => {
+      const c = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      c.stdout = new EventEmitter();
+      c.stderr = new EventEmitter();
+      c.kill = vi.fn();
       queueMicrotask(() => {
-        child.stdout.emit('data', 'upload output\n');
-        child.emit('close', 0);
+        c.stdout.emit('data', 'upload output\n');
+        c.emit('close', 0);
       });
-      return child;
+      return c;
     });
 
     const archiveDir = path.join(tempDir, 'external-hd');
@@ -674,21 +670,20 @@ describe('takeout routes', () => {
   });
 
   it('spawned scan command does NOT include --move-archives when archiveDir is set', async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      stdout: EventEmitter;
-      stderr: EventEmitter;
-      kill: ReturnType<typeof vi.fn>;
-    };
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    child.kill = vi.fn();
-
     spawnMock.mockImplementation(() => {
+      const c = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      c.stdout = new EventEmitter();
+      c.stderr = new EventEmitter();
+      c.kill = vi.fn();
       queueMicrotask(() => {
-        child.stdout.emit('data', 'scan output\n');
-        child.emit('close', 0);
+        c.stdout.emit('data', 'scan output\n');
+        c.emit('close', 0);
       });
-      return child;
+      return c;
     });
 
     const archiveDir = path.join(tempDir, 'external-hd');

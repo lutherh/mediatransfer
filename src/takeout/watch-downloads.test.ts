@@ -42,6 +42,12 @@ class MockProvider implements CloudProvider {
 async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'watch-downloads-test-'));
   try {
+    // Pre-create a minimal state.json so uploader doesn't log ENOENT when
+    // processing archives found in the downloads folder.
+    await fs.writeFile(
+      path.join(dir, 'state.json'),
+      JSON.stringify({ version: 1, updatedAt: new Date().toISOString(), items: {} }),
+    );
     await run(dir);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });

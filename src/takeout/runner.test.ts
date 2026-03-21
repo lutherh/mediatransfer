@@ -204,6 +204,7 @@ describe('takeout/runner', () => {
       });
 
       await fs.mkdir(config.workDir, { recursive: true });
+      await fs.writeFile(config.statePath, JSON.stringify({ version: 1, updatedAt: new Date().toISOString(), items: {} }));
       const entry = await createEntry(dir, 'Album/IMG_2.jpg', '2025/12/13/Album/IMG_2.jpg');
       const manifestPath = path.join(config.workDir, 'manifest.jsonl');
       await persistManifestJsonl([entry], manifestPath);
