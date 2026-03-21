@@ -414,6 +414,10 @@ const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 5;
 /** Toolbar auto-hides after this many ms of inactivity. */
 const TOOLBAR_HIDE_MS = 3000;
+/** Minimum horizontal distance (px) for a touch gesture to count as a swipe. */
+const SWIPE_THRESHOLD_PX = 50;
+/** Horizontal distance must exceed vertical distance × this factor for a swipe. */
+const SWIPE_HORIZONTAL_RATIO = 1.5;
 
 /**
  * Full-screen media viewer with navigation, zoom, download, and info panel.
@@ -530,6 +534,8 @@ function Lightbox({
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (e.touches.length === 1) {
       touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } else {
+      touchStartRef.current = null;
     }
   }, []);
 
@@ -538,8 +544,7 @@ function Lightbox({
     const dx = e.changedTouches[0].clientX - touchStartRef.current.x;
     const dy = e.changedTouches[0].clientY - touchStartRef.current.y;
     touchStartRef.current = null;
-    // Only treat as swipe if horizontal movement dominates and exceeds threshold
-    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+    if (Math.abs(dx) > SWIPE_THRESHOLD_PX && Math.abs(dx) > Math.abs(dy) * SWIPE_HORIZONTAL_RATIO) {
       if (dx > 0 && index > 0) onNavigate(index - 1);
       else if (dx < 0 && index < items.length - 1) onNavigate(index + 1);
     }
