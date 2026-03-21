@@ -907,6 +907,8 @@ export function CatalogPage() {
     getNextPageParam: (lastPage) => lastPage.nextToken,
     initialPageParam: undefined as string | undefined,
     staleTime: 60_000,
+    retry: 3,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10_000),
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
@@ -1244,6 +1246,13 @@ export function CatalogPage() {
             <p className="mt-0.5 text-sm text-red-700">
               {itemsQuery.error instanceof Error ? itemsQuery.error.message : 'Check your connection and try refreshing the page.'}
             </p>
+            <button
+              type="button"
+              onClick={() => itemsQuery.refetch()}
+              className="mt-2 rounded bg-red-100 px-3 py-1 text-sm font-medium text-red-800 hover:bg-red-200 transition-colors"
+            >
+              Retry
+            </button>
           </div>
         </div>
       )}
