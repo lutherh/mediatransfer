@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { inferDateFromFilename, extractExifMetadata, extractVideoCreationDate } from '../utils/exif.js';
+import { isWrongDate } from '../utils/date-repair.js';
 import { MEDIA_EXTENSIONS } from '../utils/media-extensions.js';
 
 export type ManifestEntry = {
@@ -177,13 +178,13 @@ async function deriveCapturedDate(
   // 1. Prefer the Google Takeout sidecar JSON (photoTakenTime / creationTime)
   if (sidecarPath) {
     const fromSidecar = await readSidecarDate(sidecarPath);
-    if (fromSidecar) return fromSidecar;
+    if (fromSidecar && !isWrongDate(fromSidecar)) return fromSidecar;
   }
 
   // 2. Try to infer capture date from the filename (e.g. 20201217_155747.mp4, IMG_20231215_143022.MOV)
   const filename = path.basename(sourcePath);
   const fromFilename = inferDateFromFilename(filename);
-  if (fromFilename) return fromFilename;
+  if (fromFilename && !isWrongDate(fromFilename)) return fromFilename;
 
   // 3. Try EXIF metadata embedded in the file (DateTimeOriginal / CreateDate)
   try {
@@ -192,7 +193,7 @@ async function deriveCapturedDate(
       const buf = Buffer.alloc(EXIF_READ_BYTES);
       const { bytesRead } = await fd.read(buf, 0, EXIF_READ_BYTES, 0);
       const exif = await extractExifMetadata(buf.subarray(0, bytesRead));
-      if (exif.capturedAt) return exif.capturedAt;
+      if (exif.capturedAt && !isWrongDate(exif.capturedAt)) return exif.capturedAt;
     } finally {
       await fd.close();
     }
@@ -202,7 +203,7 @@ async function deriveCapturedDate(
 
   // 4. Try video container metadata (MP4/MOV moov/mvhd creation_time)
   const fromVideo = await extractVideoCreationDate(sourcePath);
-  if (fromVideo) return fromVideo;
+  if (fromVideo && !isWrongDate(fromVideo)) return fromVideo;
 
   // 5. No reliable date found — return undefined so the caller can use
   //    an 'unknown-date' path rather than silently filing under today's date.
