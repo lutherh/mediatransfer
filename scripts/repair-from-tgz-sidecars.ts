@@ -18,17 +18,18 @@ import path from 'node:path';
 import { createGunzip } from 'node:zlib';
 import { Parser as TarParser } from 'tar';
 import {
-  S3Client,
   ListObjectsV2Command,
-  HeadObjectCommand,
-  CopyObjectCommand,
-  DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import {
-  resolveScalewayEndpoint,
-  resolveScalewaySigningRegion,
-  validateScalewayConfig,
-} from '../src/providers/scaleway.js';
+  readNumberArg,
+  readStringArg,
+  createS3Helpers,
+  toDatePath,
+  computeNewKey,
+  isSuspiciousDate,
+  isMediaFile,
+  s3Move,
+} from './lib/repair-helpers.js';
 
 dotenv.config();
 
@@ -46,52 +47,9 @@ if (!tgzDir) {
   process.exit(1);
 }
 
-function readNumberArg(argv: string[], flag: string): number | undefined {
-  const idx = argv.indexOf(flag);
-  if (idx < 0 || idx + 1 >= argv.length) return undefined;
-  const val = Number(argv[idx + 1]);
-  return Number.isFinite(val) ? val : undefined;
-}
-
-function readStringArg(argv: string[], flag: string): string | undefined {
-  const idx = argv.indexOf(flag);
-  if (idx < 0 || idx + 1 >= argv.length) return undefined;
-  return argv[idx + 1];
-}
-
 // ── S3 config ───────────────────────────────────────────────────
 
-const scwConfig = validateScalewayConfig({
-  provider: 'scaleway',
-  region: process.env.SCW_REGION,
-  bucket: process.env.SCW_BUCKET,
-  accessKey: process.env.SCW_ACCESS_KEY,
-  secretKey: process.env.SCW_SECRET_KEY,
-  prefix: process.env.SCW_PREFIX,
-});
-
-const s3 = new S3Client({
-  region: resolveScalewaySigningRegion(scwConfig.region),
-  endpoint: resolveScalewayEndpoint(scwConfig.region),
-  credentials: {
-    accessKeyId: scwConfig.accessKey,
-    secretAccessKey: scwConfig.secretKey,
-  },
-  forcePathStyle: true,
-});
-
-const bucket = scwConfig.bucket;
-const s3Prefix = scwConfig.prefix ?? '';
-
-function fullKey(key: string): string {
-  return s3Prefix ? `${s3Prefix}/${key}` : key;
-}
-
-function stripPrefix(key: string): string {
-  if (!s3Prefix) return key;
-  const prefixed = `${s3Prefix}/`;
-  return key.startsWith(prefixed) ? key.slice(prefixed.length) : key;
-}
+const { s3, bucket, fullKey, stripPrefix } = createS3Helpers();
 
 // ── Step 1: Extract sidecar dates from .tgz archives ────────────
 
@@ -337,38 +295,6 @@ if (objects.length === 0) {
 
 // ── Step 3: Match S3 files to sidecar dates ─────────────────────
 
-const MEDIA_EXTENSIONS = new Set([
-  'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'dng', 'tif', 'tiff',
-  'mp4', 'mov', 'avi', 'm4v', '3gp', 'mkv', 'webm',
-]);
-
-function isMediaFile(key: string): boolean {
-  const ext = key.split('.').pop()?.toLowerCase() ?? '';
-  return MEDIA_EXTENSIONS.has(ext);
-}
-
-function toDatePath(date: Date): string {
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(date.getUTCDate()).padStart(2, '0');
-  return `${year}/${month}/${day}`;
-}
-
-function computeNewKey(oldKey: string, newDatePath: string): string {
-  if (oldKey.includes('unknown-date/')) {
-    const rest = oldKey.split('unknown-date/')[1];
-    return `transfers/${newDatePath}/${rest}`;
-  }
-  // Standard date path: transfers/YYYY/MM/DD/...
-  const parts = oldKey.split('/');
-  const rest = parts.slice(4).join('/');
-  return `transfers/${newDatePath}/${rest}`;
-}
-
-function isSuspiciousDate(date: Date): boolean {
-  return date.getUTCFullYear() >= new Date().getFullYear();
-}
-
 type MoveOp = {
   oldKey: string;
   newKey: string;
@@ -477,86 +403,33 @@ let moveCompleted = 0;
 let moveErrors = 0;
 
 async function executeMoveOp(move: MoveOp): Promise<void> {
-  const sourceFullKey = fullKey(move.oldKey);
-  const destFullKey = fullKey(move.newKey);
+  const result = await s3Move(s3, bucket, fullKey(move.oldKey), fullKey(move.newKey), {
+    'captured-at': move.correctDate,
+  });
 
-  try {
-    // Check source still exists
-    try {
-      await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: sourceFullKey }));
-    } catch {
-      logRecords.push({
-        s3_old_path: move.oldKey,
-        s3_new_path: move.newKey,
-        captured_date: move.correctDate,
-        source_archive: move.sourceArchive,
-        sidecar_path: move.sidecarPath,
-        status: 'skipped',
-      });
-      moveCompleted++;
-      return;
-    }
+  const logEntry: LogRecord = {
+    s3_old_path: move.oldKey,
+    s3_new_path: move.newKey,
+    captured_date: move.correctDate,
+    source_archive: move.sourceArchive,
+    sidecar_path: move.sidecarPath,
+    status: result.ok ? 'moved' : 'failed',
+  };
+  logRecords.push(logEntry);
 
-    // Copy to new location with captured-at metadata
-    await s3.send(
-      new CopyObjectCommand({
-        Bucket: bucket,
-        CopySource: `${bucket}/${sourceFullKey}`,
-        Key: destFullKey,
-        MetadataDirective: 'REPLACE',
-        Metadata: { 'captured-at': move.correctDate },
-      }),
-    );
+  const stats = archiveStats.get(move.sourceArchive) ?? { total: 0, moved: 0, failed: 0 };
+  stats.total++;
 
-    // Verify the copy
-    try {
-      await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: destFullKey }));
-    } catch {
-      throw new Error(`Copy verification failed for ${move.newKey}`);
-    }
-
-    // Delete old location
-    await s3.send(
-      new DeleteObjectCommand({ Bucket: bucket, Key: sourceFullKey }),
-    );
-
-    logRecords.push({
-      s3_old_path: move.oldKey,
-      s3_new_path: move.newKey,
-      captured_date: move.correctDate,
-      source_archive: move.sourceArchive,
-      sidecar_path: move.sidecarPath,
-      status: 'moved',
-    });
-
+  if (result.ok) {
     moveCompleted++;
-    
-    // Track archive stats
-    const stats = archiveStats.get(move.sourceArchive) ?? { total: 0, moved: 0, failed: 0 };
-    stats.total++;
     stats.moved++;
-    archiveStats.set(move.sourceArchive, stats);
-  } catch (err) {
+  } else {
     moveErrors++;
-    
-    logRecords.push({
-      s3_old_path: move.oldKey,
-      s3_new_path: move.newKey,
-      captured_date: move.correctDate,
-      source_archive: move.sourceArchive,
-      sidecar_path: move.sidecarPath,
-      status: 'failed',
-    });
-    
-    // Track archive stats
-    const stats = archiveStats.get(move.sourceArchive) ?? { total: 0, moved: 0, failed: 0 };
-    stats.total++;
     stats.failed++;
-    archiveStats.set(move.sourceArchive, stats);
-    
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`\n   ❌ ${move.oldKey} → ${move.newKey}: ${msg}`);
+    console.error(`\n   ❌ ${move.oldKey} → ${move.newKey}: ${result.error}`);
   }
+
+  archiveStats.set(move.sourceArchive, stats);
 }
 
 for (let i = 0; i < moves.length; i += concurrency) {

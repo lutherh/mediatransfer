@@ -25,3 +25,4 @@ scripts/takeout-repair-exif.ts
 data/takeout/custom-paths.json
 data/takeout/state.json.pre-cleanup.bak
 data/takeout/state.json.pre-s3-repair.bak
+repair-output.txt
