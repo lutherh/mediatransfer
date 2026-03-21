@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { catalogThumbnailUrl } from '@/lib/api';
-import { useThumbnailQueue } from '@/lib/thumbnail-queue';
+import { useThumbnailQueue, isThumbnailFailed, markThumbnailFailed } from '@/lib/thumbnail-queue';
 import type { CatalogItem } from '@/lib/api';
 
 /**
@@ -35,12 +35,13 @@ export function Thumbnail({
   onShiftClick: (index: number) => void;
 }) {
   const [loaded, setLoaded] = useState(false);
-  const [thumbFailed, setThumbFailed] = useState(false);
   const isVideo = item.mediaType === 'video';
 
   // The virtualizer ensures this cell is visible — load immediately.
   const wantUrl = catalogThumbnailUrl(item.encodedKey, 'small', apiToken);
-  const { src: thumbSrc, markComplete } = useThumbnailQueue(wantUrl);
+  const alreadyFailed = isThumbnailFailed(wantUrl);
+  const [thumbFailed, setThumbFailed] = useState(alreadyFailed);
+  const { src: thumbSrc, markComplete } = useThumbnailQueue(alreadyFailed ? null : wantUrl);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
     if (e.shiftKey) {
@@ -89,7 +90,7 @@ export function Thumbnail({
             loaded ? 'opacity-100' : 'opacity-0'
           } ${!selectionMode ? 'group-hover:scale-105' : ''} ${selected ? 'brightness-75' : ''}`}
           onLoad={() => { markComplete(); setLoaded(true); }}
-          onError={() => { markComplete(); setThumbFailed(true); setLoaded(true); }}
+          onError={() => { markComplete(); markThumbnailFailed(wantUrl); setThumbFailed(true); setLoaded(true); }}
           draggable={false}
         />
       )}
