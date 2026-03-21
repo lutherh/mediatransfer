@@ -71,6 +71,24 @@ function requestSlot(): {
 }
 
 /**
+ * Set of thumbnail URLs that returned errors (e.g. 415 for videos without
+ * ffmpeg). Prevents remounted virtualizer cells from re-fetching URLs that
+ * are known to fail — avoids wasted queue slots and network requests on
+ * every scroll.
+ */
+const failedThumbnails = new Set<string>();
+
+/** Mark a URL as permanently failed so future mounts skip it. */
+export function markThumbnailFailed(url: string): void {
+  failedThumbnails.add(url);
+}
+
+/** Check whether a thumbnail URL is known to fail. */
+export function isThumbnailFailed(url: string): boolean {
+  return failedThumbnails.has(url);
+}
+
+/**
  * Hook that returns `src` only once the queue grants a loading slot.
  * Pass `null` to skip queueing (e.g. for videos).
  */
@@ -90,7 +108,7 @@ export function useThumbnailQueue(url: string | null): {
     markComplete();
     setSrc(null);
 
-    if (!url) return;
+    if (!url || failedThumbnails.has(url)) return;
 
     let disposed = false;
     const request = requestSlot();
