@@ -22,15 +22,17 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import {
   GetObjectCommand,
+  HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
 import { loadAllArchiveMetadata, type SidecarMetadata } from '../src/takeout/archive-metadata.js';
-import { extractExifMetadata, inferDateFromFilename } from '../src/utils/exif.js';
+import { extractExifMetadata, inferDateFromFilename, extractVideoCreationDateFromBuffer, extractVideoCreationDateFromMoov } from '../src/utils/exif.js';
 import type { UploadState } from '../src/takeout/uploader.js';
 import {
   readNumberArg,
   createS3Helpers,
   toDatePath,
+  computeNewKey,
   s3Move,
 } from './lib/repair-helpers.js';
 
@@ -95,17 +97,26 @@ if (wrongDateKeys.length === 0) {
 type MoveOp = {
   oldKey: string;
   newKey: string;
-  source: 'sidecar' | 'exif' | 'filename';
+  source: 'sidecar' | 'exif' | 'filename' | 'video';
 };
 
 console.log('\n🔍 Determining correct dates...');
-console.log(`   (Will download EXIF headers from S3 for files without sidecar dates)`);
+console.log(`   (Will download EXIF/video headers from S3 for files without sidecar dates)`);
 
 const EXIF_READ_BYTES = 256 * 1024;
+const MAX_MOOV_READ = 2 * 1024 * 1024; // 2 MB max moov atom read
+const VIDEO_EXT = new Set(['mp4', 'mov', 'm4v', '3gp', '3g2', 'avi', 'mkv', 'webm']);
+
+function isVideoKey(key: string): boolean {
+  const ext = key.split('.').pop()?.toLowerCase() ?? '';
+  return VIDEO_EXT.has(ext);
+}
+
 const moves: MoveOp[] = [];
 let fromSidecar = 0;
 let fromExif = 0;
 let fromFilename = 0;
+let fromVideo = 0;
 let noDateFound = 0;
 let exifErrors = 0;
 let processed = 0;
@@ -168,13 +179,13 @@ async function resolveDate(oldKey: string): Promise<MoveOp | null> {
     }
   }
 
-  // 3. Download EXIF header from S3
+  // 3. Download header from S3 and extract date (EXIF for images, moov/mvhd for videos)
   try {
-    const s3Key = fullKey(oldKey);
+    const objectKey = fullKey(oldKey);
     const resp = await s3.send(
       new GetObjectCommand({
         Bucket: bucket,
-        Key: s3Key,
+        Key: objectKey,
         Range: `bytes=0-${EXIF_READ_BYTES - 1}`,
       }),
     );
@@ -185,14 +196,68 @@ async function resolveDate(oldKey: string): Promise<MoveOp | null> {
         chunks.push(Buffer.from(chunk));
       }
       const buf = Buffer.concat(chunks);
-      const exif = await extractExifMetadata(buf);
 
-      if (exif.capturedAt && !isWrongDate(exif.capturedAt)) {
-        const newDatePath = toDatePath(exif.capturedAt);
-        const newKey = computeNewKey(oldKey, newDatePath);
-        if (newKey !== oldKey) {
-          fromExif++;
-          return { oldKey, newKey, source: 'exif' };
+      // For videos: try moov/mvhd atom parsing
+      if (isVideoKey(oldKey)) {
+        const result = extractVideoCreationDateFromBuffer(buf);
+        if (result.date && !isWrongDate(result.date)) {
+          const newDatePath = toDatePath(result.date);
+          const newKey = computeNewKey(oldKey, newDatePath);
+          if (newKey !== oldKey) {
+            fromVideo++;
+            return { oldKey, newKey, source: 'video' };
+          }
+        }
+
+        // moov is beyond the initial read — fetch from the computed offset
+        if (!result.date && result.moovOffset !== undefined) {
+          try {
+            // Get actual file size via HEAD
+            const head = await s3.send(
+              new HeadObjectCommand({ Bucket: bucket, Key: objectKey }),
+            );
+            const fileSize = head.ContentLength ?? 0;
+            if (result.moovOffset < fileSize) {
+              const moovEnd = Math.min(result.moovOffset + MAX_MOOV_READ, fileSize) - 1;
+              const moovResp = await s3.send(
+                new GetObjectCommand({
+                  Bucket: bucket,
+                  Key: objectKey,
+                  Range: `bytes=${result.moovOffset}-${moovEnd}`,
+                }),
+              );
+              if (moovResp.Body) {
+                const moovChunks: Buffer[] = [];
+                for await (const chunk of moovResp.Body as AsyncIterable<Uint8Array>) {
+                  moovChunks.push(Buffer.from(chunk));
+                }
+                const moovBuf = Buffer.concat(moovChunks);
+                const videoDate = extractVideoCreationDateFromMoov(moovBuf);
+                if (videoDate && !isWrongDate(videoDate)) {
+                  const newDatePath = toDatePath(videoDate);
+                  const newKey = computeNewKey(oldKey, newDatePath);
+                  if (newKey !== oldKey) {
+                    fromVideo++;
+                    return { oldKey, newKey, source: 'video' };
+                  }
+                }
+              }
+            }
+          } catch {
+            // moov fetch failed — fall through to no date
+          }
+        }
+      } else {
+        // For images: use EXIF parser
+        const exif = await extractExifMetadata(buf);
+
+        if (exif.capturedAt && !isWrongDate(exif.capturedAt)) {
+          const newDatePath = toDatePath(exif.capturedAt);
+          const newKey = computeNewKey(oldKey, newDatePath);
+          if (newKey !== oldKey) {
+            fromExif++;
+            return { oldKey, newKey, source: 'exif' };
+          }
         }
       }
     }
@@ -216,7 +281,7 @@ for (let i = 0; i < wrongDateKeys.length; i += concurrency) {
   if (processed % 100 === 0 || processed === wrongDateKeys.length) {
     process.stdout.write(
       `\r   ${processed}/${wrongDateKeys.length} checked — ` +
-        `${moves.length} to move (sidecar: ${fromSidecar}, exif: ${fromExif}, filename: ${fromFilename}) ` +
+        `${moves.length} to move (sidecar: ${fromSidecar}, exif: ${fromExif}, video: ${fromVideo}, filename: ${fromFilename}) ` +
         `| ${noDateFound} undetermined | ${exifErrors} errors`,
     );
   }
@@ -226,6 +291,7 @@ console.log('');
 console.log(`\n📊 Date resolution complete:`);
 console.log(`   From sidecar:  ${fromSidecar}`);
 console.log(`   From EXIF:     ${fromExif}`);
+console.log(`   From video:    ${fromVideo}`);
 console.log(`   From filename: ${fromFilename}`);
 console.log(`   No date found: ${noDateFound} (will stay in transfers/2026/)`);
 console.log(`   EXIF errors:   ${exifErrors}`);
