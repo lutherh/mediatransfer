@@ -1,15 +1,15 @@
 /** Wrapper to run the repair script and capture output cleanly. */
 import { execSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
+import path from 'node:path';
 
-const outputFile = 'c:\\dev\\PhotosBackup\\mediatransfer\\repair-output.txt';
+const outputFile = process.env.REPAIR_OUTPUT_FILE ?? path.resolve('repair-output.txt');
 const prefix = process.argv[2] || '2026/03/03';
 
 try {
   const result = execSync(
     `npx tsx scripts/repair-s3-dates-standalone.ts --prefix "${prefix}" --metadata-dir data/takeout/work/metadata --video --concurrency 6`,
     {
-      cwd: 'c:\\dev\\PhotosBackup\\mediatransfer',
       timeout: 15 * 60 * 1000,
       maxBuffer: 10 * 1024 * 1024,
       encoding: 'utf8',
@@ -26,8 +26,9 @@ try {
     .join('\n');
   writeFileSync(outputFile, cleaned, 'utf8');
   console.log(`✅ Done. Output: ${outputFile}`);
-} catch (err: any) {
-  const output = ((err.stdout || '') + '\n' + (err.stderr || '')).trim();
+} catch (err: unknown) {
+  const e = err as { stdout?: string; stderr?: string; status?: number };
+  const output = ((e.stdout || '') + '\n' + (e.stderr || '')).trim();
   writeFileSync(outputFile, output, 'utf8');
-  console.log(`❌ Error (exit code ${err.status}). Output: ${outputFile}`);
+  console.log(`❌ Error (exit code ${e.status}). Output: ${outputFile}`);
 }
