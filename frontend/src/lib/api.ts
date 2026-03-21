@@ -836,12 +836,18 @@ export async function fetchCatalogItems(opts: {
   if (opts.max !== undefined) url.searchParams.set('max', String(opts.max));
   if (opts.sort) url.searchParams.set('sort', opts.sort);
   if (opts.apiToken) url.searchParams.set('apiToken', opts.apiToken);
-  const response = await fetch(url.toString());
-  if (!response.ok) {
-    const raw = await response.text();
-    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch catalog items');
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), TAKEOUT_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url.toString(), { signal: controller.signal });
+    if (!response.ok) {
+      const raw = await response.text();
+      throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch catalog items');
+    }
+    return response.json();
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return response.json();
 }
 
 export async function deleteCatalogItems(encodedKeys: string[], apiToken?: string): Promise<void> {
