@@ -158,6 +158,8 @@ const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'avi', 'm4v', '3gp', 'mkv', 'web
 
 const DEFAULT_S3_REQUEST_TIMEOUT_MS = 300_000;
 const STATS_CACHE_TTL_MS = 5 * 60_000;
+/** After this fraction of the TTL, a background refresh is triggered. */
+const STALE_REFRESH_THRESHOLD = 0.75; // refresh at 3:45 of 5:00
 const DEFAULT_MAX_PAGE_RETRIES = 5;
 
 // ── Thumbnail configuration ─────────────────────────────────────────────────
@@ -338,8 +340,8 @@ export class ScalewayCatalogService implements CatalogService {
             keepAlive: true,      // reuse TCP connections – avoids slow-start & TLS handshake per request
             maxSockets: 25,       // Scaleway recommends parallelism; pool up to 25 concurrent connections
           }),
-          connectionTimeout: 10_000,  // 10s to establish TCP connection
-          requestTimeout: 60_000,     // 60s for the response to begin
+          connectionTimeout: 30_000,  // 30s to establish TCP connection (Scaleway can be slow)
+          requestTimeout: 120_000,    // 120s for the response to begin
         }),
       });
   }
@@ -439,11 +441,53 @@ export class ScalewayCatalogService implements CatalogService {
   }
 
   private async getItemsIndex(): Promise<CatalogItem[]> {
-    if (this.itemsIndexCache && Date.now() < this.itemsIndexCache.expiresAt) {
-      return this.itemsIndexCache.items;
+    const now = Date.now();
+    const cache = this.itemsIndexCache;
+
+    if (cache) {
+      // Cache is still valid — check if we should trigger a background refresh
+      if (now < cache.expiresAt) {
+        const age = now - (cache.expiresAt - STATS_CACHE_TTL_MS);
+        if (age > STATS_CACHE_TTL_MS * STALE_REFRESH_THRESHOLD && !this.itemsIndexInflight) {
+          // Background refresh — don't await, serve stale data immediately
+          this.itemsIndexInflight = this.listAll()
+            .then((items) => {
+              this.itemsIndexCache = { items, expiresAt: Date.now() + STATS_CACHE_TTL_MS };
+              this.statsCache = null; // stats will re-derive from fresh index
+              return items;
+            })
+            .catch((err) => {
+              console.warn('[catalog] Background index refresh failed, keeping stale cache', err);
+              return cache.items; // keep serving stale on failure
+            })
+            .finally(() => {
+              this.itemsIndexInflight = null;
+            });
+        }
+        return cache.items;
+      }
+
+      // Cache expired but we have stale data — return stale while refreshing
+      if (!this.itemsIndexInflight) {
+        this.itemsIndexInflight = this.listAll()
+          .then((items) => {
+            this.itemsIndexCache = { items, expiresAt: Date.now() + STATS_CACHE_TTL_MS };
+            return items;
+          })
+          .catch((err) => {
+            console.warn('[catalog] Index refresh failed, extending stale cache', err);
+            // Extend the stale cache so we don't hammer S3 on repeated failures
+            this.itemsIndexCache = { items: cache.items, expiresAt: Date.now() + 60_000 };
+            return cache.items;
+          })
+          .finally(() => {
+            this.itemsIndexInflight = null;
+          });
+      }
+      return cache.items; // serve stale immediately
     }
-    // Dedup concurrent callers — share one in-flight listAll() instead of
-    // launching parallel full scans that hammer S3 and cause timeouts.
+
+    // No cache at all — must block on initial load
     if (!this.itemsIndexInflight) {
       this.itemsIndexInflight = this.listAll()
         .then((items) => {
@@ -620,9 +664,9 @@ export class ScalewayCatalogService implements CatalogService {
     if (this.statsCache && Date.now() < this.statsCache.expiresAt) {
       return this.statsCache.data;
     }
-    // Dedup concurrent callers — derive stats from the items index.
-    // This avoids a separate full-bucket scan; getItemsIndex() already
-    // lists every object and deduplicates concurrent requests.
+    // Derive stats from the items index (which handles stale-while-revalidate).
+    // If we have stale stats + a stale index, return the stale stats while
+    // the index refreshes in the background.
     if (!this.statsInflight) {
       this.statsInflight = this.getItemsIndex()
         .then((items) => {
@@ -652,6 +696,14 @@ export class ScalewayCatalogService implements CatalogService {
 
           this.statsCache = { data: stats, expiresAt: Date.now() + STATS_CACHE_TTL_MS };
           return stats;
+        })
+        .catch((err) => {
+          // If we have stale stats, return them
+          if (this.statsCache) {
+            console.warn('[catalog] Stats refresh failed, serving stale', err);
+            return this.statsCache.data;
+          }
+          throw err;
         })
         .finally(() => {
           this.statsInflight = null;
