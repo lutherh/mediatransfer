@@ -12,6 +12,7 @@ import { CatalogPage } from '@/pages/catalog-page';
 import { CatalogDedupPage } from '@/pages/catalog-dedup-page';
 import { CatalogAlbumsPage } from '@/pages/catalog-albums-page';
 import { CatalogAlbumDetailPage } from '@/pages/catalog-album-detail-page';
+import { CatalogUndatedPage } from '@/pages/catalog-undated-page';
 import { UploadPage } from '@/pages/upload-page';
 import { SequenceAnalysisPage } from '@/pages/sequence-analysis-page';
 
@@ -33,6 +34,7 @@ export function App() {
             <Route element={<CatalogDedupPage />} path="catalog/dedup" />
             <Route element={<CatalogAlbumsPage />} path="catalog/albums" />
             <Route element={<CatalogAlbumDetailPage />} path="catalog/albums/:albumId" />
+            <Route element={<CatalogUndatedPage />} path="catalog/undated" />
             <Route element={<CostsPage />} path="costs" />
             <Route element={<SequenceAnalysisPage />} path="takeout/sequences" />
             <Route element={<NewTransferPage />} path="transfers/new" />
