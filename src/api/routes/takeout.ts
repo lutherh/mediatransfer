@@ -17,6 +17,8 @@ import {
 } from '../../takeout/pipeline-state.js';
 import {
   loadArchiveState,
+  createEmptyArchiveState,
+  persistArchiveState,
   reconcileStaleArchives,
   reconcileArchiveEntries,
   type ArchiveStateItem,
@@ -319,6 +321,52 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     }
     const envValue = env[def.envKey];
     return { name, value: envValue ? path.resolve(envValue) : undefined, reset: true };
+  });
+
+  // ── Reset upload state ────────────────────────────────────────────────
+  app.post('/takeout/reset-upload-state', {
+    config: { rateLimit: { max: 3, timeWindow: '1 minute' } },
+  }, async (_req, reply) => {
+    if (RUN_STATUS.running) {
+      return reply.code(409).send(
+        apiError('ACTION_ALREADY_RUNNING', 'Cannot reset upload state while an action is running'),
+      );
+    }
+
+    const statePath = path.resolve(env.TRANSFER_STATE_PATH);
+    const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
+    const archiveStatePath = path.join(workDir, 'archive-state.json');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+    try {
+      // Back up current state files before resetting
+      try {
+        await fs.copyFile(statePath, `${statePath}.pre-reset-${timestamp}.bak`);
+      } catch { /* file may not exist yet */ }
+      try {
+        await fs.copyFile(archiveStatePath, `${archiveStatePath}.pre-reset-${timestamp}.bak`);
+      } catch { /* file may not exist yet */ }
+
+      // Write clean upload state
+      const cleanState: UploadState = {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        items: {},
+      };
+      await fs.writeFile(statePath, JSON.stringify(cleanState, null, 2), 'utf8');
+
+      // Write clean archive state
+      const cleanArchiveState = createEmptyArchiveState();
+      await persistArchiveState(archiveStatePath, cleanArchiveState);
+
+      return {
+        message: 'Upload state reset successfully',
+        backedUp: { statePath: `${statePath}.pre-reset-${timestamp}.bak`, archiveStatePath: `${archiveStatePath}.pre-reset-${timestamp}.bak` },
+      };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return reply.code(500).send(apiError('INTERNAL_ERROR', `Failed to reset upload state: ${msg}`));
+    }
   });
 
   // Legacy convenience aliases (thin wrappers around the generic endpoints)
