@@ -27,6 +27,7 @@ import {
   fetchAlbums,
   createAlbum,
   updateAlbum,
+  moveCatalogItem,
   type Album,
   type CatalogItem,
   type CatalogStats,
@@ -36,6 +37,7 @@ import { Card } from '@/components/ui/card';
 import { DateScroller } from '@/components/date-scroller';
 import { VirtualizedGrid } from '@/components/virtualized-grid';
 import { formatBytes } from '@/lib/format';
+import { DateTimeEditor } from '@/components/catalog/date-time-editor';
 import { useApiToken } from '@/lib/use-api-token';
 
 // ── Stats bar ──────────────────────────────────────────────────────────────
@@ -330,7 +332,18 @@ function SelectionBar({
  * @pattern Google Photos info panel with camera details and location
  * @pattern Ente metadata sidebar
  */
-function InfoPanel({ item, apiToken }: { item: CatalogItem; apiToken: string | undefined }) {
+function InfoPanel({
+  item,
+  apiToken,
+  onDateChanged,
+}: {
+  item: CatalogItem;
+  apiToken: string | undefined;
+  /** Called after a successful date-move so the parent can close the lightbox and refresh. */
+  onDateChanged?: () => void;
+}) {
+  const queryClient = useQueryClient();
+
   const exifQuery = useQuery({
     queryKey: ['catalog-exif', item.encodedKey],
     queryFn: () => fetchCatalogExif(item.encodedKey, apiToken),
@@ -339,6 +352,41 @@ function InfoPanel({ item, apiToken }: { item: CatalogItem; apiToken: string | u
   });
 
   const exif = exifQuery.data;
+
+  // ── Date-edit mutation (moves the S3 object to a new YYYY/MM/DD folder) ──
+  const [saveResult, setSaveResult] = useState<'success' | 'error' | null>(null);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const moveMutation = useMutation({
+    mutationFn: ({ encodedKey, newDatePrefix }: { encodedKey: string; newDatePrefix: string }) =>
+      moveCatalogItem(encodedKey, newDatePrefix, apiToken),
+    onSuccess: () => {
+      setSaveResult('success');
+      // Pre-invalidate so the grid is ready when the lightbox closes.
+      void queryClient.invalidateQueries({ queryKey: ['catalog-items'] });
+      void queryClient.invalidateQueries({ queryKey: ['catalog-stats'] });
+      // Brief delay so the user sees the success confirmation, then close.
+      setTimeout(() => onDateChanged?.(), 1500);
+    },
+    onError: (err) => {
+      setSaveResult('error');
+      setErrorMsg(err instanceof Error ? err.message : 'Unknown error');
+    },
+  });
+
+  // Reset feedback when the viewed item changes.
+  useEffect(() => {
+    setSaveResult(null);
+    setErrorMsg('');
+  }, [item.encodedKey]);
+
+  const handleDateSave = useCallback(
+    (newDatePrefix: string) => {
+      setSaveResult(null);
+      moveMutation.mutate({ encodedKey: item.encodedKey, newDatePrefix });
+    },
+    [item.encodedKey, moveMutation],
+  );
 
   return (
     <div
@@ -357,10 +405,22 @@ function InfoPanel({ item, apiToken }: { item: CatalogItem; apiToken: string | u
           <dt className="font-medium text-white/50">Size</dt>
           <dd>{formatBytes(item.size)}</dd>
         </div>
+
+        {/* ── Editable date (Windows 11 Photos style) ── */}
         <div>
-          <dt className="font-medium text-white/50">Captured</dt>
-          <dd>{item.capturedAt}</dd>
+          <dt className="mb-1.5 font-medium text-white/50">Captured</dt>
+          <dd>
+            <DateTimeEditor
+              capturedAt={item.capturedAt}
+              itemKey={item.key}
+              onSave={handleDateSave}
+              isSaving={moveMutation.isPending}
+              saveResult={saveResult}
+              errorMessage={errorMsg}
+            />
+          </dd>
         </div>
+
         <div>
           <dt className="font-medium text-white/50">Last Modified</dt>
           <dd>{item.lastModified}</dd>
@@ -440,12 +500,14 @@ function Lightbox({
   apiToken,
   onClose,
   onNavigate,
+  onDateChanged,
 }: {
   items: CatalogItem[];
   index: number;
   apiToken: string | undefined;
   onClose: () => void;
   onNavigate: (index: number) => void;
+  onDateChanged: () => void;
 }) {
   const item = items[index];
   // Full-resolution URL for download only
@@ -687,7 +749,7 @@ function Lightbox({
 
       {/* ── Info / metadata overlay (Ente-inspired + Google Photos EXIF) ── */}
       {showInfo && (
-        <InfoPanel item={item} apiToken={apiToken} />
+        <InfoPanel item={item} apiToken={apiToken} onDateChanged={onDateChanged} />
       )}
     </div>
   );
@@ -1113,6 +1175,13 @@ export function CatalogPage() {
   const handleClose = useCallback(() => setLightboxIndex(null), []);
   const handleNavigate = useCallback((i: number) => setLightboxIndex(i), []);
 
+  /** Close the lightbox and refresh the grid after a successful date move. */
+  const handleDateChanged = useCallback(() => {
+    setLightboxIndex(null);
+    void queryClient.invalidateQueries({ queryKey: ['catalog-items'] });
+    void queryClient.invalidateQueries({ queryKey: ['catalog-stats'] });
+  }, [queryClient]);
+
   // ── Scroll-to-date (wired from VirtualizedGrid via onRegisterScrollToDate) ──
   const scrollToDateRef = useRef<((date: string) => void) | null>(null);
   const scrollToDate = useCallback((date: string) => {
@@ -1372,6 +1441,7 @@ export function CatalogPage() {
           apiToken={apiToken}
           onClose={handleClose}
           onNavigate={handleNavigate}
+          onDateChanged={handleDateChanged}
         />
       )}
     </div>
