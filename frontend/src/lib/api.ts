@@ -480,6 +480,22 @@ export async function resetTakeoutPath(
   return response.json();
 }
 
+export async function resetUploadState(): Promise<{ message: string }> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/takeout/reset-upload-state`,
+    { method: 'POST' },
+    TAKEOUT_FETCH_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const raw = await response.text();
+    const message = parseApiErrorMessage(raw) ?? 'Failed to reset upload state';
+    throw new Error(message);
+  }
+
+  return response.json();
+}
+
 /* ── Legacy wrappers (kept for backward compatibility) ──────── */
 
 export const updateTakeoutInputDir = (dir: string) =>
