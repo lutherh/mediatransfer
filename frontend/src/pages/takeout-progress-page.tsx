@@ -607,6 +607,12 @@ export function TakeoutProgressPage() {
               <p className="text-[10px] text-slate-400 mt-0.5 ml-[4.5rem]">
                 External HD path for archiving .tgz files after upload. When set, each archive is automatically moved here once uploaded, freeing space on the main drive.
               </p>
+              {data.paths.archiveDir && data.paths.inputDir &&
+                data.paths.archiveDir.replace(/[\\/]+$/, '').toLowerCase() === data.paths.inputDir.replace(/[\\/]+$/, '').toLowerCase() && (
+                <p className="text-[10px] text-amber-600 mt-0.5 ml-[4.5rem]">
+                  ⚠ Archive and Input point to the same directory — archives will stay in place after upload (nothing moved or deleted).
+                </p>
+              )}
             </div>
             <PathRow label="Manifest" value={data.paths.manifestPath} />
             <PathRow label="State"    value={data.paths.statePath}    />
