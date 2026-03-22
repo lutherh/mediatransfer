@@ -1147,7 +1147,7 @@ export function CatalogPage() {
               to="/catalog/undated"
               className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
             >
-              📅 Undated ({statsQuery.data!.undatedCount.toLocaleString()})
+              📅 Undated ({statsQuery.data?.undatedCount.toLocaleString()})
             </Link>
           )}
         </div>
