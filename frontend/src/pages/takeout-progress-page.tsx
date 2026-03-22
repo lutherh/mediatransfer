@@ -12,6 +12,7 @@ import {
   setAutoUpload,
   updateTakeoutPath,
   resetTakeoutPath,
+  resetUploadState,
   type TakeoutAction,
   type TakeoutArchiveHistoryEntry,
   type ScanProgress,
@@ -576,6 +577,11 @@ export function TakeoutProgressPage() {
         </div>
       )}
 
+      {/* Reset upload state — danger zone (always visible when manifest exists) */}
+      {hasManifest && data.counts.uploaded > 0 && (
+        <ResetUploadStateSection busy={busy} />
+      )}
+
       {/* Stats row */}
       {hasManifest && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 px-1">
@@ -933,6 +939,65 @@ function StatChip({
 }
 
 // ─── Cleanup option card ──────────────────────────────────────────────────────
+
+function ResetUploadStateSection({ busy }: { busy: boolean }): ReactElement {
+  const queryClient = useQueryClient();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const resetMutation = useMutation({
+    mutationFn: resetUploadState,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['takeout-status'] });
+      setConfirmOpen(false);
+    },
+  });
+
+  return (
+    <div className="rounded-xl border border-red-200 bg-red-50 p-4 space-y-2">
+      <div className="flex items-start gap-2">
+        <span className="text-red-500 text-base leading-none mt-0.5" aria-hidden>⚠</span>
+        <div>
+          <p className="text-sm font-semibold text-red-900">Reset upload state</p>
+          <p className="text-xs text-red-700 mt-0.5">
+            Clears all upload tracking so the next upload re-processes every archive from scratch.
+            Use this if S3 was emptied or you need a clean re-upload. Current state files are backed up automatically.
+          </p>
+        </div>
+      </div>
+      {!confirmOpen ? (
+        <Button
+          className="border border-red-300 bg-white text-red-700 hover:bg-red-50 disabled:opacity-40"
+          type="button"
+          disabled={busy}
+          onClick={() => setConfirmOpen(true)}
+        >
+          Reset upload state…
+        </Button>
+      ) : (
+        <div className="flex items-center gap-2">
+          <Button
+            className="border border-red-400 bg-red-600 text-white hover:bg-red-700 disabled:opacity-40"
+            type="button"
+            disabled={busy || resetMutation.isPending}
+            onClick={() => resetMutation.mutate()}
+          >
+            {resetMutation.isPending ? 'Resetting…' : 'Confirm reset'}
+          </Button>
+          <Button
+            className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+            type="button"
+            disabled={resetMutation.isPending}
+            onClick={() => setConfirmOpen(false)}
+          >
+            Cancel
+          </Button>
+          {resetMutation.isError && (
+            <span className="text-xs text-red-600">{(resetMutation.error as Error).message}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function CleanupOption({
   action,
