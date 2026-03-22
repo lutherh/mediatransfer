@@ -89,6 +89,7 @@ vi.mock('@/lib/api', () => ({
     exitCode: 0,
     output: [],
   })),
+  resetUploadState: vi.fn(async () => ({ message: 'Upload state reset' })),
   setAutoUpload: vi.fn(async () => ({ enabled: true })),
   runTakeoutAction: vi.fn(),
   createTransfer: vi.fn(),
