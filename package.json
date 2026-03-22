@@ -22,6 +22,7 @@
     "takeout:upload": "tsx scripts/takeout-upload.ts",
     "takeout:resume": "tsx scripts/takeout-resume.ts",
     "takeout:verify": "tsx scripts/takeout-verify.ts",
+    "takeout:repair-dates": "tsx scripts/takeout-repair-dates-enhanced.ts",
     "takeout:process": "tsx scripts/takeout-process.ts",
     "takeout:watch": "tsx scripts/takeout-watch.ts",
     "takeout:cleanup": "tsx scripts/takeout-cleanup.ts"
