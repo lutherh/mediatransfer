@@ -236,6 +236,74 @@ describe('takeout/manifest', () => {
     });
   });
 
+  it('finds truncated sidecar (e.g. .suppl.json instead of .supplemental-metadata.json)', async () => {
+    await withTempDir(async (dir) => {
+      const albumDir = path.join(dir, 'Google Photos', 'MyAlbum');
+      await fs.mkdir(albumDir, { recursive: true });
+
+      // Media file with UUID name
+      await fs.writeFile(path.join(albumDir, '2eaa1372-3da3-409d-8ef2-6c55c0fe299f.jpg'), 'img');
+
+      // Truncated sidecar — Google Takeout truncated the long suffix
+      await fs.writeFile(
+        path.join(albumDir, '2eaa1372-3da3-409d-8ef2-6c55c0fe299f.jpg.suppl.json'),
+        JSON.stringify({
+          photoTakenTime: { timestamp: '1614597079' }, // 2021-03-01T11:11:19Z
+        }),
+      );
+
+      const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
+      expect(entry.datePath).toBe('2021/03/01');
+      expect(entry.sidecarPath).toContain('.suppl.json');
+    });
+  });
+
+  it('finds sidecar in encoding-variant sibling directory', async () => {
+    await withTempDir(async (dir) => {
+      const gpRoot = path.join(dir, 'Google Photos');
+      // Simulate tar encoding split: media in one dir, sidecar in another
+      const mediaDir = path.join(gpRoot, 'Album b\u00A9rnehaven');   // b©rnehaven
+      const sidecarDir = path.join(gpRoot, 'Album b\u00F8rnehaven'); // børnehaven
+      await fs.mkdir(mediaDir, { recursive: true });
+      await fs.mkdir(sidecarDir, { recursive: true });
+
+      await fs.writeFile(path.join(mediaDir, 'photo.jpg'), 'img');
+      await fs.writeFile(
+        path.join(sidecarDir, 'photo.jpg.supplemental-metadata.json'),
+        JSON.stringify({
+          photoTakenTime: { timestamp: '1614597079' }, // 2021-03-01
+        }),
+      );
+
+      const [entry] = await buildManifest(gpRoot);
+      expect(entry.datePath).toBe('2021/03/01');
+      expect(entry.sidecarPath).toContain('rnehaven');
+    });
+  });
+
+  it('finds truncated sidecar in encoding-variant sibling directory', async () => {
+    await withTempDir(async (dir) => {
+      const gpRoot = path.join(dir, 'Google Photos');
+      const mediaDir = path.join(gpRoot, 'Album b\u00A9rnehaven');
+      const sidecarDir = path.join(gpRoot, 'Album b\u00F8rnehaven');
+      await fs.mkdir(mediaDir, { recursive: true });
+      await fs.mkdir(sidecarDir, { recursive: true });
+
+      // UUID media file in one encoding dir
+      await fs.writeFile(path.join(mediaDir, '2eaa1372.jpg'), 'img');
+      // Truncated sidecar in the other encoding dir
+      await fs.writeFile(
+        path.join(sidecarDir, '2eaa1372.jpg.suppl.json'),
+        JSON.stringify({
+          photoTakenTime: { timestamp: '1614597079' },
+        }),
+      );
+
+      const [entry] = await buildManifest(gpRoot);
+      expect(entry.datePath).toBe('2021/03/01');
+    });
+  });
+
   it('rejects EXIF date that is impossibly far in the future', async () => {
     await withTempDir(async (dir) => {
       const mediaRoot = path.join(dir, 'Google Photos', 'Album');
