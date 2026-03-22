@@ -138,6 +138,24 @@ export async function registerCatalogRoutes(
     return { items };
   });
 
+  app.get('/catalog/api/undated', async (_req, reply) => {
+    const catalogService = requireCatalog(catalog, reply);
+    if (!catalogService) {
+      return;
+    }
+
+    try {
+      const items = await catalogService.listUndated();
+      return { items };
+    } catch (err) {
+      const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+      const status = isTimeout ? 503 : 500;
+      const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to list undated items';
+      console.error('[catalog] /catalog/api/undated error:', err);
+      return reply.status(status).send({ error: message });
+    }
+  });
+
   app.delete('/catalog/api/items', async (req, reply) => {
     const catalogService = requireCatalog(catalog, reply);
     if (!catalogService) {
