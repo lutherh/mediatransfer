@@ -284,11 +284,15 @@ describe('CatalogPage', () => {
     fireEvent.change(input, { target: { value: 'missing-folder' } });
 
     expect(await screen.findByText('No media found matching "missing-folder"')).toBeInTheDocument();
+    expect(fetchCatalogItems).toHaveBeenCalledWith(
+      expect.objectContaining({ prefix: 'missing-folder' }),
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
 
     expect(await screen.findByDisplayValue('')).toBeInTheDocument();
     expect(screen.queryByText('No media found matching "missing-folder"')).not.toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Start photo transfer' })).toHaveAttribute('href', '/');
   });
 });
 
