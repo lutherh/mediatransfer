@@ -289,6 +289,12 @@ export function TakeoutProgressPage() {
               </p>
             </div>
           )}
+          {actionStatus?.action === 'repair-dates' && (
+            <p className="text-xs text-slate-500">
+              Checking uploaded files for wrong date paths and moving only the ones that can be resolved.
+              You can run this again later if more files need fixing.
+            </p>
+          )}
           {/* Live activity indicators */}
           {(actionStatus?.action === 'upload' || actionStatus?.action === 'resume') && (
             <UploadActivityIndicator
@@ -511,14 +517,28 @@ export function TakeoutProgressPage() {
                 </p>
               </div>
             </div>
-            <Button
-              className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-              type="button"
-              disabled={busy}
-              onClick={() => run('verify')}
-            >
-              Verify in cloud
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                type="button"
+                disabled={busy}
+                onClick={() => run('verify')}
+              >
+                Verify in cloud
+              </Button>
+              <Button
+                className="border border-amber-300 bg-white text-amber-800 hover:bg-amber-50 disabled:opacity-40"
+                type="button"
+                disabled={busy}
+                onClick={() => run('repair-dates')}
+              >
+                Repair wrong dates
+              </Button>
+            </div>
+            <p className="text-xs text-amber-800">
+              Uses uploaded files, saved Takeout metadata, and embedded media timestamps to move resolvable files out of bad date folders.
+              Safe to run again if more fixes are needed.
+            </p>
           </Card>
 
           {/* Only show cleanup zone if archive files are still sitting in the input folder */}
@@ -607,6 +627,12 @@ export function TakeoutProgressPage() {
               <p className="text-[10px] text-slate-400 mt-0.5 ml-[4.5rem]">
                 External HD path for archiving .tgz files after upload. When set, each archive is automatically moved here once uploaded, freeing space on the main drive.
               </p>
+              {data.paths.archiveDir && data.paths.inputDir &&
+                data.paths.archiveDir.replace(/[\\/]+$/, '').toLowerCase() === data.paths.inputDir.replace(/[\\/]+$/, '').toLowerCase() && (
+                <p className="text-[10px] text-amber-600 mt-0.5 ml-[4.5rem]">
+                  ⚠ Archive and Input point to the same directory — archives will stay in place after upload (nothing moved or deleted).
+                </p>
+              )}
             </div>
             <PathRow label="Manifest" value={data.paths.manifestPath} />
             <PathRow label="State"    value={data.paths.statePath}    />
@@ -1343,6 +1369,7 @@ function mapActionLabel(action: TakeoutAction): string {
     upload:                'Upload',
     verify:                'Verify',
     resume:                'Resume',
+    'repair-dates':        'Repair wrong dates',
     pause:                 'Pause',
     'start-services':      'Start services',
     'cleanup-move':        'Cleanup (move archives)',

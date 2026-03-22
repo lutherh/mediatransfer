@@ -30,6 +30,7 @@ type TakeoutAction =
   | 'upload'
   | 'verify'
   | 'resume'
+  | 'repair-dates'
   | 'start-services'
   | 'cleanup-move'
   | 'cleanup-delete'
@@ -115,6 +116,7 @@ const ALLOWED_ACTIONS: TakeoutAction[] = [
   'upload',
   'verify',
   'resume',
+  'repair-dates',
   'start-services',
   'cleanup-move',
   'cleanup-delete',
@@ -1009,6 +1011,7 @@ function resolveActionCommands(action: TakeoutAction): ActionCommand[] {
     upload: 'takeout:upload',
     verify: 'takeout:verify',
     resume: 'takeout:resume',
+    'repair-dates': 'takeout:repair-dates -- --apply',
     'cleanup-move': 'takeout:cleanup -- --apply --move-archives --include-unscanned',
     'cleanup-delete': 'takeout:cleanup -- --apply --delete-archives --include-unscanned',
     'cleanup-force-move': 'takeout:cleanup -- --apply --move-archives --force --include-unscanned',
