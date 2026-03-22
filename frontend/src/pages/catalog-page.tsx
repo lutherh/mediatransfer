@@ -325,6 +325,9 @@ function SelectionBar({
 
 // ── Lightbox info panel ────────────────────────────────────────────────────
 
+/** How long (ms) to show the "✓ Moved" confirmation before closing the lightbox. */
+const DATE_SAVE_FEEDBACK_MS = 1500;
+
 /**
  * Rich metadata overlay for the lightbox. Shows basic file properties plus
  * EXIF data (dimensions, camera, GPS) fetched on demand via `fetchCatalogExif`.
@@ -366,7 +369,7 @@ function InfoPanel({
       void queryClient.invalidateQueries({ queryKey: ['catalog-items'] });
       void queryClient.invalidateQueries({ queryKey: ['catalog-stats'] });
       // Brief delay so the user sees the success confirmation, then close.
-      setTimeout(() => onDateChanged?.(), 1500);
+      setTimeout(() => onDateChanged?.(), DATE_SAVE_FEEDBACK_MS);
     },
     onError: (err) => {
       setSaveResult('error');
