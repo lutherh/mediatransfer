@@ -164,6 +164,7 @@ export type TakeoutAction =
   | 'upload'
   | 'verify'
   | 'resume'
+  | 'repair-dates'
   | 'pause'
   | 'start-services'
   | 'cleanup-move'

@@ -509,6 +509,13 @@ async function cleanupDir(dirPath: string): Promise<void> {
 }
 
 async function moveArchiveToCompletedDir(archivePath: string, completedDir: string): Promise<void> {
+  // Skip move if the archive is already in the target directory (e.g. Input === Archive)
+  const sourceDir = path.resolve(path.dirname(archivePath));
+  const targetDir = path.resolve(completedDir);
+  if (sourceDir.toLowerCase() === targetDir.toLowerCase()) {
+    return;
+  }
+
   await fs.mkdir(completedDir, { recursive: true });
   const archiveName = path.basename(archivePath);
   const destinationPath = await getUniqueDestinationPath(completedDir, archiveName);

@@ -193,6 +193,54 @@ describe('takeout/runner', () => {
     });
   });
 
+  it('refines unknown-date entries using metadata from another scanned archive before writing the manifest', async () => {
+    await withTempDir(async (dir) => {
+      const inputDir = path.join(dir, 'input');
+      const workDir = path.join(dir, 'work');
+      await fs.mkdir(inputDir, { recursive: true });
+      await fs.writeFile(path.join(inputDir, 'takeout-1.zip'), 'archive-1');
+      await fs.writeFile(path.join(inputDir, 'takeout-2.zip'), 'archive-2');
+
+      const config = withDefaults({
+        inputDir,
+        workDir,
+        statePath: path.join(dir, 'state.json'),
+      });
+
+      const result = await runTakeoutScan(config, async (archivePath, destinationDir) => {
+        const archiveName = path.basename(archivePath);
+        const mediaDir = path.join(destinationDir, 'Takeout', 'Google Photos');
+
+        if (archiveName === 'takeout-1.zip') {
+          const otherAlbum = path.join(mediaDir, 'Other Album');
+          await fs.mkdir(otherAlbum, { recursive: true });
+          const mediaPath = path.join(otherAlbum, 'IMG_0031.MOV');
+          await fs.writeFile(mediaPath, 'video-from-archive-1');
+          await fs.writeFile(
+            `${mediaPath}.json`,
+            JSON.stringify({
+              photoTakenTime: { timestamp: '1496563200' },
+            }),
+          );
+        } else {
+          const familyAlbum = path.join(mediaDir, 'Familie og venner');
+          await fs.mkdir(familyAlbum, { recursive: true });
+          await fs.writeFile(path.join(familyAlbum, 'IMG_0031.MOV'), 'video-from-archive-2');
+        }
+      });
+
+      expect(result.entryCount).toBe(2);
+
+      const manifestRaw = await fs.readFile(path.join(workDir, 'manifest.jsonl'), 'utf8');
+      const manifest = manifestRaw.trim().split('\n').map((line) => JSON.parse(line) as ManifestEntry);
+      const refined = manifest.find((entry) => entry.relativePath === 'Familie og venner/IMG_0031.MOV');
+
+      expect(refined).toBeDefined();
+      expect(refined?.datePath).toBe('2017/06/04');
+      expect(refined?.destinationKey).toBe('transfers/2017/06/04/Familie_og_venner/IMG_0031.MOV');
+    });
+  });
+
   it('runs upload then resume and skips already uploaded entries', async () => {
     await withTempDir(async (dir) => {
       const provider = new MockProvider();
