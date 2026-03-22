@@ -13,6 +13,7 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { CatalogPage } from './catalog-page';
+import { fetchCatalogItems } from '@/lib/api';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -255,6 +256,43 @@ describe('CatalogPage', () => {
     renderCatalogPage();
     expect(await screen.findByText('June')).toBeInTheDocument();
     expect(await screen.findByText('March')).toBeInTheDocument();
+  });
+
+  it('shows actionable links when the catalog is empty', async () => {
+    vi.mocked(fetchCatalogItems).mockResolvedValueOnce({
+      items: [],
+      nextToken: undefined,
+    });
+
+    renderCatalogPage();
+
+    expect(await screen.findByText('No media in the catalog yet')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Start photo transfer' })).toHaveAttribute('href', '/');
+    expect(screen.getByRole('link', { name: 'Upload files' })).toHaveAttribute('href', '/upload');
+    expect(screen.getByRole('link', { name: 'Open Takeout import' })).toHaveAttribute('href', '/takeout');
+  });
+
+  it('offers a clear-search action when filtering returns no results', async () => {
+    vi.mocked(fetchCatalogItems).mockResolvedValue({
+      items: [],
+      nextToken: undefined,
+    });
+
+    renderCatalogPage();
+
+    const input = await screen.findByPlaceholderText(/Search by date or folder/);
+    fireEvent.change(input, { target: { value: 'missing-folder' } });
+
+    expect(await screen.findByText('No media found matching "missing-folder"')).toBeInTheDocument();
+    expect(fetchCatalogItems).toHaveBeenCalledWith(
+      expect.objectContaining({ prefix: 'missing-folder' }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+
+    expect(await screen.findByDisplayValue('')).toBeInTheDocument();
+    expect(screen.queryByText('No media found matching "missing-folder"')).not.toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Start photo transfer' })).toHaveAttribute('href', '/');
   });
 });
 
