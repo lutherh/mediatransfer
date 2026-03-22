@@ -8,6 +8,7 @@ import {
   deduplicateManifest,
   partialFileHash,
   persistManifestJsonl,
+  refineDatesFromAllMetadata,
   refineDatesFromMetadata,
   scoreEntryForKeep,
   type ManifestEntry,
@@ -745,15 +746,46 @@ describe('refineDatesFromMetadata', () => {
 
     const result = refineDatesFromMetadata(entries, metadata);
     expect(result.refinedCount).toBe(1);
+    expect(result.breakdown.basenameMatch).toBe(0);
     expect(result.breakdown.stemCrossExtension).toBe(1);
     expect(entries[0].datePath).toBe('2022/10/01');
     expect(entries[0].destinationKey).toBe('transfers/2022/10/01/Album/IMG_0917.MP4');
+  });
+
+  it('resolves unknown-date entry from a unique basename match with the same file size', () => {
+    const entries = [
+      makeEntry({
+        destinationKey: 'transfers/unknown-date/Familie_og_venner/IMG_0031.MOV',
+        relativePath: 'Familie og venner/IMG_0031.MOV',
+        capturedAt: '2026-03-15T20:16:02.384Z',
+        datePath: 'unknown-date',
+        size: 50000,
+      }),
+    ];
+
+    const metadata = makeMetadata([
+      {
+        destinationKey: 'transfers/2017/06/04/Pinse_i_Losning/IMG_0031.MOV',
+        relativePath: 'Pinse i Losning/IMG_0031.MOV',
+        album: 'Pinse i Losning',
+        sizeBytes: 50000,
+        capturedAt: '2017-06-04T08:00:00.000Z',
+        sidecar: { photoTakenTime: '4 Jun 2017, 08:00:00 UTC' },
+      },
+    ]);
+
+    const result = refineDatesFromMetadata(entries, metadata);
+    expect(result.refinedCount).toBe(1);
+    expect(result.breakdown.basenameMatch).toBe(1);
+    expect(entries[0].datePath).toBe('2017/06/04');
+    expect(entries[0].destinationKey).toBe('transfers/2017/06/04/Familie_og_venner/IMG_0031.MOV');
   });
 
   it('resolves date via album median when no sidecar match', () => {
     const entries = [
       makeEntry({
         destinationKey: 'transfers/2040/03/15/Vacation/random_file.gif',
+        relativePath: 'Vacation/random_file.gif',
         capturedAt: '2040-03-15T00:00:00.000Z',
         datePath: '2040/03/15',
       }),
@@ -804,6 +836,7 @@ describe('refineDatesFromMetadata', () => {
     const entries = [
       makeEntry({
         destinationKey: 'transfers/2040/03/15/Tiny/file.gif',
+        relativePath: 'Tiny/file.gif',
         capturedAt: '2040-03-15T00:00:00.000Z',
         datePath: '2040/03/15',
       }),
@@ -891,6 +924,36 @@ describe('refineDatesFromMetadata', () => {
     expect(result.refinedCount).toBe(1);
     // Should be editedToOriginal, not stemCrossExtension
     expect(result.breakdown.editedToOriginal).toBe(1);
+    expect(result.breakdown.basenameMatch).toBe(0);
     expect(result.breakdown.stemCrossExtension).toBe(0);
+  });
+
+  it('can refine from metadata gathered across multiple archives', () => {
+    const entries = [
+      makeEntry({
+        destinationKey: 'transfers/unknown-date/Familie_og_venner/IMG_6222.HEIC',
+        relativePath: 'Familie og venner/IMG_6222.HEIC',
+        capturedAt: '2026-03-15T20:16:02.384Z',
+        datePath: 'unknown-date',
+        size: 12345,
+      }),
+    ];
+
+    const metadataA = makeMetadata([
+      {
+        destinationKey: 'transfers/2016/07/23/Other_Album/IMG_6222.HEIC',
+        relativePath: 'Other Album/IMG_6222.HEIC',
+        album: 'Other Album',
+        sizeBytes: 12345,
+        capturedAt: '2016-07-23T09:10:11.000Z',
+        sidecar: { photoTakenTime: '23 Jul 2016, 09:10:11 UTC' },
+      },
+    ]);
+    const metadataB = makeMetadata([]);
+
+    const result = refineDatesFromAllMetadata(entries, [metadataA, metadataB]);
+    expect(result.refinedCount).toBe(1);
+    expect(result.breakdown.basenameMatch).toBe(1);
+    expect(entries[0].datePath).toBe('2016/07/23');
   });
 });
