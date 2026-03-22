@@ -165,7 +165,116 @@ async function findSidecarPath(sourcePath: string): Promise<string | undefined> 
 
   // Check all candidates in parallel — return the first that exists
   const results = await Promise.all(candidates.map((c) => exists(c).then((ok) => ok ? c : null)));
-  return results.find((r) => r !== null) ?? undefined;
+  const exactMatch = results.find((r) => r !== null);
+  if (exactMatch) return exactMatch;
+
+  // Fallback: Google Takeout truncates long paths, so
+  // "IMG.jpg.supplemental-metadata.json" may become "IMG.jpg.suppl.json" etc.
+  const mediaBasenames = [parsed.base];
+  if (dupMatch) mediaBasenames.push(`${dupMatch[1]}${parsed.ext}`);
+
+  for (const basename of mediaBasenames) {
+    const truncated = await findTruncatedSidecar(parsed.dir, basename);
+    if (truncated) return truncated;
+  }
+
+  // Fallback: encoding-variant sibling directories.
+  // Google Takeout tar archives sometimes encode special characters differently
+  // for media files vs sidecar JSON files, resulting in two directories for the
+  // same album (e.g. "børnehaven" vs "b©rnehaven").
+  const siblingDirs = await findEncodingVariantDirs(parsed.dir);
+  for (const sibDir of siblingDirs) {
+    // Try exact candidates in sibling dir
+    const sibCandidates = [
+      path.join(sibDir, `${parsed.base}.json`),
+      path.join(sibDir, `${parsed.name}.json`),
+      path.join(sibDir, `${parsed.base}.supplemental-metadata.json`),
+    ];
+    const sibResults = await Promise.all(
+      sibCandidates.map((c) => exists(c).then((ok) => ok ? c : null)),
+    );
+    const sibMatch = sibResults.find((r) => r !== null);
+    if (sibMatch) return sibMatch;
+
+    // Try truncated variants in sibling dir
+    for (const basename of mediaBasenames) {
+      const sibTruncated = await findTruncatedSidecar(sibDir, basename);
+      if (sibTruncated) return sibTruncated;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Search a directory for a truncated sidecar JSON file.
+ * Google Takeout truncates long filenames in archives, so
+ * "photo.jpg.supplemental-metadata.json" may become "photo.jpg.suppl.json",
+ * "photo.jpg.supplemental-me.json", "photo.jpg.s.json", etc.
+ */
+async function findTruncatedSidecar(
+  dir: string,
+  mediaBasename: string,
+): Promise<string | undefined> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dir);
+  } catch {
+    return undefined;
+  }
+
+  const prefix = mediaBasename + '.';
+  const exactFull = `${mediaBasename}.supplemental-metadata.json`;
+  const exactShort = `${mediaBasename}.json`;
+
+  for (const entry of entries) {
+    if (!entry.endsWith('.json')) continue;
+    if (!entry.startsWith(prefix)) continue;
+    // Skip candidates already tried as exact matches
+    if (entry === exactFull || entry === exactShort) continue;
+    return path.join(dir, entry);
+  }
+  return undefined;
+}
+
+/**
+ * Find sibling directories whose names are encoding variants of the target.
+ * Strips non-ASCII characters from both names and compares; directories that
+ * differ only in their encoding of special characters will match.
+ */
+async function findEncodingVariantDirs(targetDir: string): Promise<string[]> {
+  const parentDir = path.dirname(targetDir);
+  const targetName = path.basename(targetDir);
+  const normalized = normalizeForEncoding(targetName);
+
+  // Skip if the name is pure ASCII — no encoding variants possible
+  if (targetName === normalized) return [];
+
+  try {
+    const siblings = await fs.readdir(parentDir, { withFileTypes: true });
+    const variants: string[] = [];
+    for (const entry of siblings) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name === targetName) continue;
+      if (normalizeForEncoding(entry.name) === normalized) {
+        variants.push(path.join(parentDir, entry.name));
+      }
+    }
+    return variants;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Strip non-ASCII characters and collapse whitespace for encoding-variant comparison.
+ */
+function normalizeForEncoding(name: string): string {
+  return name
+    .replace(/[^\x20-\x7E]/g, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+    .trim();
 }
 
 /** Max bytes to read for EXIF parsing — headers are always at the start of the file */
