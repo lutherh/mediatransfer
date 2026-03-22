@@ -341,9 +341,9 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate }: DateScro
         onPointerUp={handlePointerUp}
         onKeyDown={handleKeyDown}
       >
-        {/* Track rail — thin line with subtle glow on hover */}
+        {/* Track rail — thin line with subtle glow when active */}
         <div className={`absolute inset-y-0 right-5 w-[2px] rounded-full transition-colors duration-200 ${
-          isHovering || isDragging ? 'bg-slate-400/80' : 'bg-slate-300/50'
+          isHovering || isDragging || isScrolling ? 'bg-slate-400/80' : 'bg-slate-300/50'
         }`} />
 
         {/* Year labels & month dots (Immich-style) */}
@@ -355,13 +355,13 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate }: DateScro
           >
             {m.isFirstOfYear ? (
               <span className={`text-[10px] font-bold whitespace-nowrap pr-1 select-none transition-colors duration-200 ${
-                isHovering || isDragging ? 'text-slate-600' : 'text-slate-400'
+                isHovering || isDragging || isScrolling ? 'text-slate-600' : 'text-slate-400'
               }`}>
                 {m.year}
               </span>
             ) : (
               <span className={`block rounded-full transition-all duration-200 ${
-                isHovering || isDragging
+                isHovering || isDragging || isScrolling
                   ? 'h-[5px] w-[5px] bg-slate-400'
                   : 'h-1 w-1 bg-slate-300'
               }`} />
@@ -398,7 +398,7 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate }: DateScro
             className={`rounded-full shadow-md transition-all duration-150 ${
               isDragging
                 ? 'h-10 w-1.5 bg-blue-600'
-                : isHovering
+                : isHovering || isScrolling
                   ? 'h-8 w-1.5 bg-blue-500'
                   : 'h-6 w-1 bg-slate-400'
             }`}
