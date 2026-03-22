@@ -3,6 +3,18 @@ import * as path from 'node:path';
 import exifr from 'exifr';
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.3gp', '.3g2']);
+const CAPTURED_AT_TAGS = [
+  'DateTimeOriginal',
+  'SubSecDateTimeOriginal',
+  'CreateDate',
+  'DateTimeDigitized',
+  'DateCreated',
+  'CreationDate',
+  'CreationTime',
+  'ContentCreateDate',
+  'MediaCreateDate',
+  'TrackCreateDate',
+] as const;
 
 export type ExifMetadata = {
   /** Original capture date from EXIF DateTimeOriginal / CreateDate / DateTimeDigitized */
@@ -25,13 +37,11 @@ export type ExifMetadata = {
  * Extract EXIF metadata from an image buffer.
  * Returns whatever metadata is available; never throws.
  */
-export async function extractExifMetadata(buffer: Buffer): Promise<ExifMetadata> {
+export async function extractExifMetadata(source: Buffer | string): Promise<ExifMetadata> {
   try {
-    const exif = await exifr.parse(buffer, {
+    const exif = await exifr.parse(source, {
       pick: [
-        'DateTimeOriginal',
-        'CreateDate',
-        'DateTimeDigitized',
+        ...CAPTURED_AT_TAGS,
         'ImageWidth',
         'ImageHeight',
         'ExifImageWidth',
@@ -41,6 +51,10 @@ export async function extractExifMetadata(buffer: Buffer): Promise<ExifMetadata>
         'GPSLatitude',
         'GPSLongitude',
       ],
+      exif: true,
+      iptc: true,
+      tiff: true,
+      xmp: true,
       // Enable GPS parsing
       gps: true,
     });
@@ -49,7 +63,7 @@ export async function extractExifMetadata(buffer: Buffer): Promise<ExifMetadata>
       return {};
     }
 
-    const capturedAt = toDate(exif.DateTimeOriginal ?? exif.CreateDate ?? exif.DateTimeDigitized);
+    const capturedAt = pickCapturedAt(exif);
     const width = exif.ExifImageWidth ?? exif.ImageWidth;
     const height = exif.ExifImageHeight ?? exif.ImageHeight;
 
@@ -66,6 +80,16 @@ export async function extractExifMetadata(buffer: Buffer): Promise<ExifMetadata>
     // Non-image files or corrupted EXIF — return empty
     return {};
   }
+}
+
+function pickCapturedAt(exif: Record<string, unknown>): Date | undefined {
+  for (const tag of CAPTURED_AT_TAGS) {
+    const parsed = toDate(exif[tag]);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return undefined;
 }
 
 function toDate(value: unknown): Date | null {
