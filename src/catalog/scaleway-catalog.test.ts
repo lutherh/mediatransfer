@@ -107,6 +107,22 @@ describe('scaleway catalog service', () => {
     expect(page.items[0]?.sectionDate).toBe('2022-08-03');
   });
 
+  it('excludes unknown-date items from listPage', async () => {
+    const send = vi.fn(async () => ({
+      Contents: [
+        { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
+        { Key: 'unknown-date/b.jpg', Size: 200, LastModified: new Date('2024-01-01') },
+        { Key: '2021/06/15/c.mp4', Size: 300, LastModified: new Date('2021-06-15') },
+      ],
+      IsTruncated: false,
+    }));
+
+    const service = makeService(send);
+    const page = await service.listPage({ max: 10 });
+    expect(page.items).toHaveLength(2);
+    expect(page.items.map((i) => i.key)).toEqual(['2020/01/01/a.jpg', '2021/06/15/c.mp4']);
+  });
+
   describe('listPage with sort=desc', () => {
     function makeDescService() {
       let callCount = 0;
@@ -227,6 +243,66 @@ describe('scaleway catalog service', () => {
       const items = await service.listAll();
       expect(items).toHaveLength(1);
       expect(items[0]?.key).toBe('2020/01/01/a.jpg');
+    });
+
+    it('excludes unknown-date items', async () => {
+      const send = vi.fn(async () => ({
+        Contents: [
+          { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
+          { Key: 'unknown-date/b.jpg', Size: 200, LastModified: new Date('2024-01-01') },
+          { Key: 'unknown-date/subdir/c.mp4', Size: 300, LastModified: new Date('2024-01-01') },
+        ],
+        IsTruncated: false,
+      }));
+
+      const service = makeService(send);
+      const items = await service.listAll();
+      expect(items).toHaveLength(1);
+      expect(items[0]?.key).toBe('2020/01/01/a.jpg');
+    });
+  });
+
+  describe('listUndated', () => {
+    it('returns only unknown-date items', async () => {
+      const send = vi.fn(async () => ({
+        Contents: [
+          { Key: 'unknown-date/a.jpg', Size: 100, LastModified: new Date('2024-03-01') },
+          { Key: 'unknown-date/sub/b.mp4', Size: 200, LastModified: new Date('2024-03-02') },
+        ],
+        IsTruncated: false,
+      }));
+
+      const service = makeService(send);
+      const items = await service.listUndated();
+      expect(items).toHaveLength(2);
+      expect(items[0]?.key).toBe('unknown-date/sub/b.mp4');
+      expect(items[1]?.key).toBe('unknown-date/a.jpg');
+    });
+
+    it('returns empty list when no undated items', async () => {
+      const send = vi.fn(async () => ({
+        Contents: [],
+        IsTruncated: false,
+      }));
+
+      const service = makeService(send);
+      const items = await service.listUndated();
+      expect(items).toHaveLength(0);
+    });
+
+    it('filters out non-media files', async () => {
+      const send = vi.fn(async () => ({
+        Contents: [
+          { Key: 'unknown-date/a.jpg', Size: 100, LastModified: new Date('2024-03-01') },
+          { Key: 'unknown-date/notes.txt', Size: 50, LastModified: new Date('2024-03-01') },
+        ],
+        IsTruncated: false,
+      }));
+
+      const service = makeService(send);
+      const items = await service.listUndated();
+      expect(items).toHaveLength(1);
+      expect(items[0]?.key).toBe('unknown-date/a.jpg');
     });
   });
 
@@ -447,14 +523,20 @@ describe('scaleway catalog service', () => {
 
   describe('getStats', () => {
     it('counts files and byte sizes correctly', async () => {
-      const send = vi.fn(async () => ({
-        Contents: [
-          { Key: '2020/01/01/a.jpg', Size: 1000, LastModified: new Date('2020-01-01') },
-          { Key: '2020/01/02/b.mp4', Size: 5000, LastModified: new Date('2020-01-02') },
-          { Key: '2021/06/15/c.png', Size: 2000, LastModified: new Date('2021-06-15') },
-        ],
-        IsTruncated: false,
-      }));
+      const send = vi.fn(async (cmd: any) => {
+        const prefix = cmd.input?.Prefix ?? '';
+        if (prefix.startsWith('unknown-date')) {
+          return { Contents: [], IsTruncated: false };
+        }
+        return {
+          Contents: [
+            { Key: '2020/01/01/a.jpg', Size: 1000, LastModified: new Date('2020-01-01') },
+            { Key: '2020/01/02/b.mp4', Size: 5000, LastModified: new Date('2020-01-02') },
+            { Key: '2021/06/15/c.png', Size: 2000, LastModified: new Date('2021-06-15') },
+          ],
+          IsTruncated: false,
+        };
+      });
 
       const service = makeService(send);
       const stats = await service.getStats();
@@ -463,6 +545,34 @@ describe('scaleway catalog service', () => {
       expect(stats.totalBytes).toBe(8000);
       expect(stats.imageCount).toBe(2);
       expect(stats.videoCount).toBe(1);
+      expect(stats.undatedCount).toBe(0);
+    });
+
+    it('counts undated items separately', async () => {
+      const send = vi.fn(async (cmd: any) => {
+        const prefix = cmd.input?.Prefix ?? '';
+        if (prefix.startsWith('unknown-date')) {
+          return {
+            Contents: [
+              { Key: 'unknown-date/x.jpg', Size: 500, LastModified: new Date('2024-06-01') },
+              { Key: 'unknown-date/y.mp4', Size: 1500, LastModified: new Date('2024-06-02') },
+            ],
+            IsTruncated: false,
+          };
+        }
+        return {
+          Contents: [
+            { Key: '2020/01/01/a.jpg', Size: 1000, LastModified: new Date('2020-01-01') },
+          ],
+          IsTruncated: false,
+        };
+      });
+
+      const service = makeService(send);
+      const stats = await service.getStats();
+
+      expect(stats.totalFiles).toBe(1);
+      expect(stats.undatedCount).toBe(2);
     });
 
     it('caches stats within TTL', async () => {
@@ -477,9 +587,10 @@ describe('scaleway catalog service', () => {
 
       const service = makeService(send);
       await service.getStats();
+      const countAfterFirst = callCount;
       await service.getStats();
-      // Second call should use cache
-      expect(callCount).toBe(1);
+      // Second call should use cache — no additional S3 requests
+      expect(callCount).toBe(countAfterFirst);
     });
   });
 
