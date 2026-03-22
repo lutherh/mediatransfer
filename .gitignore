@@ -27,3 +27,4 @@ data/takeout/state.json.pre-cleanup.bak
 data/takeout/state.json.pre-s3-repair.bak
 repair-output.txt
 data/takeout/state.json.pre-reupload.bak
+data/takeout/state.json.pre-sidecar-fix.bak
