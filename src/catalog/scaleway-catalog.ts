@@ -56,6 +56,7 @@ export type CatalogStats = {
   videoCount: number;
   oldestDate: string | null;
   newestDate: string | null;
+  undatedCount: number;
 };
 
 /**
@@ -123,6 +124,7 @@ export type CatalogService = {
     sort?: 'asc' | 'desc';
   }): Promise<CatalogPage>;
   listAll(prefix?: string): Promise<CatalogItem[]>;
+  listUndated(): Promise<CatalogItem[]>;
   getObject(encodedKey: string, range?: string): Promise<CatalogObject>;
   /** Fetch up to `maxBytes` of an object as a Buffer (for EXIF parsing etc.). */
   getObjectBuffer(encodedKey: string, maxBytes?: number): Promise<{ buffer: Buffer; contentType?: string; contentLength?: number }>;
@@ -161,6 +163,14 @@ const STATS_CACHE_TTL_MS = 5 * 60_000;
 /** After this fraction of the TTL, a background refresh is triggered. */
 const STALE_REFRESH_THRESHOLD = 0.75; // refresh at 3:45 of 5:00
 const DEFAULT_MAX_PAGE_RETRIES = 5;
+
+/** S3 prefix used for media files whose capture date could not be determined. */
+export const UNDATED_PREFIX = 'unknown-date';
+
+/** Returns true when a (prefix-stripped) key resides under the undated folder. */
+export function isUndatedKey(key: string): boolean {
+  return key === UNDATED_PREFIX || key.startsWith(`${UNDATED_PREFIX}/`);
+}
 
 // ── Thumbnail configuration ─────────────────────────────────────────────────
 
@@ -387,7 +397,7 @@ export class ScalewayCatalogService implements CatalogService {
             sectionDate,
           } satisfies CatalogItem;
         })
-        .filter((item) => item.mediaType === 'image' || item.mediaType === 'video');
+        .filter((item) => (item.mediaType === 'image' || item.mediaType === 'video') && !isUndatedKey(item.key));
 
       items.push(...mediaItems);
 
@@ -668,8 +678,8 @@ export class ScalewayCatalogService implements CatalogService {
     // If we have stale stats + a stale index, return the stale stats while
     // the index refreshes in the background.
     if (!this.statsInflight) {
-      this.statsInflight = this.getItemsIndex()
-        .then((items) => {
+      this.statsInflight = Promise.all([this.getItemsIndex(), this.listUndated()])
+        .then(([items, undatedItems]) => {
           let totalBytes = 0;
           let imageCount = 0;
           let videoCount = 0;
@@ -692,6 +702,7 @@ export class ScalewayCatalogService implements CatalogService {
             videoCount,
             oldestDate: oldest?.toISOString() ?? null,
             newestDate: newest?.toISOString() ?? null,
+            undatedCount: undatedItems.length,
           };
 
           this.statsCache = { data: stats, expiresAt: Date.now() + STATS_CACHE_TTL_MS };
@@ -720,6 +731,49 @@ export class ScalewayCatalogService implements CatalogService {
       const result = await s3ListWithRetry(this.client, {
         Bucket: this.bucket,
         Prefix: this.fullPrefix(prefix),
+        ContinuationToken: continuationToken,
+        MaxKeys: 1000,
+      }, {
+        timeoutMs: this.s3RequestTimeoutMs,
+        maxRetries: this.s3ListMaxRetries,
+      });
+
+      const mediaItems = (result.Contents ?? [])
+        .filter((item) => Boolean(item.Key && item.Size !== undefined && item.LastModified))
+        .map((item) => {
+          const rawKey = item.Key as string;
+          const key = this.stripPrefix(rawKey);
+          const fallbackDate = item.LastModified as Date;
+          const capturedAtDate = inferCapturedAt(key, fallbackDate);
+          const sectionDate = toSectionDate(capturedAtDate);
+          return {
+            key,
+            encodedKey: encodeKey(key),
+            size: Number(item.Size ?? 0),
+            lastModified: fallbackDate.toISOString(),
+            capturedAt: capturedAtDate.toISOString(),
+            mediaType: inferMediaType(key),
+            sectionDate,
+          } satisfies CatalogItem;
+        })
+        .filter((item) => (item.mediaType === 'image' || item.mediaType === 'video') && !isUndatedKey(item.key));
+
+      items.push(...mediaItems);
+      continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+    } while (continuationToken);
+
+    items.sort((a, b) => b.capturedAt.localeCompare(a.capturedAt));
+    return items;
+  }
+
+  async listUndated(): Promise<CatalogItem[]> {
+    const items: CatalogItem[] = [];
+    let continuationToken: string | undefined;
+
+    do {
+      const result = await s3ListWithRetry(this.client, {
+        Bucket: this.bucket,
+        Prefix: this.fullPrefix(UNDATED_PREFIX),
         ContinuationToken: continuationToken,
         MaxKeys: 1000,
       }, {
