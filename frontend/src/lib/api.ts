@@ -480,6 +480,22 @@ export async function resetTakeoutPath(
   return response.json();
 }
 
+export async function resetUploadState(): Promise<{ message: string }> {
+  const response = await fetchWithTimeout(
+    `${API_BASE_URL}/takeout/reset-upload-state`,
+    { method: 'POST' },
+    TAKEOUT_FETCH_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const raw = await response.text();
+    const message = parseApiErrorMessage(raw) ?? 'Failed to reset upload state';
+    throw new Error(message);
+  }
+
+  return response.json();
+}
+
 /* ── Legacy wrappers (kept for backward compatibility) ──────── */
 
 export const updateTakeoutInputDir = (dir: string) =>
@@ -789,6 +805,7 @@ export type CatalogStats = {
   videoCount: number;
   oldestDate: string | null;
   newestDate: string | null;
+  undatedCount: number;
 };
 
 /** Returns the URL for streaming a catalog media object (full resolution). */
@@ -880,6 +897,35 @@ export async function moveCatalogItem(
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to move item');
+  }
+  return response.json();
+}
+
+export async function bulkMoveCatalogItems(
+  moves: { encodedKey: string; newDatePrefix: string }[],
+  apiToken?: string,
+): Promise<{ moved: { from: string; to: string }[]; failed: { key: string; error: string }[] }> {
+  const url = new URL('/catalog/api/items/bulk-move', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ moves }),
+  });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to move items');
+  }
+  return response.json();
+}
+
+export async function fetchUndatedItems(apiToken?: string): Promise<{ items: CatalogItem[] }> {
+  const url = new URL('/catalog/api/undated', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch undated items');
   }
   return response.json();
 }
