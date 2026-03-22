@@ -712,6 +712,40 @@ describe('takeout routes', () => {
     await app.close();
   });
 
+  it('spawned repair-dates command runs the enhanced repair script with --apply', async () => {
+    spawnMock.mockImplementation(() => {
+      const c = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      c.stdout = new EventEmitter();
+      c.stderr = new EventEmitter();
+      c.kill = vi.fn();
+      queueMicrotask(() => {
+        c.stdout.emit('data', 'repair output\n');
+        c.emit('close', 0);
+      });
+      return c;
+    });
+
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv());
+
+    const okRes = await app.inject({
+      method: 'POST',
+      url: '/takeout/actions/repair-dates',
+    });
+    expect(okRes.statusCode).toBe(202);
+
+    expect(spawnMock).toHaveBeenCalled();
+    const spawnArgs = spawnMock.mock.calls[0][1] as string[];
+    expect(spawnArgs).toEqual(['run', 'takeout:repair-dates', '--', '--apply']);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await app.close();
+  });
+
   // â”€â”€â”€ Generic PUT /takeout/paths/:name â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   it('PUT /takeout/paths/:name sets custom path and returns resolved value', async () => {

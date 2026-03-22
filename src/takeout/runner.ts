@@ -6,8 +6,13 @@ import {
   buildManifest,
   loadManifestJsonl,
   persistManifestJsonl,
+  refineDatesFromAllMetadata,
   type ManifestEntry,
 } from './manifest.js';
+import {
+  extractAndPersistArchiveMetadata,
+  loadAllArchiveMetadata,
+} from './archive-metadata.js';
 import {
   containsMediaFiles,
   discoverTakeoutArchives,
@@ -120,6 +125,25 @@ export type UploadRunResult = {
   reportCsvPath: string;
 };
 
+async function persistArchiveMetadataBestEffort(
+  extractDir: string,
+  entries: ManifestEntry[],
+  archiveName: string,
+  metadataDir: string,
+): Promise<void> {
+  if (entries.length === 0) return;
+
+  try {
+    await extractAndPersistArchiveMetadata(extractDir, entries, archiveName, metadataDir);
+  } catch (error) {
+    console.warn('[runner] Failed to persist archive metadata; continuing scan', {
+      archiveName,
+      metadataDir,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export async function runTakeoutScan(
   config: TakeoutConfig,
   extractor?: ArchiveExtractor,
@@ -133,6 +157,7 @@ export async function runTakeoutScan(
   const archiveStatePath = path.join(config.workDir, 'archive-state.json');
   const partialManifestPath = path.join(config.workDir, 'scan-entries.jsonl');
   const tempExtractDir = path.join(config.workDir, 'temp-extract');
+  const metadataDir = path.join(config.workDir, 'metadata');
   const archiveState = await loadArchiveState(archiveStatePath);
 
   // ── No archive files at all: fall back to direct-media / descriptive error ─
@@ -145,6 +170,14 @@ export async function runTakeoutScan(
       const pct = 72 + Math.round((processed / Math.max(total, 1)) * 25);
       onProgress?.({ phase: 'manifest', current: processed, total, percent: pct, detail: `${processed}/${total} files` });
     });
+      await persistArchiveMetadataBestEffort(mediaRoot, entries, 'direct-input', metadataDir);
+
+      const allMetadata = await loadAllArchiveMetadata(metadataDir);
+      const { refinedCount, breakdown } = refineDatesFromAllMetadata(entries, allMetadata);
+      if (refinedCount > 0) {
+        console.log(`[runner] Global date refinement: ${refinedCount} entries improved`, breakdown);
+      }
+
     await persistManifestJsonl(entries, manifestPath);
     onProgress?.({ phase: 'done', current: 1, total: 1, percent: 100, detail: 'Scan complete' });
     return { manifestPath, mediaRoot, archives, entryCount: entries.length };
@@ -238,6 +271,7 @@ export async function runTakeoutScan(
 
       // Persist entries before deleting temp so a crash doesn't lose them
       if (archiveEntries.length > 0) {
+        await persistArchiveMetadataBestEffort(tempExtractDir, archiveEntries, archiveName, metadataDir);
         await appendJsonl(archiveEntries, partialManifestPath);
       }
 
@@ -306,6 +340,14 @@ export async function runTakeoutScan(
   const removedCount = allEntries.length - entries.length;
   if (removedCount > 0) {
     console.log(`[runner] Manifest dedup: removed ${removedCount} duplicate entries by destination key`);
+  }
+
+  const allMetadata = await loadAllArchiveMetadata(metadataDir);
+  if (allMetadata.length > 0) {
+    const { refinedCount, breakdown } = refineDatesFromAllMetadata(entries, allMetadata);
+    if (refinedCount > 0) {
+      console.log(`[runner] Global date refinement: ${refinedCount} entries improved`, breakdown);
+    }
   }
 
   await persistManifestJsonl(entries, manifestPath);
