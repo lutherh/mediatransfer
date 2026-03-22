@@ -167,6 +167,7 @@ describe('frontend pages', () => {
     renderRoute('/takeout');
     expect(await screen.findByRole('heading', { name: 'Google Takeout' })).toBeInTheDocument();
     expect(await screen.findByText(/migrate your google photos library/i)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /repair wrong dates/i })).toBeInTheDocument();
   });
 
   it('renders transfer detail page', async () => {

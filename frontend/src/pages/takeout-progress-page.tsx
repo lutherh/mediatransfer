@@ -289,6 +289,12 @@ export function TakeoutProgressPage() {
               </p>
             </div>
           )}
+          {actionStatus?.action === 'repair-dates' && (
+            <p className="text-xs text-slate-500">
+              Checking uploaded files for wrong date paths and moving only the ones that can be resolved.
+              You can run this again later if more files need fixing.
+            </p>
+          )}
           {/* Live activity indicators */}
           {(actionStatus?.action === 'upload' || actionStatus?.action === 'resume') && (
             <UploadActivityIndicator
@@ -511,14 +517,28 @@ export function TakeoutProgressPage() {
                 </p>
               </div>
             </div>
-            <Button
-              className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-              type="button"
-              disabled={busy}
-              onClick={() => run('verify')}
-            >
-              Verify in cloud
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                type="button"
+                disabled={busy}
+                onClick={() => run('verify')}
+              >
+                Verify in cloud
+              </Button>
+              <Button
+                className="border border-amber-300 bg-white text-amber-800 hover:bg-amber-50 disabled:opacity-40"
+                type="button"
+                disabled={busy}
+                onClick={() => run('repair-dates')}
+              >
+                Repair wrong dates
+              </Button>
+            </div>
+            <p className="text-xs text-amber-800">
+              Uses uploaded files, saved Takeout metadata, and embedded media timestamps to move resolvable files out of bad date folders.
+              Safe to run again if more fixes are needed.
+            </p>
           </Card>
 
           {/* Only show cleanup zone if archive files are still sitting in the input folder */}
@@ -1349,6 +1369,7 @@ function mapActionLabel(action: TakeoutAction): string {
     upload:                'Upload',
     verify:                'Verify',
     resume:                'Resume',
+    'repair-dates':        'Repair wrong dates',
     pause:                 'Pause',
     'start-services':      'Start services',
     'cleanup-move':        'Cleanup (move archives)',
