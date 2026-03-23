@@ -109,3 +109,123 @@ body {
     background-color: rgba(30, 41, 59, 0.45) !important;
   }
 }
+
+/* ─── Takeout action-packed animations ─────────────────────────────────────── */
+
+/* Animated stripe pattern for active progress bars */
+@keyframes progress-stripes {
+  0% { background-position: 1rem 0; }
+  100% { background-position: 0 0; }
+}
+
+.progress-bar-active {
+  background-image: linear-gradient(
+    -45deg,
+    rgba(255,255,255,0.15) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgba(255,255,255,0.15) 50%,
+    rgba(255,255,255,0.15) 75%,
+    transparent 75%
+  );
+  background-size: 1rem 1rem;
+  animation: progress-stripes 0.5s linear infinite;
+}
+
+/* Glowing ring for active pipeline step */
+@keyframes step-glow {
+  0%, 100% { box-shadow: 0 0 4px 1px rgba(59,130,246,0.3); }
+  50%      { box-shadow: 0 0 12px 4px rgba(59,130,246,0.6); }
+}
+
+.step-active-glow {
+  animation: step-glow 1.5s ease-in-out infinite;
+}
+
+/* Flowing dots on pipeline connector */
+@keyframes connector-flow {
+  0%   { background-position: 0 0; }
+  100% { background-position: 20px 0; }
+}
+
+.connector-active {
+  background: repeating-linear-gradient(
+    90deg,
+    #3b82f6 0px,
+    #3b82f6 4px,
+    transparent 4px,
+    transparent 10px
+  ) !important;
+  background-size: 20px 100% !important;
+  animation: connector-flow 0.6s linear infinite;
+  height: 3px !important;
+}
+
+/* Shimmer on scan current-file text */
+@keyframes text-shimmer {
+  0%   { opacity: 0.5; }
+  50%  { opacity: 1; }
+  100% { opacity: 0.5; }
+}
+
+.text-shimmer {
+  animation: text-shimmer 1.8s ease-in-out infinite;
+}
+
+/* Stat value pop when updated */
+@keyframes stat-bump {
+  0%   { transform: scale(1); }
+  30%  { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+.stat-bump {
+  animation: stat-bump 0.4s ease-out;
+}
+
+/* Archive row flash for recently completed */
+@keyframes row-flash {
+  0%   { background-color: rgba(34,197,94,0.2); }
+  100% { background-color: transparent; }
+}
+
+.row-recent {
+  animation: row-flash 2s ease-out;
+}
+
+/* Spinning icon */
+@keyframes spin-fast {
+  to { transform: rotate(360deg); }
+}
+
+.spin-icon {
+  display: inline-block;
+  animation: spin-fast 1s linear infinite;
+}
+
+/* Pulsing border */
+@keyframes border-pulse {
+  0%, 100% { border-color: rgba(59,130,246,0.3); }
+  50%      { border-color: rgba(59,130,246,0.7); }
+}
+
+.border-pulse-active {
+  animation: border-pulse 2s ease-in-out infinite;
+}
+
+/* Throughput bar sparkle */
+@keyframes throughput-shimmer {
+  0%   { left: -40%; }
+  100% { left: 140%; }
+}
+
+.progress-shimmer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -40%;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+  animation: throughput-shimmer 1.5s ease-in-out infinite;
+}
