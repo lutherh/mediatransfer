@@ -794,7 +794,13 @@ function SkeletonGrid() {
  *
  * @pattern Immich empty-library illustration with call-to-action text
  */
-function EmptyState({ prefix }: { prefix: string }) {
+function EmptyState({
+  prefix,
+  onClearPrefix,
+}: {
+  prefix: string;
+  onClearPrefix: () => void;
+}) {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
       {/* Camera SVG icon */}
@@ -818,6 +824,53 @@ function EmptyState({ prefix }: { prefix: string }) {
           ? 'Try a different prefix filter or clear the search.'
           : 'Upload photos or run a transfer to get started.'}
       </p>
+      {prefix ? (
+        <button
+          type="button"
+          onClick={onClearPrefix}
+          className="mt-4 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+        >
+          Clear search
+        </button>
+      ) : (
+        <div className="mt-6 w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm">
+          <p className="text-sm font-semibold text-slate-900">Quick ways to add media</p>
+          <ol className="mt-3 space-y-2 text-sm text-slate-600">
+            <li>
+              <span className="font-medium text-slate-900">1.</span>{' '}
+              Start a guided photo transfer from Google Photos.
+            </li>
+            <li>
+              <span className="font-medium text-slate-900">2.</span>{' '}
+              Upload files directly from this device.
+            </li>
+            <li>
+              <span className="font-medium text-slate-900">3.</span>{' '}
+              Import a Google Takeout archive, then come back here to browse everything by date.
+            </li>
+          </ol>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link
+              to="/"
+              className="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+            >
+              Start photo transfer
+            </Link>
+            <Link
+              to="/upload"
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+            >
+              Upload files
+            </Link>
+            <Link
+              to="/takeout"
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+            >
+              Open Takeout import
+            </Link>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1374,7 +1427,13 @@ export function CatalogPage() {
       {itemsQuery.isLoading ? (
         <SkeletonGrid />
       ) : sections.length === 0 ? (
-        <EmptyState prefix={prefix} />
+        <EmptyState
+          prefix={prefix}
+          onClearPrefix={() => {
+            setPrefixInput('');
+            setPrefix('');
+          }}
+        />
       ) : (
         /*
          * Row-level virtualized grid — only item rows near the viewport are

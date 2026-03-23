@@ -249,10 +249,10 @@ export function TakeoutProgressPage() {
 
       {/* Running: show progress */}
       {pageState === 'running' && (
-        <Card className="space-y-3">
+        <Card className="space-y-3 border-pulse-active">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5">
-              <span className="h-3 w-3 rounded-full bg-blue-500 animate-pulse shrink-0" />
+              <span className="h-3 w-3 rounded-full bg-blue-500 animate-ping shrink-0" />
               <p className="font-semibold text-slate-900">
                 {describeAction(actionStatus?.action)} running...
               </p>
@@ -278,16 +278,22 @@ export function TakeoutProgressPage() {
           }
           {(actionStatus?.action === 'upload' || actionStatus?.action === 'resume') && hasManifest && (
             <div className="space-y-1">
-              <div className="h-2 w-full rounded-full bg-slate-200 overflow-hidden">
+              <div className="h-3 w-full rounded-full bg-slate-200 overflow-hidden relative">
                 <div
-                  className="h-full rounded-full bg-blue-600 transition-all duration-700 ease-out"
+                  className="h-full rounded-full bg-blue-600 transition-all duration-700 ease-out relative overflow-hidden progress-bar-active progress-shimmer"
                   style={{ width: `${Math.round(data.progress * 100)}%` }}
                 />
               </div>
-              <p className="text-xs text-slate-500 tabular-nums">
-                {data.counts.uploaded.toLocaleString()} / {data.counts.total.toLocaleString()} files
-                {' '}· {Math.round(data.progress * 100)}%
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-slate-500 tabular-nums">
+                  {data.counts.uploaded.toLocaleString()} / {data.counts.total.toLocaleString()} files
+                  {' '}· {Math.round(data.progress * 100)}%
+                </p>
+                <span className="text-[11px] text-blue-400 flex items-center gap-1">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-400 animate-ping" />
+                  Uploading
+                </span>
+              </div>
             </div>
           )}
           {actionStatus?.action === 'repair-dates' && (
@@ -682,8 +688,10 @@ export function TakeoutProgressPage() {
                 </tr>
               </thead>
               <tbody>
-                {archiveHistory.map((record) => (
-                  <tr key={record.archiveName} className="border-b border-slate-100 last:border-b-0 align-top">
+                {archiveHistory.map((record) => {
+                  const isRecent = record.completedAt && (Date.now() - new Date(record.completedAt).getTime()) < 60_000;
+                  return (
+                  <tr key={record.archiveName} className={`border-b border-slate-100 last:border-b-0 align-top ${isRecent ? 'row-recent' : ''}`}>
                     <td className="py-2 pr-3 font-mono text-slate-700 break-all">{record.archiveName}</td>
                     <td className="py-2 pr-3 text-slate-700 tabular-nums">{record.archiveSizeBytes != null ? formatBytes(record.archiveSizeBytes) : 'unknown'}</td>
                     <td className="py-2 pr-3 text-slate-700 tabular-nums">{record.mediaBytes != null ? formatBytes(record.mediaBytes) : 'unknown'}</td>
@@ -697,10 +705,16 @@ export function TakeoutProgressPage() {
                       <ArchiveStatusPill record={record} />
                     </td>
                     <td className="py-2 text-slate-500 tabular-nums">
-                      {record.completedAt ? formatDateTime(record.completedAt) : 'In progress'}
+                      {record.completedAt ? formatDateTime(record.completedAt) : (
+                        <span className="flex items-center gap-1">
+                          <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-ping" />
+                          In progress
+                        </span>
+                      )}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -775,6 +789,8 @@ function PipelineStepper({
         const isActive = isActionRunning && step.step === pipeline.currentStep;
         const color = stepColor(step.status, isActive);
         const icon = isActive ? '◉' : STEP_ICONS[step.status];
+        const nextStep = i < steps.length - 1 ? steps[i + 1] : undefined;
+        const isConnectorActive = isActive && nextStep && nextStep.status === 'pending';
 
         return (
           <div key={step.step} className="flex items-center" role="listitem">
@@ -782,18 +798,17 @@ function PipelineStepper({
             <div className={`flex flex-col items-center gap-0.5 ${color}`}>
               <span
                 className={`
-                  flex h-7 w-7 items-center justify-center rounded-full border-2 text-xs font-bold
+                  flex h-7 w-7 items-center justify-center rounded-full border-2 text-xs font-bold transition-all duration-300
                   ${step.status === 'completed' ? 'border-green-500 bg-green-50' : ''}
                   ${step.status === 'failed' ? 'border-red-400 bg-red-50' : ''}
-                  ${step.status === 'in-progress' || isActive ? 'border-blue-500 bg-blue-50' : ''}
+                  ${step.status === 'in-progress' || isActive ? 'border-blue-500 bg-blue-50 step-active-glow' : ''}
                   ${step.status === 'pending' || step.status === 'skipped' ? 'border-slate-300 bg-white' : ''}
-                  ${isActive ? 'animate-pulse' : ''}
                 `}
                 aria-label={`${STEP_LABELS[step.step]}: ${step.status}`}
               >
-                {icon}
+                {isActive ? <span className="spin-icon">◉</span> : icon}
               </span>
-              <span className="text-[10px] font-medium leading-tight whitespace-nowrap">
+              <span className={`text-[10px] font-medium leading-tight whitespace-nowrap ${isActive ? 'text-shimmer' : ''}`}>
                 {STEP_LABELS[step.step] ?? step.step}
               </span>
               {step.status === 'completed' && step.itemsDone != null && (
@@ -809,7 +824,7 @@ function PipelineStepper({
             </div>
             {/* Connector line between steps */}
             {i < steps.length - 1 && (
-              <div className={`h-0.5 w-6 sm:w-10 mx-1 rounded-full ${connectorColor(step.status)}`} />
+              <div className={`h-0.5 w-6 sm:w-10 mx-1 rounded-full ${isConnectorActive ? 'connector-active' : connectorColor(step.status)}`} />
             )}
           </div>
         );
@@ -928,10 +943,22 @@ function StatChip({
     color === 'red'   ? 'text-red-700'   :
     'text-slate-800';
 
+  // Bump animation when value changes
+  const prevValue = useRef(value);
+  const [bump, setBump] = useState(false);
+  useEffect(() => {
+    if (value !== prevValue.current) {
+      prevValue.current = value;
+      setBump(true);
+      const t = setTimeout(() => setBump(false), 450);
+      return () => clearTimeout(t);
+    }
+  }, [value]);
+
   return (
     <div className="flex flex-col gap-0.5">
       <span className="text-[10px] uppercase tracking-wide text-slate-400">{label}</span>
-      <span className={`text-2xl font-semibold tabular-nums leading-none ${valueClass}`}>
+      <span className={`text-2xl font-semibold tabular-nums leading-none ${valueClass} ${bump ? 'stat-bump' : ''}`}>
         {value.toLocaleString()}
       </span>
     </div>
@@ -1285,26 +1312,37 @@ function ScanProgressBar({
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between text-xs">
-        <span className="text-slate-700 font-medium">
+        <span className="text-slate-700 font-medium flex items-center gap-1.5">
+          {percent < 100 && <span className="spin-icon text-blue-400">⚙</span>}
           {phaseLabel}{detailText ? `: ${detailText}` : ''}
         </span>
         <span className="text-slate-500 tabular-nums">
           {percent}%{etaText ? ` · ETA ${etaText}` : ''}
         </span>
       </div>
-      <div className="h-2.5 w-full rounded-full bg-slate-200 overflow-hidden">
+      <div className="h-3 w-full rounded-full bg-slate-200 overflow-hidden relative">
         <div
-          className="h-full rounded-full bg-blue-600 transition-all duration-700 ease-out"
+          className={`h-full rounded-full transition-all duration-700 ease-out relative overflow-hidden ${
+            percent < 100 ? 'bg-blue-600 progress-bar-active progress-shimmer' : 'bg-green-600'
+          }`}
           style={{ width: `${percent}%` }}
         />
       </div>
       {progress.total > 0 && progress.phase !== 'done' ? (
-        <p className="text-[11px] text-slate-400 tabular-nums">
-          {progress.current.toLocaleString()} / {progress.total.toLocaleString()}
-          {progress.phase === 'extract'   ? ' archives' : ''}
-          {progress.phase === 'normalize' ? ' files'    : ''}
-          {progress.phase === 'manifest'  ? ' files'    : ''}
-        </p>
+        <div className="flex items-center justify-between">
+          <p className="text-[11px] text-slate-400 tabular-nums">
+            {progress.current.toLocaleString()} / {progress.total.toLocaleString()}
+            {progress.phase === 'extract'   ? ' archives' : ''}
+            {progress.phase === 'normalize' ? ' files'    : ''}
+            {progress.phase === 'manifest'  ? ' files'    : ''}
+          </p>
+          {percent < 100 && (
+            <span className="text-[11px] text-blue-400 flex items-center gap-1">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-400 animate-ping" />
+              Processing
+            </span>
+          )}
+        </div>
       ) : null}
     </div>
   );
@@ -1353,16 +1391,25 @@ function UploadActivityIndicator({
   const hasProgress = uploadProgress && (uploadProgress.speed || uploadProgress.currentArchive);
 
   return (
-    <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 space-y-1.5">
+    <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2.5 space-y-2">
       {/* Top row: elapsed + last activity */}
       <div className="flex items-center justify-between text-[11px] text-slate-500">
-        <span className="tabular-nums">
-          {elapsed ? <>Elapsed: <span className="font-medium text-slate-700">{elapsed}</span></> : 'Starting...'}
+        <span className="tabular-nums flex items-center gap-2">
+          {elapsed ? (<>
+            <span className="spin-icon text-blue-400">⚙</span>
+            Elapsed: <span className="font-medium text-slate-700">{elapsed}</span>
+          </>) : (<>
+            <span className="inline-block h-2 w-2 rounded-full bg-blue-400 animate-ping" />
+            Starting...
+          </>)}
         </span>
         {lastActivityText && (
-          <span className="flex items-center gap-1">
-            <span className="h-1.5 w-1.5 rounded-full bg-green-400 animate-pulse" />
-            Activity {lastActivityText}
+          <span className="flex items-center gap-1.5">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75 animate-ping" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
+            </span>
+            <span className="text-green-400 font-medium">Active</span> {lastActivityText}
           </span>
         )}
       </div>
@@ -1371,8 +1418,9 @@ function UploadActivityIndicator({
       {hasProgress && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-600">
           {uploadProgress.speed && (
-            <span className="tabular-nums">
-              Speed: <span className="font-medium">{uploadProgress.speed}/s</span>
+            <span className="tabular-nums flex items-center gap-1">
+              <span className="text-blue-400">⚡</span>
+              <span className="font-medium text-blue-300">{uploadProgress.speed}/s</span>
             </span>
           )}
           {uploadProgress.eta && uploadProgress.eta !== '—' && (
@@ -1386,8 +1434,9 @@ function UploadActivityIndicator({
             </span>
           )}
           {typeof uploadProgress.inFlight === 'number' && uploadProgress.inFlight > 0 && (
-            <span className="tabular-nums">
-              In-flight: {uploadProgress.inFlight}
+            <span className="tabular-nums flex items-center gap-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+              {uploadProgress.inFlight} in-flight
             </span>
           )}
         </div>
@@ -1395,7 +1444,7 @@ function UploadActivityIndicator({
 
       {/* Current archive */}
       {uploadProgress?.currentArchive && (
-        <p className="text-[11px] text-slate-500 truncate">
+        <p className="text-[11px] text-slate-500 truncate text-shimmer">
           Archive: <span className="font-mono text-slate-700">{uploadProgress.currentArchive}</span>
           {uploadProgress.currentArchiveIndex != null && uploadProgress.totalArchives != null && (
             <span className="text-slate-400">
