@@ -6,7 +6,9 @@ import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { extractExifMetadata, inferDateFromFilename } from '../../utils/exif.js';
+import { extractExifMetadata, extractVideoCreationDate, inferDateFromFilename } from '../../utils/exif.js';
+import { isWrongDate } from '../../utils/date-repair.js';
+import { VIDEO_EXTENSIONS } from '../../utils/media-extensions.js';
 import type { UploadService } from '../types.js';
 import { apiError } from '../errors.js';
 
@@ -83,15 +85,17 @@ export async function registerUploadRoutes(
           continue;
         }
 
-        // Extract EXIF metadata
+        // Extract EXIF metadata from first 256 KB (matches takeout pipeline)
         const fileHandle = await fs.open(tempFilePath, 'r');
-        const exifBuffer = Buffer.allocUnsafe(64 * 1024);
+        const exifBuffer = Buffer.allocUnsafe(256 * 1024);
         const { bytesRead } = await fileHandle.read(exifBuffer, 0, exifBuffer.length, 0);
         await fileHandle.close();
         const exif = await extractExifMetadata(exifBuffer.subarray(0, bytesRead));
 
-        // Determine capture date: EXIF > filename inference > null
-        const capturedAt = exif.capturedAt ?? inferDateFromFilename(filename) ?? undefined;
+        // Determine capture date using multi-strategy pipeline
+        const capturedAt = await deriveUploadCapturedDate(
+          tempFilePath, filename, exif.capturedAt,
+        );
 
         // Build S3 key with date path
         const datePath = capturedAt
@@ -234,3 +238,55 @@ type UploadResult = {
   capturedAt?: string;
   message?: string;
 };
+
+/** Image formats known to embed EXIF / XMP / IPTC metadata. */
+const IMAGE_EXTS_WITH_METADATA = new Set([
+  '.jpg', '.jpeg', '.heic', '.heif', '.avif', '.png', '.tif', '.tiff', '.webp',
+]);
+
+/**
+ * Multi-strategy date extraction for direct uploads.
+ *
+ * Priority (mirrors the takeout pipeline in manifest.ts):
+ *   1. EXIF from first 256 KB header
+ *   2. Filename date inference (e.g. IMG_20231215_143022.jpg)
+ *   3. Full-file EXIF re-read for images (some formats store metadata at end)
+ *   4. Video container metadata (MP4/MOV moov/mvhd creation_time)
+ */
+async function deriveUploadCapturedDate(
+  filePath: string,
+  filename: string,
+  exifDate: Date | undefined,
+): Promise<Date | undefined> {
+  // 1. EXIF from header buffer (already extracted by caller)
+  if (exifDate && !isWrongDate(exifDate)) return exifDate;
+
+  // 2. Filename date inference
+  const fromFilename = inferDateFromFilename(filename);
+  if (fromFilename && !isWrongDate(fromFilename)) return fromFilename;
+
+  const ext = path.extname(filename).toLowerCase();
+
+  // 3. Full-file EXIF re-read for image types when header parse didn't find a date
+  if (IMAGE_EXTS_WITH_METADATA.has(ext)) {
+    try {
+      const fullBuffer = await fs.readFile(filePath);
+      const exif = await extractExifMetadata(fullBuffer);
+      if (exif.capturedAt && !isWrongDate(exif.capturedAt)) return exif.capturedAt;
+    } catch {
+      // Full-file metadata extraction failed — continue to next strategy
+    }
+  }
+
+  // 4. Video container metadata (MP4/MOV/M4V/3GP moov/mvhd creation_time)
+  if (VIDEO_EXTENSIONS.has(ext)) {
+    try {
+      const fromVideo = await extractVideoCreationDate(filePath);
+      if (fromVideo && !isWrongDate(fromVideo)) return fromVideo;
+    } catch {
+      // Video metadata extraction failed — give up
+    }
+  }
+
+  return undefined;
+}
