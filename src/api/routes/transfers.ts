@@ -277,14 +277,13 @@ export async function registerTransferRoutes(
     }
 
     const logs = await jobs.listLogs(id);
-    const completedKeys = getCompletedMediaItemIds(logs);
+    const { completedKeys, latestStatusByItem } = parseItemLogs(logs);
     if (completedKeys.has(input.mediaItemId)) {
       return reply.code(409).send({
         ...apiError('TRANSFER_ITEM_COMPLETED', `Item ${input.mediaItemId} is already completed`),
       });
     }
 
-    const latestStatusByItem = getLatestItemStatuses(logs);
     const latestStatus = latestStatusByItem.get(input.mediaItemId);
     if (latestStatus === 'IN_PROGRESS' || latestStatus === 'RETRYING') {
       return reply.code(409).send({
@@ -340,8 +339,7 @@ export async function registerTransferRoutes(
     }
 
     const logs = await jobs.listLogs(id);
-    const completedKeys = getCompletedMediaItemIds(logs);
-    const latestStatusByItem = getLatestItemStatuses(logs);
+    const { completedKeys, latestStatusByItem } = parseItemLogs(logs);
 
     const retryableKeys = job.keys.filter((key) => {
       if (completedKeys.has(key)) {
@@ -406,8 +404,16 @@ export async function registerTransferRoutes(
   });
 }
 
-function getCompletedMediaItemIds(logs: Array<{ message: string; meta?: unknown }>): Set<string> {
-  const completed = new Set<string>();
+/**
+ * Single-pass extraction of both completed-item IDs and per-item latest statuses.
+ * Avoids iterating the full log array twice (getCompletedMediaItemIds + getLatestItemStatuses).
+ */
+function parseItemLogs(logs: Array<{ message: string; meta?: unknown }>): {
+  completedKeys: Set<string>;
+  latestStatusByItem: Map<string, string>;
+} {
+  const completedKeys = new Set<string>();
+  const latestStatusByItem = new Map<string, string>();
 
   for (const log of logs) {
     if (!isRecord(log.meta)) {
@@ -420,37 +426,31 @@ function getCompletedMediaItemIds(logs: Array<{ message: string; meta?: unknown 
     }
 
     const status = typeof log.meta.status === 'string' ? log.meta.status : undefined;
+
+    if (status) {
+      latestStatusByItem.set(mediaItemId, status);
+    }
+
     const isCompletedByStatus = status === 'COMPLETED' || status === 'SKIPPED';
     const isCompletedByMessage =
       log.message.startsWith('Uploaded ') ||
       log.message.startsWith('Skipped existing ');
 
     if (isCompletedByStatus || isCompletedByMessage) {
-      completed.add(mediaItemId);
+      completedKeys.add(mediaItemId);
     }
   }
 
-  return completed;
+  return { completedKeys, latestStatusByItem };
+}
+
+function getCompletedMediaItemIds(logs: Array<{ message: string; meta?: unknown }>): Set<string> {
+  return parseItemLogs(logs).completedKeys;
 }
 
 function getLatestItemStatuses(logs: Array<{ meta?: unknown }>): Map<string, string> {
-  const statuses = new Map<string, string>();
-
-  for (const log of logs) {
-    if (!isRecord(log.meta)) {
-      continue;
-    }
-
-    const mediaItemId = typeof log.meta.mediaItemId === 'string' ? log.meta.mediaItemId : undefined;
-    const status = typeof log.meta.status === 'string' ? log.meta.status : undefined;
-    if (!mediaItemId || !status) {
-      continue;
-    }
-
-    statuses.set(mediaItemId, status);
-  }
-
-  return statuses;
+  // Cast is safe: the function only reads .meta which both types share
+  return parseItemLogs(logs as Array<{ message: string; meta?: unknown }>).latestStatusByItem;
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;

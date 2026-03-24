@@ -117,6 +117,7 @@ export async function registerCatalogRoutes(
 
     try {
       const stats = await catalogService.getStats();
+      reply.header('Cache-Control', 'private, max-age=60, stale-while-revalidate=300');
       return stats;
     } catch (err) {
       const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
@@ -187,8 +188,9 @@ export async function registerCatalogRoutes(
     const { moves } = bulkMoveBodySchema.parse(req.body);
     const results = { moved: [] as { from: string; to: string }[], failed: [] as { key: string; error: string }[] };
 
-    // Process moves with limited concurrency (5 at a time) instead of serially
-    const CONCURRENCY = 5;
+    // Process moves with limited concurrency (20 at a time) — S3 CopyObject is
+    // server-side so higher parallelism is safe and significantly faster.
+    const CONCURRENCY = 20;
     for (let i = 0; i < moves.length; i += CONCURRENCY) {
       const batch = moves.slice(i, i + CONCURRENCY);
       const settled = await Promise.allSettled(
