@@ -970,4 +970,258 @@ describe('scaleway catalog service', () => {
       expect(listCallCount).toBeGreaterThan(countAfterPrime + 1); // +1 for findDuplicates, +1 for re-fetch
     });
   });
+
+  // ── _thumbs prefix exclusion ────────────────────────────────────────────
+
+  describe('_thumbs exclusion', () => {
+    it('excludes _thumbs items from listPage', async () => {
+      const send = vi.fn(async () => ({
+        Contents: [
+          { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
+          { Key: '_thumbs/small/2020/01/01/a.jpg.jpg', Size: 5, LastModified: new Date('2020-01-01') },
+          { Key: '_thumbs/large/2020/01/01/a.jpg.jpg', Size: 20, LastModified: new Date('2020-01-01') },
+          { Key: '2021/06/15/b.mp4', Size: 300, LastModified: new Date('2021-06-15') },
+        ],
+        IsTruncated: false,
+      }));
+
+      const service = makeService(send);
+      const page = await service.listPage({ max: 10 });
+      expect(page.items).toHaveLength(2);
+      expect(page.items.map((i) => i.key)).toEqual(
+        expect.arrayContaining(['2020/01/01/a.jpg', '2021/06/15/b.mp4']),
+      );
+    });
+
+    it('excludes _thumbs items from listAll', async () => {
+      const send = vi.fn(async () => ({
+        Contents: [
+          { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
+          { Key: '_thumbs/small/2020/01/01/a.jpg.jpg', Size: 5, LastModified: new Date('2020-01-01') },
+        ],
+        IsTruncated: false,
+      }));
+
+      const service = makeService(send);
+      const items = await service.listAll();
+      expect(items).toHaveLength(1);
+      expect(items[0]?.key).toBe('2020/01/01/a.jpg');
+    });
+
+    it('excludes _thumbs items from listUndated', async () => {
+      const send = vi.fn(async () => ({
+        Contents: [
+          { Key: 'unknown-date/a.jpg', Size: 100, LastModified: new Date('2024-03-01') },
+          { Key: '_thumbs/small/unknown-date/a.jpg.jpg', Size: 5, LastModified: new Date('2024-03-01') },
+        ],
+        IsTruncated: false,
+      }));
+
+      const service = makeService(send);
+      const items = await service.listUndated();
+      expect(items).toHaveLength(1);
+      expect(items[0]?.key).toBe('unknown-date/a.jpg');
+    });
+
+    it('excludes _thumbs items from findDuplicates', async () => {
+      const send = vi.fn(async () => ({
+        Contents: [
+          { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01'), ETag: '"abc"' },
+          { Key: '_thumbs/small/2020/01/01/a.jpg.jpg', Size: 100, LastModified: new Date('2020-01-01'), ETag: '"abc"' },
+        ],
+        IsTruncated: false,
+      }));
+
+      const service = makeService(send);
+      const groups = await service.findDuplicates();
+      // Only one real media item — no duplicate pair should form with the _thumbs entry
+      expect(groups).toHaveLength(0);
+    });
+
+    it('excludes _thumbs from getStats counts', async () => {
+      const send = vi.fn(async () => ({
+        Contents: [
+          { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
+          { Key: '_thumbs/small/2020/01/01/a.jpg.jpg', Size: 5, LastModified: new Date('2020-01-01') },
+          { Key: '2020/01/01/b.mp4', Size: 300, LastModified: new Date('2020-01-01') },
+        ],
+        IsTruncated: false,
+      }));
+
+      const service = makeService(send);
+      const stats = await service.getStats();
+      expect(stats.totalFiles).toBe(2);
+      expect(stats.imageCount).toBe(1);
+      expect(stats.videoCount).toBe(1);
+      expect(stats.totalBytes).toBe(400); // 100 + 300, not 405
+    });
+  });
+
+  // ── S3 thumbnail persistence ────────────────────────────────────────────
+
+  describe('S3 thumbnail persistence', () => {
+    it('persists generated thumbnail to S3 on first request', async () => {
+      const calls: { name: string; key?: string }[] = [];
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        calls.push({ name, key: cmd.input?.Key });
+        if (name === 'GetObjectCommand' && cmd.input?.Key?.includes('_thumbs/')) {
+          // S3 thumb doesn't exist yet
+          const err = new Error('NoSuchKey');
+          err.name = 'NoSuchKey';
+          throw err;
+        }
+        if (name === 'GetObjectCommand') {
+          // Return original image
+          return {
+            Body: Readable.from([Buffer.from([0xFF, 0xD8, 0xFF, 0xE0])]), // minimal JPEG start
+          };
+        }
+        if (name === 'PutObjectCommand') {
+          return {}; // successful persist
+        }
+        return {};
+      });
+
+      const service = makeService(send);
+      // This will fail at Sharp processing since we use a fake JPEG,
+      // but we can test the S3 interaction pattern
+      try {
+        await service.getThumbnail(encodeKey('2020/01/01/a.jpg'), 'small');
+      } catch {
+        // Sharp will reject the fake JPEG — that's fine
+      }
+
+      // Should have tried: 1) S3 thumb lookup (NoSuchKey), 2) original fetch
+      const getCommands = calls.filter((c) => c.name === 'GetObjectCommand');
+      expect(getCommands).toHaveLength(2);
+      expect(getCommands[0]?.key).toContain('_thumbs/small/');
+      expect(getCommands[1]?.key).toBe('2020/01/01/a.jpg');
+    });
+
+    it('returns persisted thumbnail from S3 without generating', async () => {
+      const thumbJpeg = Buffer.from('fake-persisted-thumbnail');
+      const calls: { name: string; key?: string }[] = [];
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        calls.push({ name, key: cmd.input?.Key });
+        if (name === 'GetObjectCommand' && cmd.input?.Key?.includes('_thumbs/')) {
+          // Return persisted thumbnail
+          return { Body: Readable.from([thumbJpeg]) };
+        }
+        // Should NOT reach here — original should not be fetched
+        return {};
+      });
+
+      const service = makeService(send);
+      const result = await service.getThumbnail(encodeKey('2020/01/01/a.jpg'), 'small');
+
+      // Only one S3 call — the thumb fetch. No original file fetched.
+      expect(calls.filter((c) => c.name === 'GetObjectCommand')).toHaveLength(1);
+      expect(calls[0]?.key).toContain('_thumbs/small/');
+      expect(result.contentType).toBe('image/jpeg');
+      expect(result.buffer).toEqual(thumbJpeg);
+    });
+
+    it('uses LRU cache before checking S3', async () => {
+      const thumbJpeg = Buffer.from('fake-persisted-thumbnail');
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'GetObjectCommand' && cmd.input?.Key?.includes('_thumbs/')) {
+          return { Body: Readable.from([thumbJpeg]) };
+        }
+        return {};
+      });
+
+      const service = makeService(send);
+      // First call — populates LRU from S3
+      await service.getThumbnail(encodeKey('2020/01/01/a.jpg'), 'small');
+      expect(send).toHaveBeenCalledTimes(1);
+
+      // Second call — should come from LRU, no S3 call
+      const result = await service.getThumbnail(encodeKey('2020/01/01/a.jpg'), 'small');
+      expect(send).toHaveBeenCalledTimes(1); // still 1
+      expect(result.buffer).toEqual(thumbJpeg);
+    });
+
+    it('deleteObjects also deletes persisted thumbnails', async () => {
+      const deletedKeys: string[] = [];
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'DeleteObjectsCommand') {
+          const objects = cmd.input?.Delete?.Objects ?? [];
+          for (const o of objects) {
+            deletedKeys.push(o.Key);
+          }
+          return {
+            Deleted: objects.map((o: any) => ({ Key: o.Key })),
+            Errors: [],
+          };
+        }
+        return {};
+      });
+
+      const service = makeService(send);
+      await service.deleteObjects([encodeKey('2020/01/01/a.jpg')]);
+
+      // The first DeleteObjects call is for the media file itself.
+      // Then fire-and-forget deletes both thumb sizes.
+      // Wait for fire-and-forget to complete.
+      await new Promise((r) => setTimeout(r, 50));
+
+      const thumbKeys = deletedKeys.filter((k) => k.includes('_thumbs/'));
+      expect(thumbKeys).toHaveLength(2);
+      expect(thumbKeys).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('_thumbs/small/'),
+          expect.stringContaining('_thumbs/large/'),
+        ]),
+      );
+    });
+
+    it('moveObject deletes old persisted thumbnails', async () => {
+      const deletedKeys: string[] = [];
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'DeleteObjectsCommand') {
+          const objects = cmd.input?.Delete?.Objects ?? [];
+          for (const o of objects) deletedKeys.push(o.Key);
+          return { Deleted: objects.map((o: any) => ({ Key: o.Key })), Errors: [] };
+        }
+        return {};
+      });
+
+      const service = makeService(send);
+      await service.moveObject(encodeKey('2026/02/24/photo.jpg'), '2020/03/15');
+
+      // Wait for fire-and-forget thumbnail cleanup
+      await new Promise((r) => setTimeout(r, 50));
+
+      const thumbKeys = deletedKeys.filter((k) => k.includes('_thumbs/'));
+      expect(thumbKeys).toHaveLength(2);
+      expect(thumbKeys).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('_thumbs/small/2026/02/24/photo.jpg'),
+          expect.stringContaining('_thumbs/large/2026/02/24/photo.jpg'),
+        ]),
+      );
+    });
+
+    it('bubbles unexpected S3 errors during thumb check', async () => {
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'GetObjectCommand' && cmd.input?.Key?.includes('_thumbs/')) {
+          const err = new Error('InternalError');
+          err.name = 'InternalError';
+          throw err;
+        }
+        return {};
+      });
+
+      const service = makeService(send);
+      await expect(
+        service.getThumbnail(encodeKey('2020/01/01/a.jpg'), 'small'),
+      ).rejects.toThrow('InternalError');
+    });
+  });
 });
