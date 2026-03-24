@@ -352,10 +352,12 @@ async function deriveCapturedDate(
   const fromVideo = await extractVideoCreationDate(sourcePath);
   if (fromVideo && !isWrongDate(fromVideo)) return fromVideo;
 
-  // 5. Sidecar creationTime as last resort — only when photoTakenTime was absent.
+  // 5. Sidecar creationTime as last resort — when photoTakenTime is absent,
+  //    unparseable (e.g. timestamp "0"), or rejected as invalid by isWrongDate.
   //    creationTime is "when added to Google Photos", not capture date, so it's
   //    less reliable but better than nothing when all other sources fail.
-  if (sidecarDates && !sidecarDates.hasPhotoTakenTime &&
+  const photoTakenUsable = sidecarDates?.photoTakenDate && !isWrongDate(sidecarDates.photoTakenDate);
+  if (sidecarDates && !photoTakenUsable &&
       sidecarDates.creationDate && !isWrongDate(sidecarDates.creationDate)) {
     return sidecarDates.creationDate;
   }
