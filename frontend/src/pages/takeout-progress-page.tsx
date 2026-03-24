@@ -116,6 +116,9 @@ export function TakeoutProgressPage() {
   const verifyMissingCount = getVerifyMissingCount(lastOutput);
   const verifyPresentCount = getVerifyPresentCount(lastOutput);
 
+  // Parsed cleanup details from output
+  const cleanupDetails = isCleanupAction(actionStatus?.action) ? parseCleanupOutput(lastOutput) : null;
+
   // Page state machine
   let pageState: PageState;
   if (isActionRunning) {
@@ -394,11 +397,51 @@ export function TakeoutProgressPage() {
             <span className="text-base" aria-hidden>✗</span>
             <p className="font-semibold text-sm">{describeAction(actionStatus?.action)} failed</p>
           </div>
-          {failureReason && (
+
+          {/* Structured cleanup failure details */}
+          {cleanupDetails && (cleanupDetails.failedFiles.length > 0 || cleanupDetails.missingFiles.length > 0) ? (
+            <div className="space-y-2">
+              {cleanupDetails.failedFiles.length > 0 && (
+                <div className="rounded-md bg-red-50 border border-red-200 p-2 space-y-1.5">
+                  <p className="text-xs font-semibold text-red-800">
+                    {cleanupDetails.failedFiles.length} file{cleanupDetails.failedFiles.length !== 1 ? 's' : ''} failed:
+                  </p>
+                  <ul className="space-y-1">
+                    {cleanupDetails.failedFiles.map((f, i) => (
+                      <li key={i} className="text-xs">
+                        <span className="font-mono text-red-700 break-all">{f.file}</span>
+                        <span className="text-red-600 block text-[11px] ml-2">{f.reason}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {cleanupDetails.missingFiles.length > 0 && (
+                <div className="rounded-md bg-amber-50 border border-amber-200 p-2 space-y-1.5">
+                  <p className="text-xs font-semibold text-amber-800">
+                    {cleanupDetails.missingCount.toLocaleString()} file{cleanupDetails.missingCount !== 1 ? 's' : ''} have no upload record
+                  </p>
+                  <p className="text-[11px] text-amber-700">
+                    These files are in the manifest but not in the upload state — usually because the manifest was rebuilt after upload.
+                  </p>
+                  <ul className="space-y-0.5">
+                    {cleanupDetails.missingFiles.map((f, i) => (
+                      <li key={i} className="text-[11px] font-mono text-amber-700 break-all">{f}</li>
+                    ))}
+                  </ul>
+                  {cleanupDetails.missingCount > cleanupDetails.missingFiles.length && (
+                    <p className="text-[11px] text-amber-500">
+                      …and {(cleanupDetails.missingCount - cleanupDetails.missingFiles.length).toLocaleString()} more
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : failureReason ? (
             <pre className="text-xs font-mono whitespace-pre-wrap break-all bg-red-50 rounded p-2 border border-red-200">
               {failureReason}
             </pre>
-          )}
+          ) : null}
           <div className="flex flex-wrap gap-2">
             {actionStatus?.action && !isForceCleanupAction(actionStatus.action) && (
               <Button type="button" disabled={busy} onClick={() => run(actionStatus.action!)}>
@@ -1546,4 +1589,58 @@ function getActionFailureReason(output: string[]): string | undefined {
   }
 
   return undefined;
+}
+
+type CleanupOutputDetails = {
+  failedFiles: { file: string; reason: string }[];
+  missingFiles: string[];
+  missingCount: number;
+};
+
+function parseCleanupOutput(output: string[]): CleanupOutputDetails {
+  const failedFiles: { file: string; reason: string }[] = [];
+  const missingFiles: string[] = [];
+  let missingCount = 0;
+
+  for (let i = 0; i < output.length; i++) {
+    const line = output[i].trim();
+
+    // Parse "✗ filename (N attempts)" + next line "reason"
+    const failedMatch = line.match(/[✗✕]\s+(.+?)(?:\s+\(\d+ attempts?\))?$/);
+    if (failedMatch && i + 1 < output.length) {
+      const nextLine = output[i + 1].trim();
+      // Only treat as reason if it's indented or doesn't match another marker
+      if (nextLine && !/^[✗✕✅⚠❌❓·…]/.test(nextLine)) {
+        failedFiles.push({ file: failedMatch[1], reason: nextLine });
+        i++; // skip reason line
+        continue;
+      }
+    }
+
+    // Parse action-phase failures: "⚠️  Failed: filename" + "reason"
+    const actionFailMatch = line.match(/Failed:\s+(.+)/);
+    if (actionFailMatch && /⚠/.test(line) && i + 1 < output.length) {
+      const nextLine = output[i + 1].trim();
+      if (nextLine && !/^[✗✕✅⚠❌❓·…]/.test(nextLine)) {
+        failedFiles.push({ file: actionFailMatch[1], reason: nextLine });
+        i++;
+        continue;
+      }
+    }
+
+    // Parse "· filename" under "Sample missing files" section
+    const sampleMatch = line.match(/^·\s+(.+)/);
+    if (sampleMatch) {
+      missingFiles.push(sampleMatch[1]);
+      continue;
+    }
+
+    // Parse "❓ Missing:  N"
+    const missingMatch = line.match(/Missing:\s+([\d,]+)/);
+    if (missingMatch) {
+      missingCount = parseInt(missingMatch[1].replace(/,/g, ''), 10);
+    }
+  }
+
+  return { failedFiles, missingFiles, missingCount };
 }
