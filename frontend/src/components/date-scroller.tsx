@@ -233,22 +233,36 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
   // ── Find the closest section date for a given "YYYY-MM-DD" or "YYYY-MM-01" ──
   // Needed because not all months in the distribution may be loaded yet.
 
+  // Pre-compute sorted date list + numeric values for fast binary search
+  const sectionDatesDesc = useMemo(() => {
+    const dates = sections.map(([d]) => d);
+    const nums = dates.map((d) => parseInt(d.replace(/-/g, ''), 10));
+    return { dates, nums };
+  }, [sections]);
+
   const closestSectionDate = useCallback(
     (targetDate: string): string | null => {
-      if (sections.length === 0) return null;
-      // Try exact match first
-      const exact = sections.find(([d]) => d === targetDate);
-      if (exact) return exact[0];
-      // Find closest loaded section by date string comparison
-      let best = sections[0][0];
-      let bestDiff = Math.abs(targetDate.localeCompare(best));
-      for (const [d] of sections) {
-        const diff = Math.abs(targetDate.localeCompare(d));
-        if (diff < bestDiff) { best = d; bestDiff = diff; }
+      const { dates, nums } = sectionDatesDesc;
+      if (dates.length === 0) return null;
+      const exact = dates.indexOf(targetDate);
+      if (exact !== -1) return dates[exact];
+      // Binary search for closest (sections are sorted descending = nums descending)
+      const targetNum = parseInt(targetDate.replace(/-/g, ''), 10);
+      let lo = 0;
+      let hi = nums.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (nums[mid] > targetNum) lo = mid + 1;
+        else hi = mid;
       }
-      return best;
+      // lo is the first index where nums[lo] <= targetNum; check neighbors
+      let best = lo;
+      if (lo > 0 && Math.abs(nums[lo - 1] - targetNum) < Math.abs(nums[lo] - targetNum)) {
+        best = lo - 1;
+      }
+      return dates[best];
     },
-    [sections],
+    [sectionDatesDesc],
   );
 
   // ── Date at a given track ratio (using full months array) ───────────────
@@ -448,7 +462,7 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
 
   // ── Tooltip text: "Mon YYYY" from the handle date ──────────────────────
   const handleTooltipText = tooltipDate
-    ? `${monthLabel(tooltipDate.length === 7 ? tooltipDate + '-01' : tooltipDate)} ${(tooltipDate.length === 7 ? tooltipDate : tooltipDate).slice(0, 4)}`
+    ? `${monthLabel(tooltipDate)} ${tooltipDate.slice(0, 4)}`
     : null;
 
   return (
@@ -470,7 +484,7 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(handleRatio * 100)}
-        aria-valuetext={tooltipDate ? formatTooltip(tooltipDate.length === 7 ? tooltipDate + '-01' : tooltipDate) : undefined}
+        aria-valuetext={tooltipDate ? formatTooltip(tooltipDate) : undefined}
         tabIndex={0}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

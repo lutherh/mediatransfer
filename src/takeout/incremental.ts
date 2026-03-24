@@ -717,7 +717,13 @@ export async function reconcileManifest(
     return { removed: 0, kept: 0 };
   }
 
-  const state = await loadUploadState(statePath);
+  let state: Awaited<ReturnType<typeof loadUploadState>>;
+  try {
+    state = await loadUploadState(statePath);
+  } catch {
+    // State file missing or corrupt — can't reconcile without it
+    return { removed: 0, kept: 0 };
+  }
   const stateKeys = new Set(Object.keys(state.items));
 
   // Keep entries that have a matching record in the upload state

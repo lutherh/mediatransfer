@@ -135,8 +135,16 @@ export async function registerCatalogRoutes(
     }
 
     const query = z.object({ prefix: z.string().optional() }).parse(req.query);
-    const items = await catalogService.listAll(query.prefix);
-    return { items };
+    try {
+      const items = await catalogService.listAll(query.prefix);
+      return { items };
+    } catch (err) {
+      const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+      const status = isTimeout ? 503 : 500;
+      const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to list all catalog items';
+      console.error('[catalog] /catalog/api/items/all error:', err);
+      return reply.status(status).send({ error: message });
+    }
   });
 
   app.get('/catalog/api/date-distribution', async (_req, reply) => {
@@ -183,8 +191,16 @@ export async function registerCatalogRoutes(
     }
 
     const { encodedKeys } = deleteBodySchema.parse(req.body);
-    const result = await catalogService.deleteObjects(encodedKeys);
-    return result;
+    try {
+      const result = await catalogService.deleteObjects(encodedKeys);
+      return result;
+    } catch (err) {
+      const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+      const status = isTimeout ? 503 : 500;
+      const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to delete catalog items';
+      console.error('[catalog] DELETE /catalog/api/items error:', err);
+      return reply.status(status).send({ error: message });
+    }
   });
 
   app.patch('/catalog/api/items/move', async (req, reply) => {
@@ -194,8 +210,16 @@ export async function registerCatalogRoutes(
     }
 
     const { encodedKey, newDatePrefix } = moveBodySchema.parse(req.body);
-    const result = await catalogService.moveObject(encodedKey, newDatePrefix);
-    return result;
+    try {
+      const result = await catalogService.moveObject(encodedKey, newDatePrefix);
+      return result;
+    } catch (err) {
+      const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+      const status = isTimeout ? 503 : 500;
+      const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to move catalog item';
+      console.error('[catalog] PATCH /catalog/api/items/move error:', err);
+      return reply.status(status).send({ error: message });
+    }
   });
 
   app.patch('/catalog/api/items/bulk-move', async (req, reply) => {
@@ -341,10 +365,18 @@ export async function registerCatalogRoutes(
       return;
     }
 
-    const groups = await catalogService.findDuplicates();
-    const totalDuplicates = groups.reduce((sum, group) => sum + group.duplicateKeys.length, 0);
-    const bytesFreed = groups.reduce((sum, group) => sum + group.duplicateKeys.length * group.size, 0);
-    return { groups, totalDuplicates, bytesFreed };
+    try {
+      const groups = await catalogService.findDuplicates();
+      const totalDuplicates = groups.reduce((sum, group) => sum + group.duplicateKeys.length, 0);
+      const bytesFreed = groups.reduce((sum, group) => sum + group.duplicateKeys.length * group.size, 0);
+      return { groups, totalDuplicates, bytesFreed };
+    } catch (err) {
+      const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+      const status = isTimeout ? 503 : 500;
+      const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to find duplicates';
+      console.error('[catalog] /catalog/api/duplicates error:', err);
+      return reply.status(status).send({ error: message });
+    }
   });
 
   app.post('/catalog/api/deduplicate', async (req, reply) => {
@@ -354,8 +386,16 @@ export async function registerCatalogRoutes(
     }
 
     const body = z.object({ dryRun: z.boolean().optional() }).parse(req.body);
-    const result = await catalogService.deduplicateObjects({ dryRun: body.dryRun });
-    return result;
+    try {
+      const result = await catalogService.deduplicateObjects({ dryRun: body.dryRun });
+      return result;
+    } catch (err) {
+      const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+      const status = isTimeout ? 503 : 500;
+      const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to deduplicate objects';
+      console.error('[catalog] POST /catalog/api/deduplicate error:', err);
+      return reply.status(status).send({ error: message });
+    }
   });
 
   // ── Thumbnail endpoint ─────────────────────────────────────────────────
