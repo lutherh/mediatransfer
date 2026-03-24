@@ -1,6 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { Readable } from 'node:stream';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import {
+  DiskThumbnailCache,
   ScalewayCatalogService,
   buildDuplicateGroups,
   decodeKey,
@@ -1222,6 +1227,379 @@ describe('scaleway catalog service', () => {
       await expect(
         service.getThumbnail(encodeKey('2020/01/01/a.jpg'), 'small'),
       ).rejects.toThrow('InternalError');
+    });
+  });
+
+  // ── Disk thumbnail cache ────────────────────────────────────────────────
+
+  describe('DiskThumbnailCache', () => {
+    let tmpDir: string;
+
+    beforeEach(async () => {
+      tmpDir = path.join(tmpdir(), `thumb-test-${randomUUID()}`);
+      await fs.mkdir(tmpDir, { recursive: true });
+    });
+
+    afterEach(async () => {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    });
+
+    it('returns null for cache miss', async () => {
+      const cache = new DiskThumbnailCache(tmpDir);
+      const result = await cache.get('2020/01/01/photo.jpg', 'small');
+      expect(result).toBeNull();
+    });
+
+    it('stores and retrieves a thumbnail', async () => {
+      const cache = new DiskThumbnailCache(tmpDir);
+      const data = Buffer.from('fake-thumbnail-jpeg');
+      cache.set('2020/01/01/photo.jpg', 'small', data);
+      // Wait for fire-and-forget write
+      await new Promise((r) => setTimeout(r, 100));
+      const result = await cache.get('2020/01/01/photo.jpg', 'small');
+      expect(result).toEqual(data);
+    });
+
+    it('stores small and large independently', async () => {
+      const cache = new DiskThumbnailCache(tmpDir);
+      const small = Buffer.from('small-thumb');
+      const large = Buffer.from('large-thumb');
+      cache.set('photo.jpg', 'small', small);
+      cache.set('photo.jpg', 'large', large);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(await cache.get('photo.jpg', 'small')).toEqual(small);
+      expect(await cache.get('photo.jpg', 'large')).toEqual(large);
+    });
+
+    it('deleteForKeys removes both sizes', async () => {
+      const cache = new DiskThumbnailCache(tmpDir);
+      cache.set('2020/01/01/a.jpg', 'small', Buffer.from('s'));
+      cache.set('2020/01/01/a.jpg', 'large', Buffer.from('l'));
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Verify they exist
+      expect(await cache.get('2020/01/01/a.jpg', 'small')).not.toBeNull();
+      expect(await cache.get('2020/01/01/a.jpg', 'large')).not.toBeNull();
+
+      // Delete
+      cache.deleteForKeys(['2020/01/01/a.jpg']);
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Both should be gone
+      expect(await cache.get('2020/01/01/a.jpg', 'small')).toBeNull();
+      expect(await cache.get('2020/01/01/a.jpg', 'large')).toBeNull();
+    });
+
+    it('deleteForKeys does not affect other keys', async () => {
+      const cache = new DiskThumbnailCache(tmpDir);
+      cache.set('keep.jpg', 'small', Buffer.from('keep'));
+      cache.set('delete.jpg', 'small', Buffer.from('delete'));
+      await new Promise((r) => setTimeout(r, 100));
+
+      cache.deleteForKeys(['delete.jpg']);
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(await cache.get('keep.jpg', 'small')).toEqual(Buffer.from('keep'));
+      expect(await cache.get('delete.jpg', 'small')).toBeNull();
+    });
+
+    it('deleteForKeys is safe for non-existent keys', async () => {
+      const cache = new DiskThumbnailCache(tmpDir);
+      // Should not throw
+      cache.deleteForKeys(['never-existed.jpg']);
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    it('overwrite replaces cached data', async () => {
+      const cache = new DiskThumbnailCache(tmpDir);
+      cache.set('photo.jpg', 'small', Buffer.from('original'));
+      await new Promise((r) => setTimeout(r, 100));
+      cache.set('photo.jpg', 'small', Buffer.from('updated'));
+      await new Promise((r) => setTimeout(r, 100));
+      const result = await cache.get('photo.jpg', 'small');
+      expect(result).toEqual(Buffer.from('updated'));
+    });
+
+    it('uses different on-disk paths for different S3 keys', async () => {
+      const cache = new DiskThumbnailCache(tmpDir);
+      cache.set('2020/01/01/a.jpg', 'small', Buffer.from('a'));
+      cache.set('2021/06/15/b.jpg', 'small', Buffer.from('b'));
+      await new Promise((r) => setTimeout(r, 100));
+      expect(await cache.get('2020/01/01/a.jpg', 'small')).toEqual(Buffer.from('a'));
+      expect(await cache.get('2021/06/15/b.jpg', 'small')).toEqual(Buffer.from('b'));
+    });
+  });
+
+  // ── Disk cache integration with getThumbnail ────────────────────────────
+
+  describe('disk cache integration', () => {
+    let tmpDir: string;
+
+    beforeEach(async () => {
+      tmpDir = path.join(tmpdir(), `thumb-int-${randomUUID()}`);
+      await fs.mkdir(tmpDir, { recursive: true });
+    });
+
+    afterEach(async () => {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    });
+
+    function makeServiceWithDisk(send: ReturnType<typeof vi.fn>) {
+      return new ScalewayCatalogService(
+        { region: 'nl-ams', bucket: 'media', accessKey: 'access', secretKey: 'secret', thumbCacheDir: tmpDir },
+        { send } as any,
+      );
+    }
+
+    it('disk cache hit avoids S3 completely', async () => {
+      // Pre-populate disk cache
+      const diskCache = new DiskThumbnailCache(tmpDir);
+      const thumbData = Buffer.from('cached-on-disk');
+      diskCache.set('2020/01/01/a.jpg', 'small', thumbData);
+      await new Promise((r) => setTimeout(r, 100));
+
+      const send = vi.fn();
+      const service = makeServiceWithDisk(send);
+      const result = await service.getThumbnail(encodeKey('2020/01/01/a.jpg'), 'small');
+
+      expect(result.buffer).toEqual(thumbData);
+      expect(result.contentType).toBe('image/jpeg');
+      // No S3 calls at all
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('S3 hit backfills disk cache', async () => {
+      const thumbJpeg = Buffer.from('s3-persisted-thumbnail');
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'GetObjectCommand' && cmd.input?.Key?.includes('_thumbs/')) {
+          return { Body: Readable.from([thumbJpeg]) };
+        }
+        return {};
+      });
+
+      const service = makeServiceWithDisk(send);
+      await service.getThumbnail(encodeKey('2020/01/01/a.jpg'), 'small');
+
+      // Wait for fire-and-forget disk write
+      await new Promise((r) => setTimeout(r, 150));
+
+      // Verify disk was populated
+      const diskCache = new DiskThumbnailCache(tmpDir);
+      const diskHit = await diskCache.get('2020/01/01/a.jpg', 'small');
+      expect(diskHit).toEqual(thumbJpeg);
+    });
+
+    it('second request after LRU eviction hits disk instead of S3', async () => {
+      const thumbJpeg = Buffer.from('s3-persisted-thumbnail');
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'GetObjectCommand' && cmd.input?.Key?.includes('_thumbs/')) {
+          return { Body: Readable.from([thumbJpeg]) };
+        }
+        return {};
+      });
+
+      const service = makeServiceWithDisk(send);
+
+      // First request — hits S3, backfills disk
+      await service.getThumbnail(encodeKey('2020/01/01/a.jpg'), 'small');
+      expect(send).toHaveBeenCalledTimes(1);
+      await new Promise((r) => setTimeout(r, 150));
+
+      // Fill LRU cache with other entries to evict our entry
+      for (let i = 0; i < 501; i++) {
+        const fakeSend = vi.fn(async (cmd: any) => {
+          const name = cmd.constructor?.name ?? '';
+          if (name === 'GetObjectCommand' && cmd.input?.Key?.includes('_thumbs/')) {
+            return { Body: Readable.from([Buffer.from(`thumb-${i}`)]) };
+          }
+          return {};
+        });
+        const tempService = makeServiceWithDisk(fakeSend);
+        // We can't easily evict from the same service's LRU, so instead
+        // create a fresh service that shares the same disk cache dir
+        // but has an empty LRU
+        break;
+      }
+
+      // Create a fresh service (empty LRU) sharing the same disk dir
+      const send2 = vi.fn();
+      const service2 = makeServiceWithDisk(send2);
+      const result2 = await service2.getThumbnail(encodeKey('2020/01/01/a.jpg'), 'small');
+
+      // Should serve from disk, no S3 calls
+      expect(send2).not.toHaveBeenCalled();
+      expect(result2.buffer).toEqual(thumbJpeg);
+    });
+
+    it('deleteObjects clears disk cache for deleted items', async () => {
+      // Pre-populate disk cache
+      const diskCache = new DiskThumbnailCache(tmpDir);
+      diskCache.set('2020/01/01/a.jpg', 'small', Buffer.from('cached'));
+      diskCache.set('2020/01/01/a.jpg', 'large', Buffer.from('cached-large'));
+      await new Promise((r) => setTimeout(r, 100));
+
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'DeleteObjectsCommand') {
+          const objects = cmd.input?.Delete?.Objects ?? [];
+          return {
+            Deleted: objects.map((o: any) => ({ Key: o.Key })),
+            Errors: [],
+          };
+        }
+        return {};
+      });
+
+      const service = makeServiceWithDisk(send);
+      await service.deleteObjects([encodeKey('2020/01/01/a.jpg')]);
+
+      // Wait for fire-and-forget operations
+      await new Promise((r) => setTimeout(r, 150));
+
+      // Disk cache should be empty for both sizes
+      expect(await diskCache.get('2020/01/01/a.jpg', 'small')).toBeNull();
+      expect(await diskCache.get('2020/01/01/a.jpg', 'large')).toBeNull();
+    });
+
+    it('moveObject clears disk cache for old key', async () => {
+      // Pre-populate disk cache for old key
+      const diskCache = new DiskThumbnailCache(tmpDir);
+      diskCache.set('2020/01/01/photo.jpg', 'small', Buffer.from('old-thumb'));
+      diskCache.set('2020/01/01/photo.jpg', 'large', Buffer.from('old-thumb-lg'));
+      await new Promise((r) => setTimeout(r, 100));
+
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'DeleteObjectsCommand') {
+          return { Deleted: [], Errors: [] };
+        }
+        return {};
+      });
+
+      const service = makeServiceWithDisk(send);
+      await service.moveObject(encodeKey('2020/01/01/photo.jpg'), '2021/06/15');
+
+      await new Promise((r) => setTimeout(r, 150));
+
+      // Old key's disk cache should be cleaned
+      expect(await diskCache.get('2020/01/01/photo.jpg', 'small')).toBeNull();
+      expect(await diskCache.get('2020/01/01/photo.jpg', 'large')).toBeNull();
+    });
+
+    it('delete then re-request does not serve stale disk cache', async () => {
+      // Pre-populate disk cache
+      const diskCache = new DiskThumbnailCache(tmpDir);
+      diskCache.set('2020/01/01/a.jpg', 'small', Buffer.from('will-be-deleted'));
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Delete the object
+      const deleteSend = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'DeleteObjectsCommand') {
+          const objects = cmd.input?.Delete?.Objects ?? [];
+          return { Deleted: objects.map((o: any) => ({ Key: o.Key })), Errors: [] };
+        }
+        return {};
+      });
+
+      const service = makeServiceWithDisk(deleteSend);
+      await service.deleteObjects([encodeKey('2020/01/01/a.jpg')]);
+      await new Promise((r) => setTimeout(r, 150));
+
+      // Now try to get thumbnail — should NOT return the old cached data
+      // Instead it should reach S3 (which won't have it either)
+      const fetchSend = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'GetObjectCommand' && cmd.input?.Key?.includes('_thumbs/')) {
+          const err = new Error('NoSuchKey');
+          err.name = 'NoSuchKey';
+          throw err;
+        }
+        if (name === 'GetObjectCommand') {
+          // Return original for re-generation
+          return {
+            Body: Readable.from([Buffer.from([0xFF, 0xD8, 0xFF, 0xE0])]),
+          };
+        }
+        return {};
+      });
+
+      const service2 = makeServiceWithDisk(fetchSend);
+      try {
+        await service2.getThumbnail(encodeKey('2020/01/01/a.jpg'), 'small');
+      } catch {
+        // Sharp will reject fake JPEG — that's fine
+      }
+
+      // Key point: the disk cache should NOT have served stale data.
+      // The service should have gone to S3 (fetchSend should have been called).
+      expect(fetchSend).toHaveBeenCalled();
+      // Specifically, should try the _thumbs/ S3 lookup since disk was empty
+      const s3ThumbCall = fetchSend.mock.calls.find(
+        (call: any) => call[0]?.constructor?.name === 'GetObjectCommand' &&
+          call[0]?.input?.Key?.includes('_thumbs/'),
+      );
+      expect(s3ThumbCall).toBeDefined();
+    });
+
+    it('deleteObjects also evicts from LRU cache', async () => {
+      const thumbJpeg = Buffer.from('lru-cached-thumbnail');
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'GetObjectCommand' && cmd.input?.Key?.includes('_thumbs/')) {
+          return { Body: Readable.from([thumbJpeg]) };
+        }
+        if (name === 'DeleteObjectsCommand') {
+          const objects = cmd.input?.Delete?.Objects ?? [];
+          return { Deleted: objects.map((o: any) => ({ Key: o.Key })), Errors: [] };
+        }
+        return {};
+      });
+
+      const service = makeServiceWithDisk(send);
+
+      // Populate LRU + disk
+      await service.getThumbnail(encodeKey('2020/01/01/a.jpg'), 'small');
+      expect(send).toHaveBeenCalledTimes(1);
+
+      // Second call — LRU hit, no S3
+      await service.getThumbnail(encodeKey('2020/01/01/a.jpg'), 'small');
+      expect(send).toHaveBeenCalledTimes(1);
+
+      // Wait for fire-and-forget disk write to complete before deleting,
+      // otherwise the async unlink may race with the async write.
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Delete
+      await service.deleteObjects([encodeKey('2020/01/01/a.jpg')]);
+      await new Promise((r) => setTimeout(r, 150));
+
+      // Reset send mock with new behavior
+      send.mockClear();
+      send.mockImplementation(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        if (name === 'GetObjectCommand' && cmd.input?.Key?.includes('_thumbs/')) {
+          const err = new Error('NoSuchKey');
+          err.name = 'NoSuchKey';
+          throw err;
+        }
+        if (name === 'GetObjectCommand') {
+          return { Body: Readable.from([Buffer.from([0xFF, 0xD8])]) };
+        }
+        return {};
+      });
+
+      // LRU should be evicted — next call should hit disk/S3
+      try {
+        await service.getThumbnail(encodeKey('2020/01/01/a.jpg'), 'small');
+      } catch {
+        // Sharp rejects fake JPEG
+      }
+
+      // Should have made S3 calls (LRU was evicted, disk was cleared)
+      expect(send).toHaveBeenCalled();
     });
   });
 });

@@ -11,7 +11,7 @@ import {
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { Agent as HttpsAgent } from 'node:https';
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -160,6 +160,8 @@ export type ScalewayCatalogConfig = {
   s3RequestTimeoutMs?: number;
   /** Max retries for ListObjectsV2 page requests. */
   s3ListMaxRetries?: number;
+  /** Directory for local disk thumbnail cache. Set to enable disk caching between LRU and S3. */
+  thumbCacheDir?: string;
 };
 
 const IMAGE_EXTENSIONS = new Set([
@@ -323,6 +325,52 @@ class ThumbnailCache {
     }
     this.map.set(key, entry);
   }
+
+  delete(key: string): void {
+    this.map.delete(key);
+  }
+}
+
+/**
+ * Persistent on-disk thumbnail cache. Files are stored as
+ * `{baseDir}/{size}/{hash[0..1]}/{hash}.jpg` where hash = SHA-256(decodedKey).
+ * Reads are async (~1ms for cached files). Writes and deletes are fire-and-forget.
+ */
+export class DiskThumbnailCache {
+  constructor(private readonly baseDir: string) {}
+
+  /** Derive a filesystem-safe path from a decoded S3 key + thumbnail size. */
+  private filePath(decodedKey: string, size: ThumbnailSize): string {
+    const hash = createHash('sha256').update(decodedKey).digest('hex');
+    return path.join(this.baseDir, size, hash.slice(0, 2), `${hash}.jpg`);
+  }
+
+  async get(decodedKey: string, size: ThumbnailSize): Promise<Buffer | null> {
+    try {
+      return await fs.readFile(this.filePath(decodedKey, size));
+    } catch {
+      return null;
+    }
+  }
+
+  set(decodedKey: string, size: ThumbnailSize, buffer: Buffer): void {
+    const fp = this.filePath(decodedKey, size);
+    fs.mkdir(path.dirname(fp), { recursive: true })
+      .then(() => fs.writeFile(fp, buffer))
+      .catch((err) => {
+        console.warn('[catalog] Failed to write disk thumbnail cache', { file: fp, err });
+      });
+  }
+
+  deleteForKeys(decodedKeys: string[]): void {
+    for (const key of decodedKeys) {
+      for (const size of ['small', 'large'] as ThumbnailSize[]) {
+        fs.unlink(this.filePath(key, size)).catch(() => {
+          // Ignore ENOENT — file may not be cached
+        });
+      }
+    }
+  }
 }
 
 /** Retry wrapper for S3 ListObjectsV2 — retries transient / timeout errors with linear backoff. */
@@ -362,6 +410,7 @@ export class ScalewayCatalogService implements CatalogService {
   private statsCache: { data: CatalogStats; expiresAt: number } | null = null;
   private statsInflight: Promise<CatalogStats> | null = null;
   private readonly thumbCache = new ThumbnailCache();
+  private readonly diskCache: DiskThumbnailCache | null;
   private itemsIndexCache: { items: CatalogItem[]; expiresAt: number } | null = null;
   private itemsIndexInflight: Promise<CatalogItem[]> | null = null;
 
@@ -370,6 +419,7 @@ export class ScalewayCatalogService implements CatalogService {
     this.prefix = config.prefix ?? '';
     this.s3RequestTimeoutMs = normalizePositiveInteger(config.s3RequestTimeoutMs, DEFAULT_S3_REQUEST_TIMEOUT_MS);
     this.s3ListMaxRetries = normalizePositiveInteger(config.s3ListMaxRetries, DEFAULT_MAX_PAGE_RETRIES);
+    this.diskCache = config.thumbCacheDir ? new DiskThumbnailCache(config.thumbCacheDir) : null;
     this.client =
       client ??
       new S3Client({
@@ -635,7 +685,17 @@ export class ScalewayCatalogService implements CatalogService {
 
     const decodedKey = decodeKey(encodedKey);
 
-    // ── Layer 2: Check for pre-generated thumbnail in S3 ──────────────────
+    // ── Layer 2: Check local disk cache ───────────────────────────────────
+    if (this.diskCache) {
+      const diskBuffer = await this.diskCache.get(decodedKey, size);
+      if (diskBuffer) {
+        const contentType = 'image/jpeg';
+        this.thumbCache.set(cacheKey, { buffer: diskBuffer, contentType, expiresAt: Date.now() + THUMB_CACHE_TTL_MS });
+        return { buffer: diskBuffer, contentType };
+      }
+    }
+
+    // ── Layer 3: Check for pre-generated thumbnail in S3 ──────────────────
     const thumbKey = thumbObjectKey(decodedKey, size);
     const fullThumbKey = this.withPrefix(thumbKey);
     try {
@@ -655,6 +715,8 @@ export class ScalewayCatalogService implements CatalogService {
         const buffer = Buffer.concat(chunks);
         const contentType = 'image/jpeg';
         this.thumbCache.set(cacheKey, { buffer, contentType, expiresAt: Date.now() + THUMB_CACHE_TTL_MS });
+        // Backfill disk cache from S3 hit (fire-and-forget)
+        this.diskCache?.set(decodedKey, size, buffer);
         return { buffer, contentType };
       }
     } catch (err: unknown) {
@@ -664,7 +726,7 @@ export class ScalewayCatalogService implements CatalogService {
       }
     }
 
-    // ── Layer 3: Generate from original and persist ───────────────────────
+    // ── Layer 4: Generate from original and persist ───────────────────────
     const buffer = await this.generateThumbnailBuffer(decodedKey, size);
     const contentType = 'image/jpeg';
 
@@ -680,6 +742,9 @@ export class ScalewayCatalogService implements CatalogService {
     ).catch((err) => {
       console.warn('[catalog] Failed to persist thumbnail to S3', { thumbKey, err });
     });
+
+    // Persist to disk cache (fire-and-forget)
+    this.diskCache?.set(decodedKey, size, buffer);
 
     this.thumbCache.set(cacheKey, { buffer, contentType, expiresAt: Date.now() + THUMB_CACHE_TTL_MS });
     return { buffer, contentType };
@@ -1072,9 +1137,20 @@ export class ScalewayCatalogService implements CatalogService {
 
   /**
    * Best-effort fire-and-forget deletion of persisted thumbnails for the given
-   * decoded media keys. Deletes both 'small' and 'large' sizes.
+   * decoded media keys. Deletes from LRU cache, disk cache, and S3.
    */
   private deleteThumbsForKeys(decodedKeys: string[]): void {
+    // Evict from LRU cache
+    for (const key of decodedKeys) {
+      const encoded = encodeKey(key);
+      this.thumbCache.delete(`small:${encoded}`);
+      this.thumbCache.delete(`large:${encoded}`);
+    }
+
+    // Evict from disk cache
+    this.diskCache?.deleteForKeys(decodedKeys);
+
+    // Delete from S3
     const thumbObjects = decodedKeys.flatMap((key) =>
       (['small', 'large'] as ThumbnailSize[]).map((size) => ({
         Key: this.withPrefix(thumbObjectKey(key, size)),
