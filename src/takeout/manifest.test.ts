@@ -237,6 +237,121 @@ describe('takeout/manifest', () => {
     });
   });
 
+  it('uses creationTime fallback when photoTakenTime has timestamp "0"', async () => {
+    await withTempDir(async (dir) => {
+      const mediaRoot = path.join(dir, 'Google Photos', 'Album');
+      await fs.mkdir(mediaRoot, { recursive: true });
+
+      // File with no date in filename and no EXIF (plain data)
+      const mediaPath = path.join(mediaRoot, 'IMG_0428.mp4');
+      await fs.writeFile(mediaPath, 'vid');
+
+      // Google Takeout sidecar: photoTakenTime is zero (Google didn't know the date),
+      // but creationTime is valid (when the photo was added to Google Photos)
+      await fs.writeFile(
+        `${mediaPath}.json`,
+        JSON.stringify({
+          photoTakenTime: { timestamp: '0', formatted: 'Jan 1, 1970, 12:00:00 AM UTC' },
+          creationTime: { timestamp: '1658234567', formatted: 'Jul 19, 2022, 10:22:47 AM UTC' },
+        }),
+      );
+
+      const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
+      // Should use creationTime (2022/07/19) instead of unknown-date
+      expect(entry.datePath).toBe('2022/07/19');
+    });
+  });
+
+  it('uses creationTime fallback when photoTakenTime field exists but has no timestamp', async () => {
+    await withTempDir(async (dir) => {
+      const mediaRoot = path.join(dir, 'Google Photos', 'Album');
+      await fs.mkdir(mediaRoot, { recursive: true });
+
+      const mediaPath = path.join(mediaRoot, 'Lars_Hoah.jpg');
+      await fs.writeFile(mediaPath, 'img');
+
+      // photoTakenTime is present but empty/unparseable
+      await fs.writeFile(
+        `${mediaPath}.json`,
+        JSON.stringify({
+          photoTakenTime: { timestamp: '0' },
+          creationTime: { timestamp: '1614597079' }, // 2021-03-01T11:11:19Z
+        }),
+      );
+
+      const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
+      expect(entry.datePath).toBe('2021/03/01');
+    });
+  });
+
+  it('still prefers valid photoTakenTime over creationTime', async () => {
+    await withTempDir(async (dir) => {
+      const mediaRoot = path.join(dir, 'Google Photos', 'Album');
+      await fs.mkdir(mediaRoot, { recursive: true });
+
+      const mediaPath = path.join(mediaRoot, 'IMG_1234.jpg');
+      await fs.writeFile(mediaPath, 'img');
+
+      // Both dates valid — photoTakenTime should win
+      await fs.writeFile(
+        `${mediaPath}.json`,
+        JSON.stringify({
+          photoTakenTime: { timestamp: '1595587200' }, // 2020-07-24T12:00:00Z
+          creationTime: { timestamp: '1658234567' },   // 2022-07-19
+        }),
+      );
+
+      const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
+      expect(entry.datePath).toBe('2020/07/24');
+    });
+  });
+
+  it('falls to unknown-date when both photoTakenTime and creationTime are invalid', async () => {
+    await withTempDir(async (dir) => {
+      const mediaRoot = path.join(dir, 'Google Photos', 'Album');
+      await fs.mkdir(mediaRoot, { recursive: true });
+
+      const mediaPath = path.join(mediaRoot, 'random_photo.jpg');
+      await fs.writeFile(mediaPath, 'img');
+
+      await fs.writeFile(
+        `${mediaPath}.json`,
+        JSON.stringify({
+          photoTakenTime: { timestamp: '0' },
+          creationTime: { timestamp: '0' },
+        }),
+      );
+
+      const fallback = new Date('2026-03-20T10:00:00Z');
+      await fs.utimes(mediaPath, fallback, fallback);
+
+      const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
+      expect(entry.datePath).toBe('unknown-date');
+    });
+  });
+
+  it('uses creationTime when photoTakenTime is far-future and creationTime is valid', async () => {
+    await withTempDir(async (dir) => {
+      const mediaRoot = path.join(dir, 'Google Photos', 'Album');
+      await fs.mkdir(mediaRoot, { recursive: true });
+
+      const mediaPath = path.join(mediaRoot, 'random.jpg');
+      await fs.writeFile(mediaPath, 'img');
+
+      await fs.writeFile(
+        `${mediaPath}.json`,
+        JSON.stringify({
+          photoTakenTime: { timestamp: '2208988800' }, // 2040-01-01 (future, rejected by isWrongDate)
+          creationTime: { timestamp: '1614597079' },   // 2021-03-01
+        }),
+      );
+
+      const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
+      // photoTakenTime is rejected (future), creationTime should be used
+      expect(entry.datePath).toBe('2021/03/01');
+    });
+  });
+
   it('finds truncated sidecar (e.g. .suppl.json instead of .supplemental-metadata.json)', async () => {
     await withTempDir(async (dir) => {
       const albumDir = path.join(dir, 'Google Photos', 'MyAlbum');

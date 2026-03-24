@@ -53,6 +53,9 @@ const envSchema = z.object({
   SCW_S3_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(900_000).default(300_000),
   SCW_S3_LIST_MAX_RETRIES: z.coerce.number().int().min(1).max(10).default(5),
 
+  // Thumbnail disk cache (optional — set to empty string to disable)
+  THUMB_CACHE_DIR: z.string().default('./data/thumbs'),
+
   // Google Photos OAuth2 (optional — only needed when using Google Photos provider)
   GOOGLE_CLIENT_ID: optionalString,
   GOOGLE_CLIENT_SECRET: optionalString,

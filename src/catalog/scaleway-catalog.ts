@@ -11,7 +11,7 @@ import {
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { Agent as HttpsAgent } from 'node:https';
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -160,6 +160,8 @@ export type ScalewayCatalogConfig = {
   s3RequestTimeoutMs?: number;
   /** Max retries for ListObjectsV2 page requests. */
   s3ListMaxRetries?: number;
+  /** Directory for local disk thumbnail cache. Set to enable disk caching between LRU and S3. */
+  thumbCacheDir?: string;
 };
 
 const IMAGE_EXTENSIONS = new Set([
@@ -189,6 +191,19 @@ const THUMB_SIZES: Record<ThumbnailSize, { maxDimension: number; quality: number
 };
 const THUMB_CACHE_MAX_ENTRIES = 500;
 const THUMB_CACHE_TTL_MS = 30 * 60_000; // 30 minutes
+
+/** S3 prefix (relative to user prefix) for persisted thumbnails. */
+const THUMBS_PREFIX = '_thumbs';
+
+/** Build the S3 key (without user prefix) for a persisted thumbnail. */
+function thumbObjectKey(decodedKey: string, size: ThumbnailSize): string {
+  return `${THUMBS_PREFIX}/${size}/${decodedKey}.jpg`;
+}
+
+/** Returns true when a (prefix-stripped) key resides under the _thumbs folder. */
+function isThumbKey(key: string): boolean {
+  return key === THUMBS_PREFIX || key.startsWith(`${THUMBS_PREFIX}/`);
+}
 
 // ── Video thumbnail via ffmpeg ──────────────────────────────────────────────
 
@@ -310,6 +325,52 @@ class ThumbnailCache {
     }
     this.map.set(key, entry);
   }
+
+  delete(key: string): void {
+    this.map.delete(key);
+  }
+}
+
+/**
+ * Persistent on-disk thumbnail cache. Files are stored as
+ * `{baseDir}/{size}/{hash[0..1]}/{hash}.jpg` where hash = SHA-256(decodedKey).
+ * Reads are async (~1ms for cached files). Writes and deletes are fire-and-forget.
+ */
+export class DiskThumbnailCache {
+  constructor(private readonly baseDir: string) {}
+
+  /** Derive a filesystem-safe path from a decoded S3 key + thumbnail size. */
+  private filePath(decodedKey: string, size: ThumbnailSize): string {
+    const hash = createHash('sha256').update(decodedKey).digest('hex');
+    return path.join(this.baseDir, size, hash.slice(0, 2), `${hash}.jpg`);
+  }
+
+  async get(decodedKey: string, size: ThumbnailSize): Promise<Buffer | null> {
+    try {
+      return await fs.readFile(this.filePath(decodedKey, size));
+    } catch {
+      return null;
+    }
+  }
+
+  set(decodedKey: string, size: ThumbnailSize, buffer: Buffer): void {
+    const fp = this.filePath(decodedKey, size);
+    fs.mkdir(path.dirname(fp), { recursive: true })
+      .then(() => fs.writeFile(fp, buffer))
+      .catch((err) => {
+        console.warn('[catalog] Failed to write disk thumbnail cache', { file: fp, err });
+      });
+  }
+
+  deleteForKeys(decodedKeys: string[]): void {
+    for (const key of decodedKeys) {
+      for (const size of ['small', 'large'] as ThumbnailSize[]) {
+        fs.unlink(this.filePath(key, size)).catch(() => {
+          // Ignore ENOENT — file may not be cached
+        });
+      }
+    }
+  }
 }
 
 /** Retry wrapper for S3 ListObjectsV2 — retries transient / timeout errors with linear backoff. */
@@ -349,6 +410,7 @@ export class ScalewayCatalogService implements CatalogService {
   private statsCache: { data: CatalogStats; expiresAt: number } | null = null;
   private statsInflight: Promise<CatalogStats> | null = null;
   private readonly thumbCache = new ThumbnailCache();
+  private readonly diskCache: DiskThumbnailCache | null;
   private itemsIndexCache: { items: CatalogItem[]; expiresAt: number } | null = null;
   private itemsIndexInflight: Promise<CatalogItem[]> | null = null;
 
@@ -357,6 +419,7 @@ export class ScalewayCatalogService implements CatalogService {
     this.prefix = config.prefix ?? '';
     this.s3RequestTimeoutMs = normalizePositiveInteger(config.s3RequestTimeoutMs, DEFAULT_S3_REQUEST_TIMEOUT_MS);
     this.s3ListMaxRetries = normalizePositiveInteger(config.s3ListMaxRetries, DEFAULT_MAX_PAGE_RETRIES);
+    this.diskCache = config.thumbCacheDir ? new DiskThumbnailCache(config.thumbCacheDir) : null;
     this.client =
       client ??
       new S3Client({
@@ -419,7 +482,7 @@ export class ScalewayCatalogService implements CatalogService {
             sectionDate,
           } satisfies CatalogItem;
         })
-        .filter((item) => (item.mediaType === 'image' || item.mediaType === 'video') && !isUndatedKey(item.key));
+        .filter((item) => (item.mediaType === 'image' || item.mediaType === 'video') && !isUndatedKey(item.key) && !isThumbKey(item.key));
 
       items.push(...mediaItems);
 
@@ -603,8 +666,12 @@ export class ScalewayCatalogService implements CatalogService {
   /**
    * Generate a resized JPEG thumbnail for the given media key.
    *
-   * Uses an in-memory LRU cache (30 min TTL, 500 entries) to avoid redundant
-   * S3 fetches + sharp resizing on repeated requests (e.g. scrolling back).
+   * Three-layer lookup:
+   *   1. In-memory LRU cache (500 entries, 30 min TTL) — instant for hot items
+   *   2. Persisted thumbnail in S3 `_thumbs/{size}/…` — small JPEG fetched from
+   *      S3 (10–20 KB), shared across all devices
+   *   3. Generate from original — fetch full file, process with sharp/ffmpeg,
+   *      persist the result to S3 for future requests, then cache in LRU
    *
    * @param encodedKey - Base64url-encoded S3 object key
    * @param size       - 'small' (256px, grid) or 'large' (1920px, lightbox)
@@ -617,9 +684,80 @@ export class ScalewayCatalogService implements CatalogService {
     }
 
     const decodedKey = decodeKey(encodedKey);
+
+    // ── Layer 2: Check local disk cache ───────────────────────────────────
+    if (this.diskCache) {
+      const diskBuffer = await this.diskCache.get(decodedKey, size);
+      if (diskBuffer) {
+        const contentType = 'image/jpeg';
+        this.thumbCache.set(cacheKey, { buffer: diskBuffer, contentType, expiresAt: Date.now() + THUMB_CACHE_TTL_MS });
+        return { buffer: diskBuffer, contentType };
+      }
+    }
+
+    // ── Layer 3: Check for pre-generated thumbnail in S3 ──────────────────
+    const thumbKey = thumbObjectKey(decodedKey, size);
+    const fullThumbKey = this.withPrefix(thumbKey);
+    try {
+      const thumbResponse = await this.client.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: fullThumbKey }),
+        { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
+      );
+      if (thumbResponse.Body) {
+        const stream =
+          thumbResponse.Body instanceof Readable
+            ? thumbResponse.Body
+            : Readable.fromWeb(thumbResponse.Body as ReadableStream<Uint8Array>);
+        const chunks: Buffer[] = [];
+        for await (const chunk of stream) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        const buffer = Buffer.concat(chunks);
+        const contentType = 'image/jpeg';
+        this.thumbCache.set(cacheKey, { buffer, contentType, expiresAt: Date.now() + THUMB_CACHE_TTL_MS });
+        // Backfill disk cache from S3 hit (fire-and-forget)
+        this.diskCache?.set(decodedKey, size, buffer);
+        return { buffer, contentType };
+      }
+    } catch (err: unknown) {
+      // NoSuchKey (404) is expected — means the thumbnail hasn't been generated yet.
+      if (!(err instanceof Error && (err.name === 'NoSuchKey' || (err as any).$metadata?.httpStatusCode === 404))) {
+        throw err; // unexpected S3 error — bubble up
+      }
+    }
+
+    // ── Layer 4: Generate from original and persist ───────────────────────
+    const buffer = await this.generateThumbnailBuffer(decodedKey, size);
+    const contentType = 'image/jpeg';
+
+    // Persist to S3 (fire-and-forget — don't block the response)
+    this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: fullThumbKey,
+        Body: buffer,
+        ContentType: contentType,
+      }),
+      { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
+    ).catch((err) => {
+      console.warn('[catalog] Failed to persist thumbnail to S3', { thumbKey, err });
+    });
+
+    // Persist to disk cache (fire-and-forget)
+    this.diskCache?.set(decodedKey, size, buffer);
+
+    this.thumbCache.set(cacheKey, { buffer, contentType, expiresAt: Date.now() + THUMB_CACHE_TTL_MS });
+    return { buffer, contentType };
+  }
+
+  /**
+   * Generate a thumbnail JPEG buffer from the original media file in S3.
+   * Handles images (sharp), HEIC (heic-convert + sharp), and videos (ffmpeg).
+   */
+  private async generateThumbnailBuffer(decodedKey: string, size: ThumbnailSize): Promise<Buffer> {
     const isVideo = inferMediaType(decodedKey) === 'video';
 
-    // For videos, use ffmpeg to extract a frame. Falls back to UNSUPPORTED_FORMAT if ffmpeg not available.
+    // For videos, use ffmpeg to extract a frame.
     if (isVideo) {
       const ffmpegBin = await getFfmpegPath();
       if (!ffmpegBin) {
@@ -640,17 +778,10 @@ export class ScalewayCatalogService implements CatalogService {
           : Readable.fromWeb(response.Body as ReadableStream<Uint8Array>);
 
       const { maxDimension, quality } = THUMB_SIZES[size];
-      const buffer = await extractVideoFrame(ffmpegBin, bodyStream, maxDimension, quality);
-      const contentType = 'image/jpeg';
-
-      this.thumbCache.set(cacheKey, {
-        buffer,
-        contentType,
-        expiresAt: Date.now() + THUMB_CACHE_TTL_MS,
-      });
-      return { buffer, contentType };
+      return extractVideoFrame(ffmpegBin, bodyStream, maxDimension, quality);
     }
 
+    // For images, fetch and process with sharp (HEIC pre-converted via heic-convert).
     const fullKey = this.withPrefix(decodedKey);
     const response = await this.client.send(
       new GetObjectCommand({ Bucket: this.bucket, Key: fullKey }),
@@ -670,8 +801,6 @@ export class ScalewayCatalogService implements CatalogService {
 
     let sharpInput: Buffer;
     if (isHeicKey(decodedKey)) {
-      // HEIC/HEIF: Sharp's bundled libvips may lack HEVC decoder.
-      // Buffer the stream and convert to JPEG via heic-convert (WASM), then resize.
       const chunks: Buffer[] = [];
       for await (const chunk of bodyStream) {
         chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -680,7 +809,6 @@ export class ScalewayCatalogService implements CatalogService {
       const jpegBuffer = await heicConvert({ buffer: heicBuffer, format: 'JPEG', quality: 0.92 });
       sharpInput = Buffer.from(jpegBuffer);
     } else {
-      // For standard formats, buffer the stream so Sharp can detect the format.
       const chunks: Buffer[] = [];
       for await (const chunk of bodyStream) {
         chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -688,24 +816,11 @@ export class ScalewayCatalogService implements CatalogService {
       sharpInput = Buffer.concat(chunks);
     }
 
-    const buffer = await sharp(sharpInput)
-      .rotate()                                // Auto-orient using EXIF
-      .resize(maxDimension, maxDimension, {
-        fit: 'inside',                         // Preserve aspect ratio
-        withoutEnlargement: true,              // Don't upscale small images
-      })
-      .jpeg({ quality, mozjpeg: true })        // MozJPEG for smaller output
+    return sharp(sharpInput)
+      .rotate()
+      .resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality, mozjpeg: true })
       .toBuffer();
-
-    const contentType = 'image/jpeg';
-
-    this.thumbCache.set(cacheKey, {
-      buffer,
-      contentType,
-      expiresAt: Date.now() + THUMB_CACHE_TTL_MS,
-    });
-
-    return { buffer, contentType };
   }
 
   async getStats(): Promise<CatalogStats> {
@@ -794,7 +909,7 @@ export class ScalewayCatalogService implements CatalogService {
             sectionDate,
           } satisfies CatalogItem;
         })
-        .filter((item) => (item.mediaType === 'image' || item.mediaType === 'video') && !isUndatedKey(item.key));
+        .filter((item) => (item.mediaType === 'image' || item.mediaType === 'video') && !isUndatedKey(item.key) && !isThumbKey(item.key));
 
       items.push(...mediaItems);
       continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
@@ -837,7 +952,7 @@ export class ScalewayCatalogService implements CatalogService {
             sectionDate,
           } satisfies CatalogItem;
         })
-        .filter((item) => item.mediaType === 'image' || item.mediaType === 'video');
+        .filter((item) => (item.mediaType === 'image' || item.mediaType === 'video') && !isThumbKey(item.key));
 
       items.push(...mediaItems);
       continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
@@ -889,6 +1004,10 @@ export class ScalewayCatalogService implements CatalogService {
     // Invalidate caches after deletion
     this.statsCache = null;
     this.itemsIndexCache = null;
+
+    // Best-effort cleanup of persisted thumbnails for deleted media
+    this.deleteThumbsForKeys(encodedKeys.map((ek) => decodeKey(ek)));
+
     return { deleted, failed };
   }
 
@@ -922,6 +1041,10 @@ export class ScalewayCatalogService implements CatalogService {
     // Invalidate caches
     this.statsCache = null;
     this.itemsIndexCache = null;
+
+    // Best-effort cleanup of old thumbnails (new ones will be generated on demand)
+    this.deleteThumbsForKeys([oldKey]);
+
     return { from: oldKey, to: newKey };
   }
 
@@ -974,6 +1097,7 @@ export class ScalewayCatalogService implements CatalogService {
       for (const obj of result.Contents ?? []) {
         if (!obj.Key || obj.Size === undefined || !obj.ETag) continue;
         const key = this.stripPrefix(obj.Key);
+        if (isThumbKey(key)) continue;
         const type = inferMediaType(key);
         if (type !== 'image' && type !== 'video') continue;
         objects.push({
@@ -1009,6 +1133,44 @@ export class ScalewayCatalogService implements CatalogService {
 
     const deleteResult = await this.deleteObjects(encodedKeysToDelete);
     return { groups, totalDuplicates, bytesFreed, deleteResult };
+  }
+
+  /**
+   * Best-effort fire-and-forget deletion of persisted thumbnails for the given
+   * decoded media keys. Deletes from LRU cache, disk cache, and S3.
+   */
+  private deleteThumbsForKeys(decodedKeys: string[]): void {
+    // Evict from LRU cache
+    for (const key of decodedKeys) {
+      const encoded = encodeKey(key);
+      this.thumbCache.delete(`small:${encoded}`);
+      this.thumbCache.delete(`large:${encoded}`);
+    }
+
+    // Evict from disk cache
+    this.diskCache?.deleteForKeys(decodedKeys);
+
+    // Delete from S3
+    const thumbObjects = decodedKeys.flatMap((key) =>
+      (['small', 'large'] as ThumbnailSize[]).map((size) => ({
+        Key: this.withPrefix(thumbObjectKey(key, size)),
+      })),
+    );
+    if (thumbObjects.length === 0) return;
+
+    // Batch in groups of 1000 (S3 limit)
+    for (let i = 0; i < thumbObjects.length; i += 1000) {
+      const batch = thumbObjects.slice(i, i + 1000);
+      this.client.send(
+        new DeleteObjectsCommand({
+          Bucket: this.bucket,
+          Delete: { Objects: batch, Quiet: true },
+        }),
+        { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
+      ).catch((err) => {
+        console.warn('[catalog] Failed to delete persisted thumbnails', err);
+      });
+    }
   }
 
   private fullPrefix(extra?: string): string {
