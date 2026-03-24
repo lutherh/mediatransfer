@@ -186,7 +186,14 @@ export async function runTakeoutScan(
   // ── Load checkpoint: which archives were already scanned in a prior run ────
   const scanState = await loadScanState(scanStatePath);
   const alreadyScanned = new Set(scanState.extractedArchives);
-  const toScan = allArchives.filter((a) => !alreadyScanned.has(path.basename(a)));
+  const toScan = allArchives.filter((a) => {
+    const name = path.basename(a);
+    // Skip if already scanned in this run (crash-recovery state)
+    if (alreadyScanned.has(name)) return false;
+    // Skip if already completed in a prior upload cycle (prevents re-extraction)
+    if (archiveState.archives[name]?.status === 'completed') return false;
+    return true;
+  });
 
   onProgress?.({
     phase: 'discover',
