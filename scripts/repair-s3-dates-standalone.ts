@@ -26,6 +26,7 @@ import path from 'node:path';
 import {
   ListObjectsV2Command,
   GetObjectCommand,
+  HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { extractExifMetadata, inferDateFromFilename } from '../src/utils/exif.js';
 import {
@@ -61,6 +62,7 @@ const { s3, bucket, fullKey, stripPrefix } = createS3Helpers();
 type SidecarEntry = {
   capturedAt: string;
   sidecarPhotoTakenTime?: string;
+  sidecarCreationTime?: string;
 };
 
 // Map lowercase filename → array of possible dates from sidecar metadata
@@ -72,6 +74,7 @@ if (metadataDir) {
     const files = (await fs.readdir(metadataDir)).filter(f => f.endsWith('.json'));
     let totalItems = 0;
     let itemsWithDates = 0;
+    const currentYear = new Date().getFullYear();
 
     for (const file of files) {
       const raw = await fs.readFile(path.join(metadataDir, file), 'utf-8');
@@ -86,22 +89,35 @@ if (metadataDir) {
 
       for (const item of archive.items ?? []) {
         totalItems++;
-        const capturedAt = item.capturedAt;
-        if (!capturedAt) continue;
 
         // Extract filename from relativePath or destinationKey
         const relPath = item.relativePath ?? item.destinationKey;
         if (!relPath) continue;
         const filename = path.basename(relPath).toLowerCase();
 
-        const entry: SidecarEntry = { capturedAt };
+        const entry: SidecarEntry = { capturedAt: item.capturedAt ?? '' };
         if (item.sidecar?.photoTakenTime) {
           entry.sidecarPhotoTakenTime = item.sidecar.photoTakenTime;
         }
+        if (item.sidecar?.creationTime) {
+          entry.sidecarCreationTime = item.sidecar.creationTime;
+        }
 
-        // Only store entries with reasonable dates (not current year = upload date)
-        const date = new Date(capturedAt);
-        if (!Number.isNaN(date.getTime()) && date.getUTCFullYear() < new Date().getFullYear()) {
+        // Determine if this entry has any usable date:
+        // - capturedAt that isn't current year (upload date)
+        // - OR sidecar creationTime (fallback the original bug missed)
+        const capturedDate = item.capturedAt ? new Date(item.capturedAt) : null;
+        const capturedAtUsable = capturedDate &&
+          !Number.isNaN(capturedDate.getTime()) &&
+          capturedDate.getUTCFullYear() < currentYear;
+
+        const creationDate = item.sidecar?.creationTime ? new Date(item.sidecar.creationTime) : null;
+        const creationTimeUsable = creationDate &&
+          !Number.isNaN(creationDate.getTime()) &&
+          creationDate.getUTCFullYear() >= 1990 &&
+          creationDate.getUTCFullYear() <= currentYear;
+
+        if (capturedAtUsable || creationTimeUsable) {
           const arr = sidecarByFilename.get(filename) ?? [];
           arr.push(entry);
           sidecarByFilename.set(filename, arr);
@@ -110,7 +126,7 @@ if (metadataDir) {
       }
     }
 
-    console.log(`   Loaded ${files.length} metadata files, ${totalItems} items, ${itemsWithDates} with valid pre-${new Date().getFullYear()} dates`);
+    console.log(`   Loaded ${files.length} metadata files, ${totalItems} items, ${itemsWithDates} with usable dates`);
     console.log(`   Unique filenames indexed: ${sidecarByFilename.size}`);
   } catch (err) {
     console.error(`   ⚠️  Failed to load metadata: ${err instanceof Error ? err.message : err}`);
@@ -384,12 +400,23 @@ async function resolveDate(obj: S3Object): Promise<MoveOp | null> {
   // 2. Check local sidecar metadata (matched by filename)
   const sidecarEntries = sidecarByFilename.get(filename.toLowerCase());
   if (sidecarEntries && sidecarEntries.length > 0) {
-    // Prefer the entry with a sidecar photoTakenTime, otherwise use capturedAt
-    const best = sidecarEntries.find(e => e.sidecarPhotoTakenTime) ?? sidecarEntries[0];
-    const date = new Date(best.capturedAt);
-    if (!Number.isNaN(date.getTime())) {
-      const op = tryBuild(date, 'sidecar');
-      if (op) { fromSidecar++; return op; }
+    // Priority: photoTakenTime > creationTime > capturedAt (capturedAt may be upload date)
+    const withPhotoTaken = sidecarEntries.find(e => e.sidecarPhotoTakenTime);
+    const withCreation = sidecarEntries.find(e => e.sidecarCreationTime);
+    const best = withPhotoTaken ?? withCreation ?? sidecarEntries[0];
+
+    // Try photoTakenTime first, then creationTime, then capturedAt
+    const candidates: string[] = [];
+    if (best.sidecarPhotoTakenTime) candidates.push(best.sidecarPhotoTakenTime);
+    if (best.sidecarCreationTime) candidates.push(best.sidecarCreationTime);
+    if (best.capturedAt) candidates.push(best.capturedAt);
+
+    for (const candidate of candidates) {
+      const date = new Date(candidate);
+      if (!Number.isNaN(date.getTime())) {
+        const op = tryBuild(date, 'sidecar');
+        if (op) { fromSidecar++; return op; }
+      }
     }
   }
 

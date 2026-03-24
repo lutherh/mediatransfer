@@ -29,3 +29,4 @@ repair-output.txt
 data/takeout/state.json.pre-reupload.bak
 data/takeout/state.json.pre-sidecar-fix.bak
 data/takeout/state.json.pre-reset-2026-03-22T18-25-48-992Z.bak
+data/thumbs/*
