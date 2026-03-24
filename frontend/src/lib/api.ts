@@ -165,6 +165,7 @@ export type TakeoutAction =
   | 'verify'
   | 'resume'
   | 'repair-dates'
+  | 'repair-dates-s3'
   | 'pause'
   | 'start-services'
   | 'cleanup-move'
