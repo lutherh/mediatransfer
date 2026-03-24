@@ -700,24 +700,21 @@ export function reconcileArchiveEntries(
  * The old scan entries become orphaned "pending" items that can never be
  * uploaded because their archives are already marked completed.
  *
- * Also repairs old "source file missing" failures by converting them to
- * 'skipped' status (matching current uploader behaviour).
- *
  * Returns the number of entries removed and kept.
  */
 export async function reconcileManifest(
   manifestPath: string,
   statePath: string,
-): Promise<{ removed: number; kept: number; repairedFailures: number }> {
+): Promise<{ removed: number; kept: number }> {
   let entries: ManifestEntry[];
   try {
     entries = await loadManifestJsonl(manifestPath);
   } catch {
-    return { removed: 0, kept: 0, repairedFailures: 0 };
+    return { removed: 0, kept: 0 };
   }
 
   if (entries.length === 0) {
-    return { removed: 0, kept: 0, repairedFailures: 0 };
+    return { removed: 0, kept: 0 };
   }
 
   const state = await loadUploadState(statePath);
@@ -731,31 +728,7 @@ export async function reconcileManifest(
     await persistManifestJsonl(kept, manifestPath);
   }
 
-  // Repair old "source file missing" failures → convert to 'skipped'
-  let repairedFailures = 0;
-  let stateChanged = false;
-  for (const item of Object.values(state.items)) {
-    if (
-      item.status === 'failed' &&
-      item.error &&
-      /source file missing/i.test(item.error)
-    ) {
-      item.status = 'skipped';
-      item.skipReason = 'source_file_missing';
-      item.error = undefined;
-      repairedFailures += 1;
-      stateChanged = true;
-    }
-  }
-
-  if (stateChanged) {
-    state.updatedAt = new Date().toISOString();
-    const tmpPath = `${statePath}.tmp`;
-    await fs.writeFile(tmpPath, JSON.stringify(state, null, 2), 'utf8');
-    await fs.rename(tmpPath, statePath);
-  }
-
-  return { removed, kept: kept.length, repairedFailures };
+  return { removed, kept: kept.length };
 }
 
 // ─── Summary / progress helpers ────────────────────────────────────────────
