@@ -207,6 +207,8 @@ export async function runTransferWorkerTask(
 
       const worker = async (): Promise<void> => {
         while (firstError === null) {
+          // Safe: synchronous read-and-increment between await points in
+          // single-threaded Node.js — no two workers run in the same microtick.
           const idx = nextIndex++;
           if (idx >= task.items.length) return;
 
