@@ -163,6 +163,24 @@ describe('extractAlbumFile', () => {
     // This edge case shouldn't happen in practice
     expect(extractAlbumFile('transfers/2020/01/01')).toBe('');
   });
+
+  it('extracts album/filename from unknown-date path', () => {
+    expect(
+      extractAlbumFile('transfers/unknown-date/Summer_Trip/IMG_1234.jpg'),
+    ).toBe('Summer_Trip/IMG_1234.jpg');
+  });
+
+  it('extracts filename-only from unknown-date path', () => {
+    expect(
+      extractAlbumFile('transfers/unknown-date/photo.jpg'),
+    ).toBe('photo.jpg');
+  });
+
+  it('handles nested albums under unknown-date', () => {
+    expect(
+      extractAlbumFile('transfers/unknown-date/Family/Vacation/pic.jpg'),
+    ).toBe('Family/Vacation/pic.jpg');
+  });
 });
 
 // ── isVideoKey ──────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { inferDateFromFilename, extractExifMetadata, extractVideoCreationDate } from '../utils/exif.js';
 import { isWrongDate, parseSidecarDate } from '../utils/date-repair.js';
+import { UNDATED_PREFIX } from '../utils/storage-paths.js';
 import { MEDIA_EXTENSIONS } from '../utils/media-extensions.js';
 import type { ArchiveMetadata, MediaItemMetadata } from './archive-metadata.js';
 
@@ -60,7 +61,7 @@ export async function buildManifest(
           : stat.mtime.toISOString();
         const datePath = capturedAtDate
           ? toDatePath(capturedAtDate)
-          : 'unknown-date';
+          : UNDATED_PREFIX;
         const destinationKey = `transfers/${datePath}/${sanitizeRelativePath(relativePath)}`;
 
         return {
@@ -565,7 +566,10 @@ function applyResolvedDate(
   breakdown: RefineDateResult['breakdown'],
 ): void {
   const newDatePath = toDatePath(resolvedDate);
-  const albumFile = entry.destinationKey.split('/').slice(4).join('/');
+  const parts = entry.destinationKey.split('/');
+  const albumFile = parts[1] === UNDATED_PREFIX
+    ? parts.slice(2).join('/')
+    : parts.slice(4).join('/');
   entry.capturedAt = resolvedDate.toISOString();
   entry.datePath = newDatePath;
   entry.destinationKey = `transfers/${newDatePath}/${albumFile || sanitizeRelativePath(entry.relativePath)}`;
@@ -583,7 +587,7 @@ export function refineDatesFromAllMetadata(
 
   for (const entry of entries) {
     const entryDate = new Date(entry.capturedAt);
-    if (!isWrongDate(entryDate) && entry.datePath !== 'unknown-date') continue;
+    if (!isWrongDate(entryDate) && entry.datePath !== UNDATED_PREFIX) continue;
 
     const filename = entry.destinationKey.split('/').pop() ?? '';
     const stem = filename.replace(/\.[^.]+$/, '');
