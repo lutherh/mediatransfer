@@ -588,6 +588,7 @@ const IMAGE_PROCESSING_ERROR_PATTERNS = [
   'Vips',                // General libvips error prefix
   'heif:',               // HEIF decoding errors
   'Invalid SOS',         // Corrupt JPEG marker
+  'not a HEIC image',   // heic-decode: "input buffer is not a HEIC image"
   'not supported',       // "Video thumbnails not supported"
   'moov atom not found', // Corrupt/truncated MOV/MP4 container
   'Invalid data found when processing input', // ffmpeg generic input error
