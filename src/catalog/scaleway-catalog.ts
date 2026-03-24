@@ -17,6 +17,7 @@ import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
+import { createRequire } from 'node:module';
 import { Readable } from 'node:stream';
 import sharp from 'sharp';
 import heicConvert from 'heic-convert';
@@ -204,8 +205,8 @@ function getFfmpegPath(): Promise<string | null> {
       } else {
         // Fall back to the bundled ffmpeg-static binary
         try {
-          // eslint-disable-next-line @typescript-eslint/no-require-imports
-          const staticPath = require('ffmpeg-static') as string;
+          const esmRequire = createRequire(import.meta.url);
+          const staticPath = esmRequire('ffmpeg-static') as string;
           resolvedFfmpeg = staticPath;
           resolve(resolvedFfmpeg);
         } catch {
