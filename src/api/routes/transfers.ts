@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { TransferStatus } from '../../generated/prisma/index.js';
-import type { JobsService, ProvidersService, QueueService } from '../types.js';
+import type { JobsService, QueueService } from '../types.js';
+import type { CloudProvider } from '../../providers/types.js';
 import { apiError } from '../errors.js';
 import { buildDestinationKey } from '../transfer-keys.js';
 
@@ -72,12 +73,12 @@ export async function registerTransferRoutes(
   app: FastifyInstance,
   jobs: JobsService,
   queue: QueueService,
-  providers?: ProvidersService,
+  destProvider?: CloudProvider,
 ): Promise<void> {
   // ── Duplicate check ─────────────────────────────────────────────────────
   app.post('/transfers/check-duplicates', async (req, reply) => {
-    if (!providers) {
-      return reply.code(503).send(apiError('PROVIDER_UNAVAILABLE', 'Provider service not available'));
+    if (!destProvider) {
+      return reply.code(503).send(apiError('PROVIDER_UNAVAILABLE', 'Cloud storage provider not available'));
     }
     const { items } = checkDuplicatesSchema.parse(req.body);
 
@@ -95,7 +96,7 @@ export async function registerTransferRoutes(
             item.createTime,
           );
           try {
-            const existing = await providers.listObjects('scaleway', {}, { prefix: destinationKey, maxResults: 1 });
+            const existing = await destProvider.list({ prefix: destinationKey, maxResults: 1 });
             const exists = existing.some((obj) => obj.key === destinationKey);
             return { id: item.id, exists, destinationKey };
           } catch {
