@@ -24,6 +24,7 @@ import {
   fetchCatalogExif,
   fetchCatalogItems,
   fetchCatalogStats,
+  fetchDateDistribution,
   fetchAlbums,
   createAlbum,
   updateAlbum,
@@ -1043,6 +1044,15 @@ export function CatalogPage() {
     refetchOnReconnect: false,
   });
 
+  const dateDistQuery = useQuery({
+    queryKey: ['catalog-date-distribution', apiToken],
+    queryFn: () => fetchDateDistribution(apiToken),
+    retry: false,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+
   const sortDirection = sortNewestFirst ? 'desc' : 'asc';
 
   const itemsQuery = useInfiniteQuery({
@@ -1363,22 +1373,31 @@ export function CatalogPage() {
 
       {/* ── Prefix filter + sort toggle ─────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-1.5">
-        <input
-          type="text"
-          placeholder="Search by date or folder (e.g. 2024/06)…"
-          className="w-full max-w-xs rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          value={prefixInput}
-          onChange={(e) => setPrefixInput(e.target.value)}
-          aria-label="Filter catalog by prefix"
-        />
-        {prefix && (
-          <button
-            className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
-            onClick={() => { setPrefixInput(''); setPrefix(''); }}
-          >
-            Clear
-          </button>
-        )}
+        <div className="relative w-full max-w-xs">
+          <svg className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.35-4.35" />
+          </svg>
+          <input
+            type="text"
+            placeholder="Search by date (2024/06) or filename…"
+            className="w-full rounded-md border border-slate-300 bg-white py-1.5 pl-7 pr-7 text-xs placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            value={prefixInput}
+            onChange={(e) => setPrefixInput(e.target.value)}
+            aria-label="Search catalog"
+          />
+          {prefixInput && (
+            <button
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:text-slate-600"
+              onClick={() => { setPrefixInput(''); setPrefix(''); }}
+              aria-label="Clear search"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3.5 w-3.5">
+                <path d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
         <button
           type="button"
           onClick={() => setSortNewestFirst((p) => !p)}
@@ -1456,7 +1475,7 @@ export function CatalogPage() {
       )}
 
       {/* ── Date scroller (right-edge timeline) ─────────────────────── */}
-      <DateScroller sections={sections} sectionRefs={sectionRefs} onScrollToDate={scrollToDate} />
+      <DateScroller sections={sections} sectionRefs={sectionRefs} onScrollToDate={scrollToDate} dateDistribution={dateDistQuery.data} />
 
       {/* ── Scroll-to-top FAB (Google Photos pattern) ──────────────── */}
       {showScrollTop && (

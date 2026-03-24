@@ -871,6 +871,27 @@ export async function fetchCatalogStats(apiToken?: string): Promise<CatalogStats
   return response.json();
 }
 
+export type DateDistributionMonth = {
+  month: string;
+  count: number;
+};
+
+export type DateDistribution = {
+  months: DateDistributionMonth[];
+  totalItems: number;
+};
+
+export async function fetchDateDistribution(apiToken?: string): Promise<DateDistribution> {
+  const url = new URL('/catalog/api/date-distribution', API_BASE_URL);
+  if (apiToken) url.searchParams.set('apiToken', apiToken);
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch date distribution');
+  }
+  return response.json();
+}
+
 export async function fetchCatalogItems(opts: {
   token?: string;
   prefix?: string;

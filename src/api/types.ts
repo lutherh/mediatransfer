@@ -1,6 +1,6 @@
 import type { BulkTransferResult } from '../jobs/bulk-transfer.js';
 import type { TransferJob, TransferStatus, CloudCredential, TransferLog, MediaItem } from '../generated/prisma/index.js';
-import type { CatalogItem, CatalogObject, CatalogStats, DeleteResult, AlbumsManifest, DuplicateGroup, DeduplicateResult, ThumbnailSize, ThumbnailResult } from '../catalog/scaleway-catalog.js';
+import type { CatalogItem, CatalogObject, CatalogStats, DateDistribution, DeleteResult, AlbumsManifest, DuplicateGroup, DeduplicateResult, ThumbnailSize, ThumbnailResult } from '../catalog/scaleway-catalog.js';
 import type { Readable } from 'node:stream';
 import type { CreateMediaItemInput, ListMediaItemsFilter } from '../db/media-items.js';
 
@@ -67,6 +67,7 @@ export type CatalogService = {
   getObject(encodedKey: string, range?: string): Promise<CatalogObject>;
   getObjectBuffer(encodedKey: string, maxBytes?: number): Promise<{ buffer: Buffer; contentType?: string; contentLength?: number }>;
   getStats(): Promise<CatalogStats>;
+  getDateDistribution(): Promise<DateDistribution>;
   getThumbnail(encodedKey: string, size: ThumbnailSize): Promise<ThumbnailResult>;
   findDuplicates(): Promise<DuplicateGroup[]>;
   deduplicateObjects(input?: { dryRun?: boolean }): Promise<DeduplicateResult>;
