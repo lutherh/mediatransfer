@@ -21,6 +21,7 @@ import {
   persistArchiveState,
   reconcileStaleArchives,
   reconcileArchiveEntries,
+  reconcileManifest,
   type ArchiveStateItem,
 } from '../../takeout/incremental.js';
 import { analyseArchiveSequences, normaliseArchiveName } from '../../takeout/sequence-analysis.js';
@@ -446,11 +447,54 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       if (item) manifestItems[key] = item;
     }
 
-    const summary = summarizeState(manifestItems);
-    const total = manifestKeys.size;
+    let summary = summarizeState(manifestItems);
+    let total = manifestKeys.size;
     const processed = summary.uploaded + summary.skipped + summary.failed;
-    const pending = Math.max(total - processed, 0);
+    let pending = Math.max(total - processed, 0);
     const progress = total > 0 ? Math.min(processed / total, 1) : 0;
+
+    // Detect stale manifest: all archives completed/failed (none pending/extracting/uploading)
+    // but manifest still has entries with no upload state record.  These are orphaned entries
+    // from the scan phase whose destinationKeys differ from what the upload actually produced.
+    const hasActiveArchives = Object.values(mergedArchiveState).some(
+      (a) => a.status === 'pending' || a.status === 'extracting' || a.status === 'uploading',
+    );
+    const hasCompletedArchives = Object.values(mergedArchiveState).some(
+      (a) => a.status === 'completed',
+    );
+    if (pending > 0 && !hasActiveArchives && hasCompletedArchives && !RUN_STATUS.running) {
+      try {
+        const reconciled = await reconcileManifest(manifestPath, statePath);
+        if (reconciled.removed > 0 || reconciled.repairedFailures > 0) {
+          app.log.info(
+            { removed: reconciled.removed, kept: reconciled.kept, repairedFailures: reconciled.repairedFailures },
+            'Auto-reconciled stale manifest entries',
+          );
+          // Invalidate the manifest cache so the next read picks up the cleaned file
+          manifestKeysCache.delete(manifestPath);
+          // Recompute counts after reconciliation
+          total = reconciled.kept;
+          pending = Math.max(total - processed, 0);
+
+          // If failures were repaired, re-read state to get accurate summary
+          if (reconciled.repairedFailures > 0) {
+            const freshState = await readUploadState(statePath);
+            const freshManifestKeys = await readManifestKeys(manifestPath);
+            const freshManifestItems: Record<string, UploadStateItem> = {};
+            for (const key of freshManifestKeys) {
+              const item = freshState.items[key];
+              if (item) freshManifestItems[key] = item;
+            }
+            summary = summarizeState(freshManifestItems);
+            total = freshManifestKeys.size;
+            pending = Math.max(total - (summary.uploaded + summary.skipped + summary.failed), 0);
+          }
+        }
+      } catch (err) {
+        app.log.warn({ err }, 'Failed to auto-reconcile stale manifest entries');
+      }
+    }
+
     // Auto-reconcile stale pending/extracting archives when all uploads are done
     const isComplete = total > 0 && pending === 0 && summary.failed === 0;
     const hasStaleArchives = Object.values(mergedArchiveState).some(
