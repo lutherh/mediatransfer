@@ -5,6 +5,7 @@ import { Readable } from 'node:stream';
 import { describe, it, expect } from 'vitest';
 import type { CloudProvider, ObjectInfo } from '../providers/types.js';
 import { persistManifestJsonl, type ManifestEntry } from './manifest.js';
+import { persistArchiveState, createEmptyArchiveState } from './incremental.js';
 import {
   runTakeoutScan,
   runTakeoutUpload,
@@ -159,6 +160,64 @@ describe('takeout/runner', () => {
       // Scan-state and partial manifest should be cleared after completion
       await expect(fs.access(scanStatePath)).rejects.toThrow();
       await expect(fs.access(partialManifestPath)).rejects.toThrow();
+    });
+  });
+
+  it('skips archives already completed in archive-state during re-scan', async () => {
+    await withTempDir(async (dir) => {
+      const inputDir = path.join(dir, 'input');
+      const workDir = path.join(dir, 'work');
+      await fs.mkdir(inputDir, { recursive: true });
+      await fs.writeFile(path.join(inputDir, 'takeout-1.zip'), 'archive-1');
+      await fs.writeFile(path.join(inputDir, 'takeout-2.zip'), 'archive-2');
+
+      const config = withDefaults({
+        inputDir,
+        workDir,
+        statePath: path.join(dir, 'state.json'),
+      });
+
+      // Pre-populate archive-state marking takeout-1.zip as completed
+      await fs.mkdir(workDir, { recursive: true });
+      const archiveStatePath = path.join(workDir, 'archive-state.json');
+      const archiveState = createEmptyArchiveState();
+      archiveState.archives['takeout-1.zip'] = {
+        status: 'completed',
+        entryCount: 5,
+        uploadedCount: 5,
+        skippedCount: 0,
+        failedCount: 0,
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+      };
+      await persistArchiveState(archiveStatePath, archiveState);
+
+      // Pre-populate manifest with entries from the completed archive
+      const manifestPath = path.join(workDir, 'manifest.jsonl');
+      const existingEntry = JSON.stringify({
+        sourcePath: path.join(inputDir, 'old/IMG_1.jpg'),
+        relativePath: 'Album/IMG_1.jpg',
+        size: 100,
+        mtimeMs: Date.now(),
+        capturedAt: '2025-12-13T00:00:00.000Z',
+        datePath: '2025/12/13',
+        destinationKey: 'transfers/2025/12/13/Album/IMG_1.jpg',
+      });
+      await fs.writeFile(manifestPath, `${existingEntry}\n`);
+
+      // Track which archives the extractor was called for
+      const extractedArchives: string[] = [];
+      const result = await runTakeoutScan(config, async (archivePath, destinationDir) => {
+        const archiveName = path.basename(archivePath);
+        extractedArchives.push(archiveName);
+        const mediaDir = path.join(destinationDir, 'Takeout', 'Google Photos', 'Album2');
+        await fs.mkdir(mediaDir, { recursive: true });
+        await fs.writeFile(path.join(mediaDir, 'IMG_2.jpg'), 'photo-2');
+      });
+
+      // Only takeout-2.zip should be extracted — takeout-1.zip is completed
+      expect(extractedArchives).toEqual(['takeout-2.zip']);
+      expect(result.entryCount).toBeGreaterThanOrEqual(1);
     });
   });
 

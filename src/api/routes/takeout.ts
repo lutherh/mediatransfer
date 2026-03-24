@@ -989,16 +989,17 @@ function scheduleAutoUploadAction(nextAction: 'scan' | 'upload', env: Env): void
       appendOutput(`🔄 Auto-upload: ${keys.size} manifest entries found — starting upload...`);
       runAction('upload');
     } else {
-      // Check input directory for archives
+      // Check input directory for archives that haven't been completed yet
       const inputDir = customPaths.get('inputDir') ?? path.resolve(env.TAKEOUT_INPUT_DIR);
-      const count = await countArchivesInInput(inputDir);
+      const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
+      const count = await countPendingArchivesInInput(inputDir, workDir);
       if (count > 0) {
         // Re-check after async gap — poll callback may have started an action
         if (RUN_STATUS.running) return;
-        appendOutput(`🔄 Auto-upload: ${count} archive(s) found — starting scan...`);
+        appendOutput(`🔄 Auto-upload: ${count} pending archive(s) found — starting scan...`);
         runAction('scan');
       } else {
-        appendOutput('🔄 Auto-upload: no new archives found. Polling will continue...');
+        appendOutput('🔄 Auto-upload: all archives already completed. Polling will continue...');
       }
     }
   }, AUTO_UPLOAD_DELAY_MS);
@@ -1036,11 +1037,12 @@ function ensureAutoUploadPoll(): void {
     if (RUN_STATUS.running || autoUploadTimeout) return;
 
     const inputDir = customPaths.get('inputDir') ?? path.resolve(env.TAKEOUT_INPUT_DIR);
-    const count = await countArchivesInInput(inputDir);
+    const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
+    const count = await countPendingArchivesInInput(inputDir, workDir);
     if (count > 0) {
       // Re-check after async gap — timeout callback may have started an action
       if (RUN_STATUS.running) return;
-      appendOutput(`🔄 Auto-upload poll: ${count} new archive(s) detected — starting scan...`);
+      appendOutput(`🔄 Auto-upload poll: ${count} pending archive(s) detected — starting scan...`);
       runAction('scan');
     }
   }, AUTO_UPLOAD_POLL_INTERVAL_MS);
@@ -1062,6 +1064,28 @@ async function countArchivesInInput(inputDir: string): Promise<number> {
     const entries = await fs.readdir(inputDir, { withFileTypes: true });
     return entries.filter(
       (e) => e.isFile() && /\.(zip|tar|tgz|tar\.gz)$/i.test(e.name),
+    ).length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Count archives in the input directory that are NOT yet completed.
+ * Used by auto-upload to avoid re-triggering scans for already-finished archives.
+ */
+async function countPendingArchivesInInput(inputDir: string, workDir: string): Promise<number> {
+  try {
+    const entries = await fs.readdir(inputDir, { withFileTypes: true });
+    const archiveNames = entries
+      .filter((e) => e.isFile() && /\.(zip|tar|tgz|tar\.gz)$/i.test(e.name))
+      .map((e) => e.name);
+    if (archiveNames.length === 0) return 0;
+
+    const archiveStatePath = path.join(workDir, 'archive-state.json');
+    const archiveState = await loadArchiveState(archiveStatePath);
+    return archiveNames.filter(
+      (name) => archiveState.archives[name]?.status !== 'completed',
     ).length;
   } catch {
     return 0;
