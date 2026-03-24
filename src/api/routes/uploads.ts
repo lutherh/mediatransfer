@@ -245,15 +245,23 @@ const IMAGE_EXTS_WITH_METADATA = new Set([
 ]);
 
 /**
+ * Maximum bytes to read for the EXIF fallback pass. 2 MB covers EXIF/XMP
+ * in all practical image formats without loading multi-hundred-MB files.
+ */
+/** @internal Exported for testing. */
+export const EXIF_FALLBACK_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
  * Multi-strategy date extraction for direct uploads.
  *
  * Priority (mirrors the takeout pipeline in manifest.ts):
  *   1. EXIF from first 256 KB header
  *   2. Filename date inference (e.g. IMG_20231215_143022.jpg)
- *   3. Full-file EXIF re-read for images (some formats store metadata at end)
+ *   3. Bounded EXIF re-read for images (first 2 MB, not the entire file)
  *   4. Video container metadata (MP4/MOV moov/mvhd creation_time)
  */
-async function deriveUploadCapturedDate(
+/** @internal Exported for testing. */
+export async function deriveUploadCapturedDate(
   filePath: string,
   filename: string,
   exifDate: Date | undefined,
@@ -267,14 +275,23 @@ async function deriveUploadCapturedDate(
 
   const ext = path.extname(filename).toLowerCase();
 
-  // 3. Full-file EXIF re-read for image types when header parse didn't find a date
+  // 3. Bounded EXIF re-read for image types when header parse didn't find a date.
+  //    Read at most 2 MB instead of the entire file to avoid huge memory spikes.
   if (IMAGE_EXTS_WITH_METADATA.has(ext)) {
     try {
-      const fullBuffer = await fs.readFile(filePath);
-      const exif = await extractExifMetadata(fullBuffer);
-      if (exif.capturedAt && !isWrongDate(exif.capturedAt)) return exif.capturedAt;
+      const fh = await fs.open(filePath, 'r');
+      try {
+        const stat = await fh.stat();
+        const readBytes = Math.min(stat.size, EXIF_FALLBACK_MAX_BYTES);
+        const buffer = Buffer.alloc(readBytes);
+        await fh.read(buffer, 0, readBytes, 0);
+        const exif = await extractExifMetadata(buffer);
+        if (exif.capturedAt && !isWrongDate(exif.capturedAt)) return exif.capturedAt;
+      } finally {
+        await fh.close();
+      }
     } catch {
-      // Full-file metadata extraction failed — continue to next strategy
+      // Bounded metadata extraction failed — continue to next strategy
     }
   }
 
