@@ -544,6 +544,7 @@ export class ScalewayCatalogService implements CatalogService {
     let items = allItems;
     if (input?.prefix) {
       const normalized = normalizeSearchPrefix(input.prefix);
+      if (!normalized) return { items: [], nextToken: undefined };
       const lowerQuery = normalized.toLowerCase();
       // If the query looks like a path prefix (starts with known dir or digit), use startsWith.
       // Otherwise treat it as a filename substring search (case-insensitive).
