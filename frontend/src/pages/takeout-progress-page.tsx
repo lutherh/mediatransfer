@@ -1527,6 +1527,7 @@ function mapActionLabel(action: TakeoutAction): string {
     verify:                'Verify',
     resume:                'Resume',
     'repair-dates':        'Repair wrong dates',
+    'repair-dates-s3':     'Repair dates (S3)',
     pause:                 'Pause',
     'start-services':      'Start services',
     'cleanup-move':        'Cleanup (move archives)',

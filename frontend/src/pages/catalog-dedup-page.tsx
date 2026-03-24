@@ -275,6 +275,8 @@ function GroupRow({
 
 type SortOrder = 'wasted-desc' | 'copies-desc' | 'size-desc';
 
+const DELETE_BATCH_SIZE = 200;
+
 export function CatalogDedupPage() {
   const apiToken = useApiToken();
   const queryClient = useQueryClient();
@@ -454,7 +456,6 @@ export function CatalogDedupPage() {
   }, [visibleGroups]);
 
   // Delete ALL visible duplicates
-  const BATCH_SIZE = 200;
   const deleteAllMutation = useMutation({
     mutationFn: async () => {
       const allDupKeys = visibleGroups.flatMap((g) => g.duplicateKeys);
@@ -462,9 +463,9 @@ export function CatalogDedupPage() {
       const total = encodedKeys.length;
       setDeleteProgress({ deleted: 0, total });
       // Delete in batches of 200 to respect body size limits
-      for (let i = 0; i < encodedKeys.length; i += BATCH_SIZE) {
-        await deleteCatalogItems(encodedKeys.slice(i, i + BATCH_SIZE), apiToken);
-        setDeleteProgress({ deleted: Math.min(i + BATCH_SIZE, total), total });
+      for (let i = 0; i < encodedKeys.length; i += DELETE_BATCH_SIZE) {
+        await deleteCatalogItems(encodedKeys.slice(i, i + DELETE_BATCH_SIZE), apiToken);
+        setDeleteProgress({ deleted: Math.min(i + DELETE_BATCH_SIZE, total), total });
       }
       return allDupKeys;
     },
