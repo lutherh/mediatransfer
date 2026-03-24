@@ -36,11 +36,22 @@ export async function buildManifest(
   onProgress?.(0, files.length);
 
   // Process files in parallel batches for much faster manifest building
+  let skippedCount = 0;
   for (let i = 0; i < files.length; i += IO_CONCURRENCY) {
     const batch = files.slice(i, i + IO_CONCURRENCY);
     const batchResults = await Promise.all(
-      batch.map(async (sourcePath) => {
-        const stat = await fs.stat(sourcePath);
+      batch.map(async (sourcePath): Promise<ManifestEntry | null> => {
+        let stat;
+        try {
+          stat = await fs.stat(sourcePath);
+        } catch (err) {
+          // File was listed by readdir but can't be accessed — broken symlink,
+          // encoding mismatch, antivirus quarantine, etc.  Skip it instead of
+          // killing the entire scan.
+          skippedCount++;
+          console.warn(`[manifest] Skipping inaccessible file: ${sourcePath}`, (err as Error).message);
+          return null;
+        }
         const relativePath = toPosix(path.relative(mediaRoot, sourcePath));
         const sidecarPath = await findSidecarPath(sourcePath);
         const capturedAtDate = await deriveCapturedDate(sourcePath, sidecarPath);
@@ -64,8 +75,14 @@ export async function buildManifest(
         };
       }),
     );
-    entries.push(...batchResults);
+    for (const r of batchResults) {
+      if (r) entries.push(r);
+    }
     onProgress?.(Math.min(i + batch.length, files.length), files.length);
+  }
+
+  if (skippedCount > 0) {
+    console.warn(`[manifest] ${skippedCount} file(s) skipped due to access errors`);
   }
 
   entries.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
