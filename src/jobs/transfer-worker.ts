@@ -14,6 +14,8 @@ export type TransferWorkerTask = {
   sourceProvider: CloudProvider;
   destProvider: CloudProvider;
   items: TransferItemTask[];
+  /** Number of items to transfer in parallel. Defaults to 1 (sequential). */
+  concurrency?: number;
 };
 
 export type TransferWorkerHooks = {
@@ -177,23 +179,66 @@ export async function runTransferWorkerTask(
 
   try {
     let completed = 0;
+    const concurrency = Math.max(1, task.concurrency ?? 1);
 
-    for (const item of task.items) {
-      await transferItemWithRetry(task, item, hooks);
+    if (concurrency <= 1) {
+      // Sequential path — preserves original behaviour
+      for (const item of task.items) {
+        await transferItemWithRetry(task, item, hooks);
 
-      completed += 1;
-      const progress = completed / total;
+        completed += 1;
+        const progress = completed / total;
 
-      if (hooks.onProgress) {
-        await hooks.onProgress(task.transferJobId, progress);
+        if (hooks.onProgress) {
+          await hooks.onProgress(task.transferJobId, progress);
+        }
+
+        await emitLog(hooks, task.transferJobId, 'INFO', 'Transferred item', {
+          key: item.key,
+          completed,
+          total,
+          progress,
+        });
       }
+    } else {
+      // Concurrent path — process items with bounded parallelism
+      let nextIndex = 0;
+      let firstError: unknown = null;
 
-      await emitLog(hooks, task.transferJobId, 'INFO', 'Transferred item', {
-        key: item.key,
-        completed,
-        total,
-        progress,
-      });
+      const worker = async (): Promise<void> => {
+        while (firstError === null) {
+          // Safe: synchronous read-and-increment between await points in
+          // single-threaded Node.js — no two workers run in the same microtick.
+          const idx = nextIndex++;
+          if (idx >= task.items.length) return;
+
+          const item = task.items[idx];
+          await transferItemWithRetry(task, item, hooks);
+
+          completed += 1;
+          const progress = completed / total;
+
+          if (hooks.onProgress) {
+            await hooks.onProgress(task.transferJobId, progress);
+          }
+
+          await emitLog(hooks, task.transferJobId, 'INFO', 'Transferred item', {
+            key: item.key,
+            completed,
+            total,
+            progress,
+          });
+        }
+      };
+
+      const workers = Array.from({ length: Math.min(concurrency, total) }, () =>
+        worker().catch((err) => {
+          if (firstError === null) firstError = err;
+        }),
+      );
+
+      await Promise.all(workers);
+      if (firstError !== null) throw firstError;
     }
 
     await emitLog(hooks, task.transferJobId, 'INFO', 'Transfer job completed', {

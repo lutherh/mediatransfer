@@ -29,6 +29,7 @@ export async function registerCatalogAlbumRoutes(
     }
 
     const manifest = await catalogService.getAlbums();
+    reply.header('Cache-Control', 'private, max-age=30, stale-while-revalidate=120');
     return manifest;
   });
 

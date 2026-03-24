@@ -173,8 +173,25 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
 
   const totalBytes = entries.reduce((sum, entry) => sum + Math.max(0, entry.size ?? 0), 0);
   const inFlightBytes = new Map<string, number>();
+  let inFlightBytesTotal = 0;
   let committedTransferredBytes = 0;
   let lastSnapshotAt = 0;
+
+  /** Update a key's in-flight bytes and keep the running total in sync. */
+  const setInFlightBytes = (key: string, bytes: number): void => {
+    const prev = inFlightBytes.get(key) ?? 0;
+    inFlightBytesTotal += bytes - prev;
+    inFlightBytes.set(key, bytes);
+  };
+
+  /** Remove a key from in-flight tracking and return its last value (0 if absent). */
+  const deleteInFlightBytes = (key: string): number | undefined => {
+    if (!inFlightBytes.has(key)) return undefined;
+    const prev = inFlightBytes.get(key)!;
+    inFlightBytesTotal -= prev;
+    inFlightBytes.delete(key);
+    return prev;
+  };
 
   const emitSnapshot = (
     phase: UploadProgressPhase,
@@ -191,9 +208,6 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
     }
     lastSnapshotAt = now;
 
-    const inFlightTransferredBytes = [...inFlightBytes.values()]
-      .reduce((sum, value) => sum + value, 0);
-
     options.onProgress({
       phase,
       dryRun,
@@ -204,7 +218,7 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
       failedItems: summary.failed,
       inFlightItems: inFlightBytes.size,
       totalBytes,
-      transferredBytes: committedTransferredBytes + inFlightTransferredBytes,
+      transferredBytes: committedTransferredBytes + inFlightBytesTotal,
       timestamp: new Date(now).toISOString(),
       lastItem,
     });
@@ -327,7 +341,7 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
     for (let attempt = 1; attempt <= retryCount + 1; attempt += 1) {
       try {
         const startMs = Date.now();
-        inFlightBytes.set(entry.destinationKey, 0);
+        setInFlightBytes(entry.destinationKey, 0);
         emitSnapshot('running', true, {
           key: entry.destinationKey,
           sourcePath: entry.sourcePath,
@@ -345,7 +359,7 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
             intervalMs: progressIntervalMs,
             sizeBytes: entry.size,
             onProgress(stats) {
-              inFlightBytes.set(entry.destinationKey, stats.uploadedBytes);
+              setInFlightBytes(entry.destinationKey, stats.uploadedBytes);
               emitSnapshot('running', false, {
                 key: entry.destinationKey,
                 sourcePath: entry.sourcePath,
@@ -367,8 +381,7 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
           { 'captured-at': entry.capturedAt },
         );
 
-        const uploadedBytes = inFlightBytes.get(entry.destinationKey) ?? entry.size;
-        inFlightBytes.delete(entry.destinationKey);
+        const uploadedBytes = deleteInFlightBytes(entry.destinationKey) ?? entry.size;
         committedTransferredBytes += uploadedBytes;
         const elapsedMs = Math.max(1, Date.now() - startMs);
         const speedBytesPerSec = Math.floor((uploadedBytes / elapsedMs) * 1000);
@@ -401,7 +414,7 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
       } catch (error) {
         lastError = error;
 
-        inFlightBytes.delete(entry.destinationKey);
+        deleteInFlightBytes(entry.destinationKey);
 
         // Don't retry filesystem errors like ENOENT — the file doesn't exist
         // on disk and retrying will never help (e.g. stale __dup manifest entries).

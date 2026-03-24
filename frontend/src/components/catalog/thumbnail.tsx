@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { memo, useCallback, useState } from 'react';
 import { catalogThumbnailUrl } from '@/lib/api';
 import { useThumbnailQueue, isThumbnailFailed, markThumbnailFailed } from '@/lib/thumbnail-queue';
 import type { CatalogItem } from '@/lib/api';
@@ -14,7 +14,7 @@ import type { CatalogItem } from '@/lib/api';
  * @pattern Immich skeleton-to-fade thumbnail loading
  * @pattern Google Photos rounded-lg tiles with hover scale
  */
-export function Thumbnail({
+export const Thumbnail = memo(function Thumbnail({
   item,
   apiToken,
   selected,
@@ -160,4 +160,4 @@ export function Thumbnail({
       </button>
     </div>
   );
-}
+});

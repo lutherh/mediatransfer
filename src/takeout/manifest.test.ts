@@ -1071,4 +1071,9 @@ describe('refineDatesFromMetadata', () => {
     expect(result.breakdown.basenameMatch).toBe(1);
     expect(entries[0].datePath).toBe('2016/07/23');
   });
+
+  it('exports IO_CONCURRENCY as 64', async () => {
+    const { IO_CONCURRENCY } = await import('./manifest.js');
+    expect(IO_CONCURRENCY).toBe(64);
+  });
 });
