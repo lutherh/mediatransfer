@@ -193,6 +193,13 @@ const THUMB_SIZES: Record<ThumbnailSize, { maxDimension: number; quality: number
 const THUMB_CACHE_MAX_ENTRIES = 500;
 const THUMB_CACHE_TTL_MS = 30 * 60_000; // 30 minutes
 
+/**
+ * Maximum bytes to fetch via S3 Range for video thumbnail extraction.
+ * 10 MB is enough for the moov atom + first keyframe in fast-start MP4s.
+ * If the file is smaller, the full object is returned.
+ */
+export const VIDEO_THUMB_RANGE_BYTES = 10 * 1024 * 1024;
+
 /** S3 prefix (relative to user prefix) for persisted thumbnails. */
 const THUMBS_PREFIX = '_thumbs';
 
@@ -767,6 +774,32 @@ export class ScalewayCatalogService implements CatalogService {
       }
 
       const fullKey = this.withPrefix(decodedKey);
+      const { maxDimension, quality } = THUMB_SIZES[size];
+
+      // Try a bounded Range request first (10 MB) to avoid downloading the entire video.
+      // This works for fast-start MP4s where the moov atom is at the beginning.
+      // If ffmpeg fails on the partial data, fall back to the full object.
+      try {
+        const rangeResponse = await this.client.send(
+          new GetObjectCommand({
+            Bucket: this.bucket,
+            Key: fullKey,
+            Range: `bytes=0-${VIDEO_THUMB_RANGE_BYTES - 1}`,
+          }),
+          { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
+        );
+        if (rangeResponse.Body) {
+          const rangeStream =
+            rangeResponse.Body instanceof Readable
+              ? rangeResponse.Body
+              : Readable.fromWeb(rangeResponse.Body as ReadableStream<Uint8Array>);
+          return await extractVideoFrame(ffmpegBin, rangeStream, maxDimension, quality);
+        }
+      } catch {
+        // Range request failed or ffmpeg couldn't extract from partial data — fall back
+      }
+
+      // Fallback: download the full video
       const response = await this.client.send(
         new GetObjectCommand({ Bucket: this.bucket, Key: fullKey }),
         { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
@@ -779,7 +812,6 @@ export class ScalewayCatalogService implements CatalogService {
           ? response.Body
           : Readable.fromWeb(response.Body as ReadableStream<Uint8Array>);
 
-      const { maxDimension, quality } = THUMB_SIZES[size];
       return extractVideoFrame(ffmpegBin, bodyStream, maxDimension, quality);
     }
 
