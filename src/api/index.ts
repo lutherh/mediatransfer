@@ -57,6 +57,7 @@ import { loadEnv, type Env } from '../config/env.js';
 import { apiError } from './errors.js';
 import { delay } from '../utils/delay.js';
 import { buildDestinationKey, createDatePath } from './transfer-keys.js';
+import type { CloudProvider } from '../providers/types.js';
 export { buildDestinationKey, createDatePath };
 
 export type CreateApiOptions = {
@@ -64,6 +65,7 @@ export type CreateApiOptions = {
 	enableSwagger?: boolean;
 	apiAuthToken?: string;
 	corsAllowedOrigins?: string[];
+	transferDestProvider?: CloudProvider;
 };
 
 export async function createApiServer(options?: CreateApiOptions): Promise<FastifyInstance> {
@@ -180,13 +182,22 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 
 	await registerHealthRoutes(app);
 	await registerCredentialsRoutes(app, runtime.services.credentials);
-	await registerTransferRoutes(app, runtime.services.jobs, runtime.services.queue, runtime.services.providers);
+	const env = loadEnv();
+	// Create a pre-configured Scaleway provider for the duplicate check endpoint
+	let transferDestProvider: CloudProvider | undefined = options?.transferDestProvider;
+	if (!transferDestProvider) {
+		try {
+			transferDestProvider = createScalewayProvider(getScalewayConfigFromEnv(env));
+		} catch {
+			// Scaleway not configured — duplicate check will return 503
+		}
+	}
+	await registerTransferRoutes(app, runtime.services.jobs, runtime.services.queue, transferDestProvider);
 	await registerProviderRoutes(app, runtime.services.providers);
 	await registerCatalogRoutes(app, runtime.services.catalog, options?.corsAllowedOrigins);
 	await registerCatalogAlbumRoutes(app, runtime.services.catalog);
 	await registerCloudUsageRoutes(app, runtime.services.cloudUsage);
 	await registerUploadRoutes(app, runtime.services.uploads);
-	const env = loadEnv();
 	await registerTakeoutRoutes(app, env);
 	await registerGoogleAuthRoutes(app, env);
 

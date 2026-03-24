@@ -1136,16 +1136,21 @@ describe('api server', () => {
 
   it('POST /transfers/check-duplicates returns exists for matching keys', async () => {
     const services = createServices();
-    // Mock listObjects to return a matching key for a specific prefix
-    services.providers.listObjects = vi.fn(async (_name, _config, opts) => {
-      const prefix = opts?.prefix ?? '';
-      if (prefix.includes('item-existing')) {
-        return [{ key: prefix, size: 1024, lastModified: new Date(), contentType: 'image/jpeg' }];
-      }
-      return [];
-    });
+    const mockDestProvider = {
+      name: 'mock-scaleway',
+      list: vi.fn(async (opts?: { prefix?: string }) => {
+        const prefix = opts?.prefix ?? '';
+        if (prefix.includes('item-existing')) {
+          return [{ key: prefix, size: 1024, lastModified: new Date(), contentType: 'image/jpeg' }];
+        }
+        return [];
+      }),
+      download: vi.fn(),
+      upload: vi.fn(),
+      delete: vi.fn(),
+    };
 
-    const app = await createApiServer({ services });
+    const app = await createApiServer({ services, transferDestProvider: mockDestProvider });
 
     const res = await app.inject({
       method: 'POST',
@@ -1174,9 +1179,15 @@ describe('api server', () => {
 
   it('POST /transfers/check-duplicates returns 0 duplicates when nothing exists', async () => {
     const services = createServices();
-    services.providers.listObjects = vi.fn(async () => []);
+    const mockDestProvider = {
+      name: 'mock-scaleway',
+      list: vi.fn(async () => []),
+      download: vi.fn(),
+      upload: vi.fn(),
+      delete: vi.fn(),
+    };
 
-    const app = await createApiServer({ services });
+    const app = await createApiServer({ services, transferDestProvider: mockDestProvider });
 
     const res = await app.inject({
       method: 'POST',
@@ -1198,7 +1209,15 @@ describe('api server', () => {
   });
 
   it('POST /transfers/check-duplicates validates input', async () => {
-    const app = await createApiServer({ services: createServices() });
+    const mockDestProvider = {
+      name: 'mock-scaleway',
+      list: vi.fn(async () => []),
+      download: vi.fn(),
+      upload: vi.fn(),
+      delete: vi.fn(),
+    };
+
+    const app = await createApiServer({ services: createServices(), transferDestProvider: mockDestProvider });
 
     const res = await app.inject({
       method: 'POST',
