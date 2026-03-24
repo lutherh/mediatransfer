@@ -275,6 +275,8 @@ function GroupRow({
 
 type SortOrder = 'wasted-desc' | 'copies-desc' | 'size-desc';
 
+const DELETE_BATCH_SIZE = 200;
+
 export function CatalogDedupPage() {
   const apiToken = useApiToken();
   const queryClient = useQueryClient();
@@ -293,6 +295,9 @@ export function CatalogDedupPage() {
 
   // Local list of deleted raw keys (to hide groups optimistically)
   const [deletedKeys, setDeletedKeys] = useState<Set<string>>(() => new Set());
+
+  // Progress tracking for batch deletion
+  const [deleteProgress, setDeleteProgress] = useState<{ deleted: number; total: number } | null>(null);
 
   // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -455,17 +460,24 @@ export function CatalogDedupPage() {
     mutationFn: async () => {
       const allDupKeys = visibleGroups.flatMap((g) => g.duplicateKeys);
       const encodedKeys = allDupKeys.map(encodeS3Key);
+      const total = encodedKeys.length;
+      setDeleteProgress({ deleted: 0, total });
       // Delete in batches of 200 to respect body size limits
-      for (let i = 0; i < encodedKeys.length; i += 200) {
-        await deleteCatalogItems(encodedKeys.slice(i, i + 200), apiToken);
+      for (let i = 0; i < encodedKeys.length; i += DELETE_BATCH_SIZE) {
+        await deleteCatalogItems(encodedKeys.slice(i, i + DELETE_BATCH_SIZE), apiToken);
+        setDeleteProgress({ deleted: Math.min(i + DELETE_BATCH_SIZE, total), total });
       }
       return allDupKeys;
     },
     onSuccess: (deletedRawKeys) => {
       handleDeleted(deletedRawKeys);
       setConfirming(false);
+      setDeleteProgress(null);
       void queryClient.invalidateQueries({ queryKey: ['catalog-stats'] });
       void queryClient.invalidateQueries({ queryKey: ['catalog-items'] });
+    },
+    onError: () => {
+      setDeleteProgress(null);
     },
   });
 
@@ -640,7 +652,23 @@ export function CatalogDedupPage() {
                 </span>
 
                 <div className="ml-auto">
-                  {confirming ? (
+                  {deleteAllMutation.isPending && deleteProgress ? (
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 w-32 overflow-hidden rounded-full bg-slate-200">
+                          <div
+                            className="h-full rounded-full bg-red-500 transition-all duration-300 ease-out"
+                            style={{
+                              width: `${Math.round((deleteProgress.deleted / deleteProgress.total) * 100)}%`,
+                            }}
+                          />
+                        </div>
+                        <span className="whitespace-nowrap text-xs font-medium text-red-700">
+                          {deleteProgress.deleted.toLocaleString()} / {deleteProgress.total.toLocaleString()} deleted
+                        </span>
+                      </div>
+                    </div>
+                  ) : confirming ? (
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-red-700">
                         Delete {stats.totalDuplicates.toLocaleString()} files?
@@ -651,7 +679,7 @@ export function CatalogDedupPage() {
                         disabled={deleteAllMutation.isPending}
                         onClick={() => deleteAllMutation.mutate()}
                       >
-                        {deleteAllMutation.isPending ? 'Deleting…' : 'Confirm delete all'}
+                        Confirm delete all
                       </button>
                       <button
                         type="button"
