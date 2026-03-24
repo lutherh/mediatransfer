@@ -54,9 +54,16 @@ export function isWrongDate(date: Date): boolean {
 /**
  * Extract `album/filename` from a destination key like
  * `transfers/2020/07/19/Summer_Trip/IMG_1234.jpg` → `Summer_Trip/IMG_1234.jpg`.
+ *
+ * Also handles undated keys:
+ * `transfers/unknown-date/Summer_Trip/IMG_1234.jpg` → `Summer_Trip/IMG_1234.jpg`.
  */
 export function extractAlbumFile(key: string): string {
-  return key.split('/').slice(4).join('/');
+  const parts = key.split('/');
+  if (parts[1] === 'unknown-date') {
+    return parts.slice(2).join('/');
+  }
+  return parts.slice(4).join('/');
 }
 
 // ── Video extension check ───────────────────────────────────────

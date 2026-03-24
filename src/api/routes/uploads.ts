@@ -103,7 +103,7 @@ export async function registerUploadRoutes(
           : 'unknown-date';
         const sanitized = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
         const uniquePrefix = digest.slice(0, 8);
-        const s3Key = `${datePath}/${uniquePrefix}-${sanitized}`;
+        const s3Key = `transfers/${datePath}/${uniquePrefix}-${sanitized}`;
 
         // Upload to storage
         const stream = createReadStream(tempFilePath);

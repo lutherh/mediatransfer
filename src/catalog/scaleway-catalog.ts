@@ -1277,7 +1277,7 @@ function inferCapturedAt(key: string, fallback: Date): Date {
 
   // For "unknown-date" paths (new uploads that had no reliable date),
   // fall through to filename inference.
-  if (key.includes('unknown-date') && filenameDate) {
+  if (key.includes(UNDATED_PREFIX) && filenameDate) {
     return filenameDate;
   }
 

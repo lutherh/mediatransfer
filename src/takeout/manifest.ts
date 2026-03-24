@@ -565,7 +565,10 @@ function applyResolvedDate(
   breakdown: RefineDateResult['breakdown'],
 ): void {
   const newDatePath = toDatePath(resolvedDate);
-  const albumFile = entry.destinationKey.split('/').slice(4).join('/');
+  const parts = entry.destinationKey.split('/');
+  const albumFile = parts[1] === 'unknown-date'
+    ? parts.slice(2).join('/')
+    : parts.slice(4).join('/');
   entry.capturedAt = resolvedDate.toISOString();
   entry.datePath = newDatePath;
   entry.destinationKey = `transfers/${newDatePath}/${albumFile || sanitizeRelativePath(entry.relativePath)}`;

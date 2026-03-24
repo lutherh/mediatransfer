@@ -1,7 +1,7 @@
 export function buildDestinationKey(filename: string, itemId: string, createTime?: string): string {
 	const sanitized = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
 	const date = createDatePath(createTime);
-	return `${date}/${itemId}-${sanitized}`;
+	return `transfers/${date}/${itemId}-${sanitized}`;
 }
 
 export function createDatePath(createTime?: string): string {

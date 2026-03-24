@@ -23,21 +23,21 @@ describe('createDatePath', () => {
 describe('buildDestinationKey', () => {
   it('builds key with date path, item id and sanitized filename', () => {
     const key = buildDestinationKey('Summer Vacation.jpg', 'abc123', '2025-07-15T10:30:00Z');
-    expect(key).toBe('2025/07/15/abc123-Summer_Vacation.jpg');
+    expect(key).toBe('transfers/2025/07/15/abc123-Summer_Vacation.jpg');
   });
 
   it('preserves safe characters in filename', () => {
     const key = buildDestinationKey('IMG_1234.HEIC', 'item-1', '2026-03-21T00:00:00Z');
-    expect(key).toBe('2026/03/21/item-1-IMG_1234.HEIC');
+    expect(key).toBe('transfers/2026/03/21/item-1-IMG_1234.HEIC');
   });
 
   it('sanitizes special characters in filename', () => {
     const key = buildDestinationKey('photo (1) [copy].jpg', 'id1', '2025-01-01T00:00:00Z');
-    expect(key).toBe('2025/01/01/id1-photo__1___copy_.jpg');
+    expect(key).toBe('transfers/2025/01/01/id1-photo__1___copy_.jpg');
   });
 
   it('uses unknown-date when createTime is missing', () => {
     const key = buildDestinationKey('photo.jpg', 'id1');
-    expect(key).toBe('unknown-date/id1-photo.jpg');
+    expect(key).toBe('transfers/unknown-date/id1-photo.jpg');
   });
 });
