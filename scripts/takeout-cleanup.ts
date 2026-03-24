@@ -81,6 +81,7 @@ const stateItems = uploadState.items;
 let uploaded = 0;
 let skipped = 0;
 let failed = 0;
+let failedSourceMissing = 0;
 let missing = 0;
 const failedKeys: { key: string; error?: string; attempts?: number }[] = [];
 const missingKeys: string[] = [];
@@ -95,18 +96,29 @@ for (const entry of manifest) {
   } else if (item.status === 'skipped') {
     skipped += 1;
   } else if (item.status === 'failed') {
-    failed += 1;
-    failedKeys.push({
-      key: entry.destinationKey,
-      error: (item as { error?: string }).error,
-      attempts: (item as { attempts?: number }).attempts,
-    });
+    const errorMsg = (item as { error?: string }).error ?? '';
+    // "source file missing" means the file was never uploadable (encoding issue,
+    // broken symlink, etc.) — it's not in the cloud AND not on disk.
+    // These shouldn't block cleanup since there's nothing left to lose.
+    if (/source file missing/i.test(errorMsg)) {
+      failedSourceMissing += 1;
+    } else {
+      failed += 1;
+      failedKeys.push({
+        key: entry.destinationKey,
+        error: errorMsg,
+        attempts: (item as { attempts?: number }).attempts,
+      });
+    }
   }
 }
 
 console.log(`📋 Manifest entries: ${manifest.length}`);
 console.log(`   ✅ Uploaded: ${uploaded}`);
 console.log(`   ⏭️  Skipped: ${skipped}`);
+if (failedSourceMissing > 0) {
+  console.log(`   ⚠️  Source missing: ${failedSourceMissing} (non-blocking — files were never uploadable)`);
+}
 console.log(`   ❌ Failed:   ${failed}`);
 console.log(`   ❓ Missing:  ${missing}`);
 console.log('');
