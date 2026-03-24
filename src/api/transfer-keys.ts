@@ -1,3 +1,5 @@
+import { UNDATED_PREFIX } from '../utils/storage-paths.js';
+
 export function buildDestinationKey(filename: string, itemId: string, createTime?: string): string {
 	const sanitized = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
 	const date = createDatePath(createTime);
@@ -12,5 +14,5 @@ export function createDatePath(createTime?: string): string {
 		}
 	}
 
-	return 'unknown-date';
+	return UNDATED_PREFIX;
 }
