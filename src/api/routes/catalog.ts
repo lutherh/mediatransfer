@@ -533,7 +533,7 @@ function isCatalogObjectNotFound(error: unknown): boolean {
   return error.name === 'NoSuchKey' || maybeMetadata.$metadata?.httpStatusCode === 404;
 }
 
-/** Detect sharp / libvips image processing errors (corrupt data, unsupported format, etc.). */
+/** Detect sharp / libvips / ffmpeg processing errors (corrupt data, unsupported format, etc.). */
 const IMAGE_PROCESSING_ERROR_PATTERNS = [
   'Input buffer',        // "Input buffer contains unsupported image format"
   'Input file',          // "Input file is missing"
@@ -543,6 +543,9 @@ const IMAGE_PROCESSING_ERROR_PATTERNS = [
   'heif:',               // HEIF decoding errors
   'Invalid SOS',         // Corrupt JPEG marker
   'not supported',       // "Video thumbnails not supported"
+  'moov atom not found', // Corrupt/truncated MOV/MP4 container
+  'Invalid data found when processing input', // ffmpeg generic input error
+  'No such file or directory', // ffmpeg temp file gone
 ];
 
 function isImageProcessingError(error: unknown): boolean {
