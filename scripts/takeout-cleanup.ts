@@ -82,17 +82,25 @@ let uploaded = 0;
 let skipped = 0;
 let failed = 0;
 let missing = 0;
+const failedKeys: { key: string; error?: string; attempts?: number }[] = [];
+const missingKeys: string[] = [];
 
 for (const entry of manifest) {
   const item = stateItems[entry.destinationKey];
   if (!item) {
     missing += 1;
+    if (missingKeys.length < 10) missingKeys.push(entry.destinationKey);
   } else if (item.status === 'uploaded') {
     uploaded += 1;
   } else if (item.status === 'skipped') {
     skipped += 1;
   } else if (item.status === 'failed') {
     failed += 1;
+    failedKeys.push({
+      key: entry.destinationKey,
+      error: (item as { error?: string }).error,
+      attempts: (item as { attempts?: number }).attempts,
+    });
   }
 }
 
@@ -105,32 +113,39 @@ console.log('');
 
 if (failed > 0) {
   console.error('❌ Cannot clean up: there are failed uploads.');
+  console.error('');
+  console.error('   Failed files:');
+  for (const f of failedKeys) {
+    const file = f.key.split('/').pop() ?? f.key;
+    const reason = f.error ?? 'unknown error';
+    const att = f.attempts ? ` (${f.attempts} attempt${f.attempts > 1 ? 's' : ''})` : '';
+    console.error(`     ✗ ${file}${att}`);
+    console.error(`       ${reason}`);
+  }
+  console.error('');
   console.error('   Re-run takeout-upload or takeout-process --resume to fix failed items first.');
   process.exit(1);
 }
 
 if (missing > 0) {
-  // Collect a sample of missing keys to help diagnose the cause
-  const missingKeys: string[] = [];
-  for (const entry of manifest) {
-    if (!stateItems[entry.destinationKey]) {
-      missingKeys.push(entry.destinationKey);
-      if (missingKeys.length >= 5) break;
-    }
-  }
-
   // For archive operations (move/delete), archive-state.json is the real safety gate —
   // only archives marked completed are eligible. Manifest key mismatches (e.g. from
   // re-scanning) shouldn't block moving/deleting archives that are confirmed complete.
   const archiveOpsRelaxed = (moveArchives || deleteArchives) && !force;
 
   if (!force && !archiveOpsRelaxed) {
-    console.error(`❌ Cannot clean up safely: ${missing} manifest entries have no upload record.`);
+    console.error(`❌ Cannot clean up safely: ${missing.toLocaleString()} manifest entries have no upload record.`);
     console.error('   This means upload state is incomplete or the manifest was rebuilt after upload.');
     console.error('');
-    console.error('   Sample missing keys:');
+    console.error(`   Sample missing files (${Math.min(missingKeys.length, 10)} of ${missing.toLocaleString()}):`);
     for (const key of missingKeys) {
-      console.error(`     · ${key}`);
+      const file = key.split('/').pop() ?? key;
+      const dir = key.split('/').slice(0, -1).join('/');
+      console.error(`     · ${file}`);
+      console.error(`       in ${dir}`);
+    }
+    if (missing > missingKeys.length) {
+      console.error(`     … and ${(missing - missingKeys.length).toLocaleString()} more`);
     }
     console.error('');
     console.error('   Options:');
@@ -308,6 +323,7 @@ console.log('');
 
 let freedBytes = 0;
 let actionsDone = 0;
+const actionFailures: { label: string; error: string }[] = [];
 
 for (const action of actions) {
   try {
@@ -335,11 +351,21 @@ for (const action of actions) {
     actionsDone += 1;
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.error(`   ⚠️  Failed: ${msg}`);
+    const file = 'from' in action ? path.basename(action.from) : path.basename(action.path);
+    console.error(`   ⚠️  Failed: ${file}`);
+    console.error(`       ${msg}`);
+    actionFailures.push({ label: action.label, error: msg });
   }
 }
 
 console.log('');
+if (actionFailures.length > 0) {
+  console.error(`❌ Cleanup finished with ${actionFailures.length} error(s):`);
+  for (const f of actionFailures) {
+    console.error(`   ✗ ${f.label}: ${f.error}`);
+  }
+  console.log('');
+}
 console.log(`✅ Cleanup complete: ${actionsDone}/${actions.length} actions, ~${formatBytes(freedBytes)} freed.`);
 
 // ─── 5. Optionally backfill archive-state.json ─────────────────────────────
