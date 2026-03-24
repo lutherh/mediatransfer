@@ -117,7 +117,7 @@ describe('scaleway catalog service', () => {
     const send = vi.fn(async () => ({
       Contents: [
         { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
-        { Key: 'unknown-date/b.jpg', Size: 200, LastModified: new Date('2024-01-01') },
+        { Key: 'transfers/unknown-date/b.jpg', Size: 200, LastModified: new Date('2024-01-01') },
         { Key: '2021/06/15/c.mp4', Size: 300, LastModified: new Date('2021-06-15') },
       ],
       IsTruncated: false,
@@ -255,8 +255,8 @@ describe('scaleway catalog service', () => {
       const send = vi.fn(async () => ({
         Contents: [
           { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
-          { Key: 'unknown-date/b.jpg', Size: 200, LastModified: new Date('2024-01-01') },
-          { Key: 'unknown-date/subdir/c.mp4', Size: 300, LastModified: new Date('2024-01-01') },
+          { Key: 'transfers/unknown-date/b.jpg', Size: 200, LastModified: new Date('2024-01-01') },
+          { Key: 'transfers/unknown-date/subdir/c.mp4', Size: 300, LastModified: new Date('2024-01-01') },
         ],
         IsTruncated: false,
       }));
@@ -272,8 +272,8 @@ describe('scaleway catalog service', () => {
     it('returns only unknown-date items', async () => {
       const send = vi.fn(async () => ({
         Contents: [
-          { Key: 'unknown-date/a.jpg', Size: 100, LastModified: new Date('2024-03-01') },
-          { Key: 'unknown-date/sub/b.mp4', Size: 200, LastModified: new Date('2024-03-02') },
+          { Key: 'transfers/unknown-date/a.jpg', Size: 100, LastModified: new Date('2024-03-01') },
+          { Key: 'transfers/unknown-date/sub/b.mp4', Size: 200, LastModified: new Date('2024-03-02') },
         ],
         IsTruncated: false,
       }));
@@ -281,8 +281,8 @@ describe('scaleway catalog service', () => {
       const service = makeService(send);
       const items = await service.listUndated();
       expect(items).toHaveLength(2);
-      expect(items[0]?.key).toBe('unknown-date/sub/b.mp4');
-      expect(items[1]?.key).toBe('unknown-date/a.jpg');
+      expect(items[0]?.key).toBe('transfers/unknown-date/sub/b.mp4');
+      expect(items[1]?.key).toBe('transfers/unknown-date/a.jpg');
     });
 
     it('returns empty list when no undated items', async () => {
@@ -299,8 +299,8 @@ describe('scaleway catalog service', () => {
     it('filters out non-media files', async () => {
       const send = vi.fn(async () => ({
         Contents: [
-          { Key: 'unknown-date/a.jpg', Size: 100, LastModified: new Date('2024-03-01') },
-          { Key: 'unknown-date/notes.txt', Size: 50, LastModified: new Date('2024-03-01') },
+          { Key: 'transfers/unknown-date/a.jpg', Size: 100, LastModified: new Date('2024-03-01') },
+          { Key: 'transfers/unknown-date/notes.txt', Size: 50, LastModified: new Date('2024-03-01') },
         ],
         IsTruncated: false,
       }));
@@ -308,7 +308,7 @@ describe('scaleway catalog service', () => {
       const service = makeService(send);
       const items = await service.listUndated();
       expect(items).toHaveLength(1);
-      expect(items[0]?.key).toBe('unknown-date/a.jpg');
+      expect(items[0]?.key).toBe('transfers/unknown-date/a.jpg');
     });
   });
 
@@ -531,7 +531,7 @@ describe('scaleway catalog service', () => {
     it('counts files and byte sizes correctly', async () => {
       const send = vi.fn(async (cmd: any) => {
         const prefix = cmd.input?.Prefix ?? '';
-        if (prefix.startsWith('unknown-date')) {
+        if (prefix.startsWith('transfers/unknown-date')) {
           return { Contents: [], IsTruncated: false };
         }
         return {
@@ -557,11 +557,11 @@ describe('scaleway catalog service', () => {
     it('counts undated items separately', async () => {
       const send = vi.fn(async (cmd: any) => {
         const prefix = cmd.input?.Prefix ?? '';
-        if (prefix.startsWith('unknown-date')) {
+        if (prefix.startsWith('transfers/unknown-date')) {
           return {
             Contents: [
-              { Key: 'unknown-date/x.jpg', Size: 500, LastModified: new Date('2024-06-01') },
-              { Key: 'unknown-date/y.mp4', Size: 1500, LastModified: new Date('2024-06-02') },
+              { Key: 'transfers/unknown-date/x.jpg', Size: 500, LastModified: new Date('2024-06-01') },
+              { Key: 'transfers/unknown-date/y.mp4', Size: 1500, LastModified: new Date('2024-06-02') },
             ],
             IsTruncated: false,
           };
