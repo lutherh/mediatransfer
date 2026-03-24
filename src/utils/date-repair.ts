@@ -5,6 +5,7 @@
  * without pulling in S3 / dotenv side-effects.
  */
 import type { SidecarMetadata } from '../takeout/archive-metadata.js';
+import { UNDATED_PREFIX } from './storage-paths.js';
 
 // ── Sidecar date parsing ────────────────────────────────────────
 
@@ -60,7 +61,7 @@ export function isWrongDate(date: Date): boolean {
  */
 export function extractAlbumFile(key: string): string {
   const parts = key.split('/');
-  if (parts[1] === 'unknown-date') {
+  if (parts[1] === UNDATED_PREFIX) {
     return parts.slice(2).join('/');
   }
   return parts.slice(4).join('/');
