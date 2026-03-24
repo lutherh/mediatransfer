@@ -214,4 +214,231 @@ describe('jobs/transfer-worker', () => {
     expect(source.download).toHaveBeenCalledTimes(2);
     expect(retryDelay).toHaveBeenCalledTimes(1);
   });
+
+  it('transfers items concurrently when concurrency > 1', async () => {
+    // Track the order of start / end events to prove overlapping execution
+    const events: string[] = [];
+    const uploadSpy = vi.fn();
+
+    const source: CloudProvider = {
+      name: 'mock',
+      async list() { return []; },
+      async download(key) {
+        events.push(`start:${key}`);
+        // Simulate network latency to allow overlapping
+        await new Promise((r) => setTimeout(r, 20));
+        events.push(`end:${key}`);
+        return Readable.from(['data']);
+      },
+      async upload() {},
+      async delete() {},
+    };
+
+    const dest: CloudProvider = {
+      name: 'mock',
+      async list() { return []; },
+      async download() { return Readable.from([]); },
+      async upload(key, stream) {
+        const chunks: Buffer[] = [];
+        for await (const chunk of stream) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        uploadSpy(key);
+      },
+      async delete() {},
+    };
+
+    await runTransferWorkerTask(
+      {
+        transferJobId: 'job-concurrent',
+        sourceProvider: source,
+        destProvider: dest,
+        items: [{ key: 'a' }, { key: 'b' }, { key: 'c' }, { key: 'd' }],
+        concurrency: 4,
+      },
+      {},
+    );
+
+    expect(uploadSpy).toHaveBeenCalledTimes(4);
+
+    // With concurrency=4, all 4 downloads should start before any finishes.
+    // events should look like: start:a, start:b, start:c, start:d, end:a, ...
+    const starts = events.filter((e) => e.startsWith('start:'));
+    const firstEnd = events.findIndex((e) => e.startsWith('end:'));
+    // At least 2 starts should occur before the first end
+    expect(firstEnd).toBeGreaterThanOrEqual(2);
+    expect(starts.length).toBe(4);
+  });
+
+  it('respects concurrency limit and does not exceed it', async () => {
+    let active = 0;
+    let maxActive = 0;
+
+    const source: CloudProvider = {
+      name: 'mock',
+      async list() { return []; },
+      async download() {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((r) => setTimeout(r, 10));
+        active--;
+        return Readable.from(['data']);
+      },
+      async upload() {},
+      async delete() {},
+    };
+
+    const dest: CloudProvider = {
+      name: 'mock',
+      async list() { return []; },
+      async download() { return Readable.from([]); },
+      async upload(_key, stream) {
+        for await (const _chunk of stream) { /* drain */ }
+      },
+      async delete() {},
+    };
+
+    await runTransferWorkerTask(
+      {
+        transferJobId: 'job-limit',
+        sourceProvider: source,
+        destProvider: dest,
+        items: Array.from({ length: 10 }, (_, i) => ({ key: `item-${i}` })),
+        concurrency: 3,
+      },
+      {},
+    );
+
+    // With concurrency=3, we should never have more than 3 active downloads
+    expect(maxActive).toBeLessThanOrEqual(3);
+    expect(maxActive).toBeGreaterThanOrEqual(2); // at least *some* parallelism
+  });
+
+  it('defaults to sequential execution when concurrency is not set', async () => {
+    const events: string[] = [];
+
+    const source: CloudProvider = {
+      name: 'mock',
+      async list() { return []; },
+      async download(key) {
+        events.push(`start:${key}`);
+        await new Promise((r) => setTimeout(r, 5));
+        events.push(`end:${key}`);
+        return Readable.from(['data']);
+      },
+      async upload() {},
+      async delete() {},
+    };
+
+    const dest: CloudProvider = {
+      name: 'mock',
+      async list() { return []; },
+      async download() { return Readable.from([]); },
+      async upload(_key, stream) {
+        for await (const _chunk of stream) { /* drain */ }
+      },
+      async delete() {},
+    };
+
+    await runTransferWorkerTask(
+      {
+        transferJobId: 'job-seq',
+        sourceProvider: source,
+        destProvider: dest,
+        items: [{ key: 'x' }, { key: 'y' }],
+        // no concurrency field — defaults to 1
+      },
+      {},
+    );
+
+    // Sequential: start:x, end:x, start:y, end:y
+    expect(events).toEqual(['start:x', 'end:x', 'start:y', 'end:y']);
+  });
+
+  it('reports correct progress with concurrent transfers', async () => {
+    const source: CloudProvider = {
+      name: 'mock',
+      async list() { return []; },
+      async download() {
+        await new Promise((r) => setTimeout(r, 5));
+        return Readable.from(['data']);
+      },
+      async upload() {},
+      async delete() {},
+    };
+
+    const dest: CloudProvider = {
+      name: 'mock',
+      async list() { return []; },
+      async download() { return Readable.from([]); },
+      async upload(_key, stream) {
+        for await (const _chunk of stream) { /* drain */ }
+      },
+      async delete() {},
+    };
+
+    const progressSpy = vi.fn().mockResolvedValue(undefined);
+
+    await runTransferWorkerTask(
+      {
+        transferJobId: 'job-prog',
+        sourceProvider: source,
+        destProvider: dest,
+        items: [{ key: 'a' }, { key: 'b' }, { key: 'c' }],
+        concurrency: 2,
+      },
+      { onProgress: progressSpy },
+    );
+
+    // progress should be called 3 times (once per completed item)
+    expect(progressSpy).toHaveBeenCalledTimes(3);
+    // Final call should be progress = 1
+    const lastCallProgress = progressSpy.mock.calls[progressSpy.mock.calls.length - 1][1];
+    expect(lastCallProgress).toBe(1);
+    // All progress values should be monotonically increasing
+    const values = progressSpy.mock.calls.map((c: [string, number]) => c[1]);
+    for (let i = 1; i < values.length; i++) {
+      expect(values[i]).toBeGreaterThanOrEqual(values[i - 1]);
+    }
+  });
+
+  it('aborts remaining items in batch when one fails (non-retryable)', async () => {
+    const source: CloudProvider = {
+      name: 'mock',
+      async list() { return []; },
+      async download(key) {
+        if (key === 'bad') throw new Error('permanent failure');
+        return Readable.from(['data']);
+      },
+      async upload() {},
+      async delete() {},
+    };
+
+    const dest: CloudProvider = {
+      name: 'mock',
+      async list() { return []; },
+      async download() { return Readable.from([]); },
+      async upload(_key, stream) {
+        for await (const _chunk of stream) { /* drain */ }
+      },
+      async delete() {},
+    };
+
+    const onError = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      runTransferWorkerTask(
+        {
+          transferJobId: 'job-fail',
+          sourceProvider: source,
+          destProvider: dest,
+          items: [{ key: 'good1' }, { key: 'bad' }, { key: 'good2' }],
+          concurrency: 1,
+        },
+        { onError },
+      ),
+    ).rejects.toThrow('permanent failure');
+
+    expect(onError).toHaveBeenCalledWith('job-fail', 'permanent failure');
+  });
 });
