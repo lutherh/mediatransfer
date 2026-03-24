@@ -19,10 +19,18 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import sharp from 'sharp';
+import heicConvert from 'heic-convert';
 import {
   resolveScalewayEndpoint,
   resolveScalewaySigningRegion,
 } from '../providers/scaleway.js';
+
+const HEIC_EXTENSIONS = new Set(['heic', 'heif']);
+
+function isHeicKey(key: string): boolean {
+  const ext = key.split('.').pop()?.toLowerCase() ?? '';
+  return HEIC_EXTENSIONS.has(ext);
+}
 
 export type CatalogItem = {
   key: string;
@@ -183,15 +191,27 @@ const THUMB_CACHE_TTL_MS = 30 * 60_000; // 30 minutes
 
 // ── Video thumbnail via ffmpeg ──────────────────────────────────────────────
 
-/** Cache the ffmpeg availability check so we only probe once per process. */
-let ffmpegAvailable: boolean | null = null;
+/** Resolve the ffmpeg binary: prefer system PATH, fall back to ffmpeg-static. */
+let resolvedFfmpeg: string | null = null;
 
-function checkFfmpeg(): Promise<boolean> {
-  if (ffmpegAvailable !== null) return Promise.resolve(ffmpegAvailable);
+function getFfmpegPath(): Promise<string | null> {
+  if (resolvedFfmpeg !== null) return Promise.resolve(resolvedFfmpeg);
   return new Promise((resolve) => {
     execFile('ffmpeg', ['-version'], (error) => {
-      ffmpegAvailable = !error;
-      resolve(ffmpegAvailable);
+      if (!error) {
+        resolvedFfmpeg = 'ffmpeg';
+        resolve(resolvedFfmpeg);
+      } else {
+        // Fall back to the bundled ffmpeg-static binary
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const staticPath = require('ffmpeg-static') as string;
+          resolvedFfmpeg = staticPath;
+          resolve(resolvedFfmpeg);
+        } catch {
+          resolve(null);
+        }
+      }
     });
   });
 }
@@ -205,6 +225,7 @@ const FFMPEG_TIMEOUT_MS = 30_000;
  * pipes to sharp for resizing, then cleans up.
  */
 async function extractVideoFrame(
+  ffmpegBin: string,
   videoStream: Readable,
   maxDimension: number,
   quality: number,
@@ -217,7 +238,7 @@ async function extractVideoFrame(
 
     // Extract a single frame at 1 second (falls back to first frame for short clips)
     await new Promise<void>((resolve, reject) => {
-      execFile('ffmpeg', [
+      execFile(ffmpegBin, [
         '-y',
         '-ss', '1',               // seek to 1s
         '-i', tempVideo,
@@ -228,7 +249,7 @@ async function extractVideoFrame(
       ], { timeout: FFMPEG_TIMEOUT_MS }, (error) => {
         if (error) {
           // Retry without -ss for very short clips
-          execFile('ffmpeg', [
+          execFile(ffmpegBin, [
             '-y',
             '-i', tempVideo,
             '-frames:v', '1',
@@ -599,8 +620,8 @@ export class ScalewayCatalogService implements CatalogService {
 
     // For videos, use ffmpeg to extract a frame. Falls back to UNSUPPORTED_FORMAT if ffmpeg not available.
     if (isVideo) {
-      const hasFfmpeg = await checkFfmpeg();
-      if (!hasFfmpeg) {
+      const ffmpegBin = await getFfmpegPath();
+      if (!ffmpegBin) {
         throw Object.assign(new Error('Video thumbnails not supported (ffmpeg not installed)'), { code: 'UNSUPPORTED_FORMAT' });
       }
 
@@ -618,7 +639,7 @@ export class ScalewayCatalogService implements CatalogService {
           : Readable.fromWeb(response.Body as ReadableStream<Uint8Array>);
 
       const { maxDimension, quality } = THUMB_SIZES[size];
-      const buffer = await extractVideoFrame(bodyStream, maxDimension, quality);
+      const buffer = await extractVideoFrame(ffmpegBin, bodyStream, maxDimension, quality);
       const contentType = 'image/jpeg';
 
       this.thumbCache.set(cacheKey, {
@@ -646,18 +667,34 @@ export class ScalewayCatalogService implements CatalogService {
 
     const { maxDimension, quality } = THUMB_SIZES[size];
 
-    // Stream S3 body directly into Sharp — avoids buffering the full-size
-    // image (potentially 20+ MB for HEIC) into a single Buffer[]
-    const sharpTransform = sharp()
+    let sharpInput: Buffer;
+    if (isHeicKey(decodedKey)) {
+      // HEIC/HEIF: Sharp's bundled libvips may lack HEVC decoder.
+      // Buffer the stream and convert to JPEG via heic-convert (WASM), then resize.
+      const chunks: Buffer[] = [];
+      for await (const chunk of bodyStream) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      const heicBuffer = Buffer.concat(chunks);
+      const jpegBuffer = await heicConvert({ buffer: heicBuffer, format: 'JPEG', quality: 0.92 });
+      sharpInput = Buffer.from(jpegBuffer);
+    } else {
+      // For standard formats, buffer the stream so Sharp can detect the format.
+      const chunks: Buffer[] = [];
+      for await (const chunk of bodyStream) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      sharpInput = Buffer.concat(chunks);
+    }
+
+    const buffer = await sharp(sharpInput)
       .rotate()                                // Auto-orient using EXIF
       .resize(maxDimension, maxDimension, {
         fit: 'inside',                         // Preserve aspect ratio
         withoutEnlargement: true,              // Don't upscale small images
       })
-      .jpeg({ quality, mozjpeg: true });       // MozJPEG for smaller output
-
-    bodyStream.pipe(sharpTransform);
-    const buffer = await sharpTransform.toBuffer();
+      .jpeg({ quality, mozjpeg: true })        // MozJPEG for smaller output
+      .toBuffer();
 
     const contentType = 'image/jpeg';
 

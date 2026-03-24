@@ -42,12 +42,9 @@ export function Thumbnail({
     lastDot > 0 && lastDot < filename.length - 1
       ? filename.slice(lastDot + 1).toLowerCase()
       : '';
-  const shouldSkipThumbnail = isVideo;
 
   // The virtualizer ensures this cell is visible — load immediately.
-  const wantUrl = shouldSkipThumbnail
-    ? null
-    : catalogThumbnailUrl(item.encodedKey, 'small', apiToken);
+  const wantUrl = catalogThumbnailUrl(item.encodedKey, 'small', apiToken);
   const alreadyFailed = wantUrl ? isThumbnailFailed(wantUrl) : false;
   const skipThumbnail = !wantUrl || alreadyFailed;
   const [thumbFailed, setThumbFailed] = useState(skipThumbnail);
