@@ -474,7 +474,7 @@ export class ScalewayCatalogService implements CatalogService {
       return this.listPageDescending(input);
     }
     const max = clamp(input?.max ?? 90, 1, 200);
-    const prefix = this.fullPrefix(input?.prefix);
+    const prefix = this.fullPrefix(normalizeSearchPrefix(input?.prefix));
 
     const items: CatalogItem[] = [];
     let continuationToken = input?.token;
@@ -546,10 +546,11 @@ export class ScalewayCatalogService implements CatalogService {
 
     let items = allItems;
     if (input?.prefix) {
-      const lowerQuery = input.prefix.toLowerCase();
-      // If the query looks like a date path prefix (starts with a digit), use startsWith.
+      const normalized = normalizeSearchPrefix(input.prefix);
+      const lowerQuery = normalized.toLowerCase();
+      // If the query looks like a path prefix (starts with known dir or digit), use startsWith.
       // Otherwise treat it as a filename substring search (case-insensitive).
-      const isPathPrefix = /^\d/.test(lowerQuery);
+      const isPathPrefix = /^(\d|transfers\/)/i.test(lowerQuery);
       if (isPathPrefix) {
         items = allItems.filter(item => item.key.toLowerCase().startsWith(lowerQuery));
       } else {
@@ -1287,6 +1288,20 @@ export function decodeKey(encodedKey: string): string {
     console.debug('[catalog] Invalid encoded media key', { encodedKey, err });
     throw new Error('Invalid media key encoding');
   }
+}
+
+/**
+ * Normalize a user search query into a key prefix.
+ * Keys after strip are `transfers/YYYY/MM/DD/filename`, so when the user
+ * types a bare date like "2020/02" we auto-prepend "transfers/".
+ */
+function normalizeSearchPrefix(query?: string): string | undefined {
+  if (!query) return undefined;
+  // Already includes the transfers/ prefix — pass through
+  if (/^transfers\//i.test(query)) return query;
+  // Starts with a date-like digit sequence (YYYY…) — auto-prepend transfers/
+  if (/^\d/.test(query)) return `transfers/${query}`;
+  return query;
 }
 
 function inferMediaType(key: string): 'image' | 'video' | 'other' {

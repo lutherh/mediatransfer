@@ -184,6 +184,36 @@ describe('buildMonthMarkers', () => {
     expect(markers[2].position).toBeGreaterThan(markers[1].position);
   });
 
+  it('builds full timeline from distribution even when not all months are loaded', () => {
+    // Only 2 sections loaded, but distribution has 5 months (entire library)
+    const sections = makeSections(['2024-06-15', '2024-05-20']);
+    const dist = {
+      months: [
+        { month: '2024-02', count: 20 },
+        { month: '2024-03', count: 30 },
+        { month: '2024-04', count: 100 },
+        { month: '2024-05', count: 10 },
+        { month: '2024-06', count: 50 },
+      ],
+      totalItems: 210,
+    };
+    const markers = buildMonthMarkers(sections, dist);
+    // All 5 distribution months should appear (newest first)
+    expect(markers).toHaveLength(5);
+    expect(markers[0].key).toBe('2024-06');
+    expect(markers[1].key).toBe('2024-05');
+    expect(markers[2].key).toBe('2024-04');
+    expect(markers[3].key).toBe('2024-03');
+    expect(markers[4].key).toBe('2024-02');
+    // Loaded months get real section dates
+    expect(markers[0].firstDate).toBe('2024-06-15');
+    expect(markers[1].firstDate).toBe('2024-05-20');
+    // Unloaded months get synthetic "YYYY-MM-01" dates
+    expect(markers[2].firstDate).toBe('2024-04-01');
+    expect(markers[3].firstDate).toBe('2024-03-01');
+    expect(markers[4].firstDate).toBe('2024-02-01');
+  });
+
   it('returns position 0 for single section', () => {
     const sections = makeSections(['2024-06-15']);
     const markers = buildMonthMarkers(sections);
