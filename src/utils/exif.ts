@@ -1,8 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import exifr from 'exifr';
-
-const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.3gp', '.3g2']);
+import { VIDEO_EXTENSIONS } from './media-extensions.js';
 const CAPTURED_AT_TAGS = [
   'DateTimeOriginal',
   'SubSecDateTimeOriginal',

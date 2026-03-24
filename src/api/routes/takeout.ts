@@ -6,6 +6,7 @@ import { createReadStream } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import type { Env } from '../../config/env.js';
 import type { UploadSkipReason, UploadState, UploadStateItem } from '../../takeout/uploader.js';
+import { loadUploadState } from '../../takeout/uploader.js';
 import { OVERRIDABLE_PATHS, type OverridablePathName } from '../../takeout/config.js';
 import {
   loadPipelineState,
@@ -434,7 +435,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     const manifestPath = path.join(workDir, 'manifest.jsonl');
 
     const [state, manifestKeys, pipeline, initialArchiveState] = await Promise.all([
-      readUploadState(statePath),
+      loadUploadState(statePath),
       readManifestKeys(manifestPath),
       ensurePipelineState(workDir),
       loadMergedArchiveState(workDir, defaultWorkDir),
@@ -1449,28 +1450,7 @@ async function countManifestLinesStream(manifestPath: string, timeoutMs: number)
   });
 }
 
-async function readUploadState(statePath: string): Promise<UploadState> {
-  try {
-    const raw = (await fs.readFile(statePath, 'utf8')).replace(/^\uFEFF/, '');
-    const parsed = JSON.parse(raw) as UploadState;
-    if (!parsed || parsed.version !== 1 || typeof parsed.items !== 'object' || !parsed.items) {
-      return createEmptyState();
-    }
 
-    return parsed;
-  } catch {
-    // Upload state file doesn't exist yet — normal before first upload.
-    return createEmptyState();
-  }
-}
-
-function createEmptyState(): UploadState {
-  return {
-    version: 1,
-    updatedAt: new Date(0).toISOString(),
-    items: {},
-  };
-}
 
 function summarizeState(items: Record<string, UploadStateItem>): {
   uploaded: number;

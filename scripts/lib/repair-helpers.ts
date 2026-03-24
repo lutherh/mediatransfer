@@ -87,13 +87,7 @@ export function createS3Helpers(): S3Helpers {
 
 // ── Date-path helpers ───────────────────────────────────────────
 
-/** Convert a Date to a `YYYY/MM/DD` path segment. */
-export function toDatePath(date: Date): string {
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(date.getUTCDate()).padStart(2, '0');
-  return `${year}/${month}/${day}`;
-}
+export { toDatePath } from '../../src/utils/storage-paths.js';
 
 /**
  * Rewrite the date portion of an S3 key.

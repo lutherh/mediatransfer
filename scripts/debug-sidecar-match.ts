@@ -37,11 +37,8 @@ console.log(`Filenames with multiple sidecars: ${duplicateFilenames}`);
 // 2026 keys look like: transfers/2026/03/15/AlbumName/filename.ext
 // Sidecar destKeys:    transfers/2020/05/15/AlbumName/filename.ext
 // Extract album by taking the 4th path segment
-function extractAlbumFile(key: string): string {
-  const parts = key.split('/');
-  // transfers/YYYY/MM/DD/album/filename → album/filename
-  return parts.slice(4).join('/');
-}
+// Use canonical implementation that handles both dated and undated keys
+import { extractAlbumFile } from '../src/utils/date-repair.js';
 
 const sidecarByAlbumFile = new Map<string, { photoTakenTime?: string; creationTime?: string }>();
 for (const [, entries] of sidecarByFilename) {

@@ -179,10 +179,7 @@ export type ScalewayCatalogConfig = {
   thumbCacheDir?: string;
 };
 
-const IMAGE_EXTENSIONS = new Set([
-  'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'dng', 'tif', 'tiff',
-]);
-const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'avi', 'm4v', '3gp', 'mkv', 'webm']);
+import { IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from '../utils/media-extensions.js';
 
 const DEFAULT_S3_REQUEST_TIMEOUT_MS = 300_000;
 const STATS_CACHE_TTL_MS = 5 * 60_000;
@@ -1305,7 +1302,7 @@ function normalizeSearchPrefix(query?: string): string | undefined {
 }
 
 function inferMediaType(key: string): 'image' | 'video' | 'other' {
-  const ext = key.split('.').pop()?.toLowerCase() ?? '';
+  const ext = `.${key.split('.').pop()?.toLowerCase() ?? ''}`;
   if (IMAGE_EXTENSIONS.has(ext)) {
     return 'image';
   }
