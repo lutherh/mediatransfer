@@ -17,7 +17,8 @@ export type UploadStateItem = {
 export type UploadSkipReason =
   | 'already_uploaded_in_state'
   | 'already_skipped_in_state'
-  | 'already_exists_in_destination';
+  | 'already_exists_in_destination'
+  | 'source_file_missing';
 
 export type UploadState = {
   version: 1;
@@ -165,6 +166,7 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
       already_uploaded_in_state: 0,
       already_skipped_in_state: 0,
       already_exists_in_destination: 0,
+      source_file_missing: 0,
     },
     dryRun,
     stoppedEarly: false,
@@ -296,25 +298,33 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
       return;
     }
 
-    // Fast-fail if source file doesn't exist on disk (e.g. stale __dup manifest entries).
-    // Uses sync check to avoid yielding the event loop (which would disrupt checkpoint timing).
+    // Source file doesn't exist on disk — this can happen due to:
+    //   - Stale __dup manifest entries from a previous scan
+    //   - Tar extraction encoding issues (non-ASCII dir names like "børn")
+    //   - Symbolic links in the tar that can't be resolved on Windows
+    // Mark as 'skipped' instead of 'failed': retry can never succeed, and
+    // these should not block cleanup or count as actionable failures.
     if (!existsSync(entry.sourcePath)) {
-      const msg = `ENOENT: source file missing: ${entry.sourcePath}`;
+      const msg = `source file missing: ${entry.sourcePath}`;
+      console.warn(`[uploader] Skipping inaccessible file: ${entry.sourcePath}`);
       state.items[entry.destinationKey] = {
-        status: 'failed',
+        status: 'skipped',
         attempts: 0,
         updatedAt: new Date().toISOString(),
+        skipReason: 'source_file_missing',
         error: msg,
       };
       checkpointManager.markDirty();
-      summary.failed += 1;
+      summary.skipReasons!.source_file_missing =
+        (summary.skipReasons!.source_file_missing ?? 0) + 1;
+      summary.skipped += 1;
       summary.processed += 1;
       emitSnapshot('running', true, {
         key: entry.destinationKey,
         sourcePath: entry.sourcePath,
         sizeBytes: entry.size,
         attempt: 0,
-        status: 'failed',
+        status: 'skipped',
         error: msg,
       });
       return;
