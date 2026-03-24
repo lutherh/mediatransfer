@@ -184,9 +184,10 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
     inFlightBytes.set(key, bytes);
   };
 
-  /** Remove a key from in-flight tracking and return its last value. */
-  const deleteInFlightBytes = (key: string): number => {
-    const prev = inFlightBytes.get(key) ?? 0;
+  /** Remove a key from in-flight tracking and return its last value (0 if absent). */
+  const deleteInFlightBytes = (key: string): number | undefined => {
+    if (!inFlightBytes.has(key)) return undefined;
+    const prev = inFlightBytes.get(key)!;
     inFlightBytesTotal -= prev;
     inFlightBytes.delete(key);
     return prev;
@@ -380,7 +381,7 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
           { 'captured-at': entry.capturedAt },
         );
 
-        const uploadedBytes = deleteInFlightBytes(entry.destinationKey) || entry.size;
+        const uploadedBytes = deleteInFlightBytes(entry.destinationKey) ?? entry.size;
         committedTransferredBytes += uploadedBytes;
         const elapsedMs = Math.max(1, Date.now() - startMs);
         const speedBytesPerSec = Math.floor((uploadedBytes / elapsedMs) * 1000);
