@@ -17,8 +17,7 @@ export type UploadStateItem = {
 export type UploadSkipReason =
   | 'already_uploaded_in_state'
   | 'already_skipped_in_state'
-  | 'already_exists_in_destination'
-  | 'source_file_missing';
+  | 'already_exists_in_destination';
 
 export type UploadState = {
   version: 1;
@@ -166,7 +165,6 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
       already_uploaded_in_state: 0,
       already_skipped_in_state: 0,
       already_exists_in_destination: 0,
-      source_file_missing: 0,
     },
     dryRun,
     stoppedEarly: false,
@@ -298,34 +296,28 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
       return;
     }
 
-    // Source file doesn't exist on disk — this can happen due to:
-    //   - Stale __dup manifest entries from a previous scan
-    //   - Tar extraction encoding issues (non-ASCII dir names like "børn")
-    //   - Symbolic links in the tar that can't be resolved on Windows
-    // Mark as 'skipped' instead of 'failed': retry can never succeed, and
-    // these should not block cleanup or count as actionable failures.
+    // Source file doesn't exist on disk — fail immediately without retry.
+    // ENOENT from createReadStream propagates as an uncaught stream error,
+    // so we must check before opening the stream.
     if (!existsSync(entry.sourcePath)) {
-      const msg = `source file missing: ${entry.sourcePath}`;
-      console.warn(`[uploader] Skipping inaccessible file: ${entry.sourcePath}`);
+      const err = new Error(`ENOENT: source file missing: ${entry.sourcePath}`);
+      (err as NodeJS.ErrnoException).code = 'ENOENT';
       state.items[entry.destinationKey] = {
-        status: 'skipped',
-        attempts: 0,
+        status: 'failed',
+        attempts: 1,
         updatedAt: new Date().toISOString(),
-        skipReason: 'source_file_missing',
-        error: msg,
+        error: err.message,
       };
       checkpointManager.markDirty();
-      summary.skipReasons!.source_file_missing =
-        (summary.skipReasons!.source_file_missing ?? 0) + 1;
-      summary.skipped += 1;
+      summary.failed += 1;
       summary.processed += 1;
       emitSnapshot('running', true, {
         key: entry.destinationKey,
         sourcePath: entry.sourcePath,
         sizeBytes: entry.size,
-        attempt: 0,
-        status: 'skipped',
-        error: msg,
+        attempt: 1,
+        status: 'failed',
+        error: err.message,
       });
       return;
     }

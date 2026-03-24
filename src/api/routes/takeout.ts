@@ -447,27 +447,39 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       if (item) manifestItems[key] = item;
     }
 
-    let summary = summarizeState(manifestItems);
+    const summary = summarizeState(manifestItems);
     let total = manifestKeys.size;
     const processed = summary.uploaded + summary.skipped + summary.failed;
     let pending = Math.max(total - processed, 0);
     const progress = total > 0 ? Math.min(processed / total, 1) : 0;
 
-    // Detect stale manifest: all archives completed/failed (none pending/extracting/uploading)
-    // but manifest still has entries with no upload state record.  These are orphaned entries
-    // from the scan phase whose destinationKeys differ from what the upload actually produced.
+    // Count archive files waiting in the input directory (needed for reconciliation guard)
+    let archivesInInput = 0;
+    try {
+      const inputEntries = await fs.readdir(inputDir, { withFileTypes: true });
+      archivesInInput = inputEntries.filter(
+        (e) => e.isFile() && /\.(zip|tar|tgz|tar\.gz)$/i.test(e.name),
+      ).length;
+    } catch (err) {
+      app.log.debug({ err, inputDir }, 'Unable to list takeout input directory');
+    }
+
+    // Detect stale manifest: all archives completed/failed (none pending/extracting/uploading),
+    // no archive files left in input, but manifest still has entries with no upload state record.
+    // These are orphaned entries from the scan phase whose destinationKeys differ from what the
+    // upload actually produced.  Only auto-reconcile when there are no more archives to process.
     const hasActiveArchives = Object.values(mergedArchiveState).some(
       (a) => a.status === 'pending' || a.status === 'extracting' || a.status === 'uploading',
     );
     const hasCompletedArchives = Object.values(mergedArchiveState).some(
       (a) => a.status === 'completed',
     );
-    if (pending > 0 && !hasActiveArchives && hasCompletedArchives && !RUN_STATUS.running) {
+    if (pending > 0 && archivesInInput === 0 && !hasActiveArchives && hasCompletedArchives && !RUN_STATUS.running) {
       try {
         const reconciled = await reconcileManifest(manifestPath, statePath);
-        if (reconciled.removed > 0 || reconciled.repairedFailures > 0) {
+        if (reconciled.removed > 0) {
           app.log.info(
-            { removed: reconciled.removed, kept: reconciled.kept, repairedFailures: reconciled.repairedFailures },
+            { removed: reconciled.removed, kept: reconciled.kept },
             'Auto-reconciled stale manifest entries',
           );
           // Invalidate the manifest cache so the next read picks up the cleaned file
@@ -475,20 +487,6 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
           // Recompute counts after reconciliation
           total = reconciled.kept;
           pending = Math.max(total - processed, 0);
-
-          // If failures were repaired, re-read state to get accurate summary
-          if (reconciled.repairedFailures > 0) {
-            const freshState = await readUploadState(statePath);
-            const freshManifestKeys = await readManifestKeys(manifestPath);
-            const freshManifestItems: Record<string, UploadStateItem> = {};
-            for (const key of freshManifestKeys) {
-              const item = freshState.items[key];
-              if (item) freshManifestItems[key] = item;
-            }
-            summary = summarizeState(freshManifestItems);
-            total = freshManifestKeys.size;
-            pending = Math.max(total - (summary.uploaded + summary.skipped + summary.failed), 0);
-          }
         }
       } catch (err) {
         app.log.warn({ err }, 'Failed to auto-reconcile stale manifest entries');
@@ -515,18 +513,6 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     }
 
     const archiveHistory = await buildArchiveHistory(mergedArchiveState, inputDir);
-
-    // Count archive files waiting in the input directory
-    let archivesInInput = 0;
-    try {
-      const inputEntries = await fs.readdir(inputDir, { withFileTypes: true });
-      archivesInInput = inputEntries.filter(
-        (e) => e.isFile() && /\.(zip|tar|tgz|tar\.gz)$/i.test(e.name),
-      ).length;
-    } catch (err) {
-      app.log.debug({ err, inputDir }, 'Unable to list takeout input directory');
-      // input dir may not exist yet
-    }
 
     return {
       paths: {

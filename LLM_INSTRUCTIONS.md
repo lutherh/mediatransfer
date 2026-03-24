@@ -62,6 +62,7 @@ Refer to `TECH_STACK.md` for full details.
 - Include both happy-path and error-path tests
 - always run lint - `npm run lint`
 - always run tests
+- **Tests must stay in sync with implementation.** When modifying production code, always check and update corresponding test files to match the new behavior. Run the full test suite (`npx vitest run`) after any code change to catch regressions. A code change is not complete until all tests pass.
 
 ---
 
