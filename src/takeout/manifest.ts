@@ -20,9 +20,9 @@ export type ManifestEntry = {
 
 /**
  * Concurrency limit for parallel filesystem operations.
- * Prevents overwhelming the OS with too many open file handles.
+ * 64 saturates typical SSDs while staying well below common fd limits.
  */
-const IO_CONCURRENCY = 32;
+export const IO_CONCURRENCY = 64;
 
 export type ManifestProgressCallback = (processed: number, total: number) => void;
 

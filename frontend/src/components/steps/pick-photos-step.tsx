@@ -80,7 +80,7 @@ export function PickPhotosStep({ onPhotosSelected, onBack }: PickPhotosStepProps
       if (pickerWindow.closed) {
         setPickerWindow(null);
       }
-    }, 500);
+    }, 2000);
     return () => clearInterval(interval);
   }, [pickerWindow]);
 

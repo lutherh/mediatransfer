@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { CatalogService, DuplicateGroup, ThumbnailSize } from '../../catalog/scaleway-catalog.js';
 import { decodeKey } from '../../catalog/scaleway-catalog.js';
-import { extractExifMetadata } from '../../utils/exif.js';
+import { extractExifMetadataFull } from '../../utils/exif.js';
 import { apiError } from '../errors.js';
 import { buildCatalogHtml } from './catalog-html.js';
 
@@ -117,6 +117,7 @@ export async function registerCatalogRoutes(
 
     try {
       const stats = await catalogService.getStats();
+      reply.header('Cache-Control', 'private, max-age=60, stale-while-revalidate=300');
       return stats;
     } catch (err) {
       const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
@@ -187,8 +188,9 @@ export async function registerCatalogRoutes(
     const { moves } = bulkMoveBodySchema.parse(req.body);
     const results = { moved: [] as { from: string; to: string }[], failed: [] as { key: string; error: string }[] };
 
-    // Process moves with limited concurrency (5 at a time) instead of serially
-    const CONCURRENCY = 5;
+    // Process moves with limited concurrency (20 at a time) — S3 CopyObject is
+    // server-side so higher parallelism is safe and significantly faster.
+    const CONCURRENCY = 20;
     for (let i = 0; i < moves.length; i += CONCURRENCY) {
       const batch = moves.slice(i, i + CONCURRENCY);
       const settled = await Promise.allSettled(
@@ -463,22 +465,7 @@ export async function registerCatalogRoutes(
 
     try {
       const { buffer, contentType, contentLength } = await catalogService.getObjectBuffer(encodedKey, 65536);
-      const exif = await extractExifMetadata(buffer);
-
-      let rawExif: Record<string, unknown> | undefined;
-      try {
-        const exifr = await import('exifr');
-        const raw = await exifr.default.parse(buffer, { translateValues: true, mergeOutput: true });
-        if (raw && typeof raw === 'object') {
-          rawExif = {};
-          for (const [key, value] of Object.entries(raw)) {
-            if (value instanceof Uint8Array || Buffer.isBuffer(value)) continue;
-            rawExif[key] = value instanceof Date ? value.toISOString() : value;
-          }
-        }
-      } catch (err) {
-        app.log.debug({ err, encodedKey }, 'Raw EXIF extraction unavailable');
-      }
+      const { metadata: exif, raw: rawExif } = await extractExifMetadataFull(buffer);
 
       return {
         capturedAt: exif.capturedAt?.toISOString() ?? null,

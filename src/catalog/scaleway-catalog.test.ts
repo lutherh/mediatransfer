@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import {
   DiskThumbnailCache,
   ScalewayCatalogService,
+  VIDEO_THUMB_RANGE_BYTES,
   buildDuplicateGroups,
   decodeKey,
   encodeKey,
@@ -1600,6 +1601,94 @@ describe('scaleway catalog service', () => {
 
       // Should have made S3 calls (LRU was evicted, disk was cleared)
       expect(send).toHaveBeenCalled();
+    });
+  });
+
+  // ── Video thumbnail Range request ──────────────────────────────────────────
+
+  describe('video thumbnail Range request', () => {
+    it('exports VIDEO_THUMB_RANGE_BYTES as 10MB', () => {
+      expect(VIDEO_THUMB_RANGE_BYTES).toBe(10 * 1024 * 1024);
+    });
+
+    it('sends Range header for video thumbnail fetch', async () => {
+      const calls: { name: string; key?: string; range?: string }[] = [];
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        calls.push({ name, key: cmd.input?.Key, range: cmd.input?.Range });
+        if (name === 'GetObjectCommand' && cmd.input?.Key?.includes('_thumbs/')) {
+          // No persisted thumbnail
+          const err = new Error('NoSuchKey');
+          err.name = 'NoSuchKey';
+          throw err;
+        }
+        if (name === 'GetObjectCommand' && cmd.input?.Range) {
+          // Range request for partial video - return a small chunk
+          return {
+            Body: Readable.from([Buffer.alloc(100)]),
+          };
+        }
+        if (name === 'GetObjectCommand') {
+          // Full fetch fallback
+          return {
+            Body: Readable.from([Buffer.alloc(100)]),
+          };
+        }
+        return {};
+      });
+
+      const service = makeService(send);
+      try {
+        await service.getThumbnail(encodeKey('2020/01/01/video.mp4'), 'small');
+      } catch {
+        // ffmpeg not available / fake data — that's expected
+      }
+
+      // Should see: 1) S3 _thumbs lookup (404), 2) Range GET for partial video
+      const gets = calls.filter((c) => c.name === 'GetObjectCommand');
+      expect(gets.length).toBeGreaterThanOrEqual(2);
+      // First GET: thumbnail lookup
+      expect(gets[0]?.key).toContain('_thumbs/small/');
+      // Second GET: Range request for video
+      expect(gets[1]?.range).toBe(`bytes=0-${VIDEO_THUMB_RANGE_BYTES - 1}`);
+    });
+
+    it('falls back to full video download if Range request fails', async () => {
+      const calls: { name: string; key?: string; range?: string }[] = [];
+      const send = vi.fn(async (cmd: any) => {
+        const name = cmd.constructor?.name ?? '';
+        calls.push({ name, key: cmd.input?.Key, range: cmd.input?.Range });
+        if (name === 'GetObjectCommand' && cmd.input?.Key?.includes('_thumbs/')) {
+          const err = new Error('NoSuchKey');
+          err.name = 'NoSuchKey';
+          throw err;
+        }
+        if (name === 'GetObjectCommand' && cmd.input?.Range) {
+          // Range request fails (e.g., provider doesn't support it)
+          throw new Error('Range not supported');
+        }
+        if (name === 'GetObjectCommand') {
+          // Full fetch
+          return {
+            Body: Readable.from([Buffer.alloc(100)]),
+          };
+        }
+        return {};
+      });
+
+      const service = makeService(send);
+      try {
+        await service.getThumbnail(encodeKey('2020/01/01/video.mov'), 'small');
+      } catch {
+        // ffmpeg not available — that's expected
+      }
+
+      // Should see: 1) thumb lookup (404), 2) Range GET (fail), 3) full GET
+      const gets = calls.filter((c) => c.name === 'GetObjectCommand');
+      expect(gets.length).toBeGreaterThanOrEqual(3);
+      expect(gets[1]?.range).toBe(`bytes=0-${VIDEO_THUMB_RANGE_BYTES - 1}`);
+      // Third GET: full file (no Range)
+      expect(gets[2]?.range).toBeUndefined();
     });
   });
 });
