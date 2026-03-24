@@ -202,3 +202,22 @@ describe('extractVideoCreationDateFromMoov', () => {
     expect(extractVideoCreationDateFromMoov(Buffer.alloc(4))).toBeNull();
   });
 });
+
+describe('extractExifMetadataFull', () => {
+  it('returns both metadata and raw from a single parse call', async () => {
+    const { extractExifMetadataFull } = await import('./exif.js');
+    // With an empty buffer, exifr will return nothing
+    const result = await extractExifMetadataFull(Buffer.alloc(100));
+    expect(result).toHaveProperty('metadata');
+    expect(result).toHaveProperty('raw');
+    // metadata should be an ExifMetadata (possibly empty)
+    expect(typeof result.metadata).toBe('object');
+  });
+
+  it('does not throw on invalid input', async () => {
+    const { extractExifMetadataFull } = await import('./exif.js');
+    const result = await extractExifMetadataFull(Buffer.from('not an image'));
+    expect(result.metadata).toEqual({});
+    expect(result.raw).toBeUndefined();
+  });
+});
