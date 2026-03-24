@@ -137,10 +137,10 @@ describe('scaleway catalog service', () => {
         if (callCount === 1) {
           return {
             Contents: [
-              { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
-              { Key: '2021/06/15/b.jpg', Size: 200, LastModified: new Date('2021-06-15') },
-              { Key: '2024/03/10/c.mp4', Size: 300, LastModified: new Date('2024-03-10') },
-              { Key: '2025/12/25/d.jpg', Size: 400, LastModified: new Date('2025-12-25') },
+              { Key: 'transfers/2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
+              { Key: 'transfers/2021/06/15/b.jpg', Size: 200, LastModified: new Date('2021-06-15') },
+              { Key: 'transfers/2024/03/10/c.mp4', Size: 300, LastModified: new Date('2024-03-10') },
+              { Key: 'transfers/2025/12/25/d.jpg', Size: 400, LastModified: new Date('2025-12-25') },
             ],
             IsTruncated: false,
           };
@@ -154,8 +154,8 @@ describe('scaleway catalog service', () => {
       const service = makeDescService();
       const page = await service.listPage({ max: 10, sort: 'desc' });
       expect(page.items).toHaveLength(4);
-      expect(page.items[0]?.key).toBe('2025/12/25/d.jpg');
-      expect(page.items[3]?.key).toBe('2020/01/01/a.jpg');
+      expect(page.items[0]?.key).toBe('transfers/2025/12/25/d.jpg');
+      expect(page.items[3]?.key).toBe('transfers/2020/01/01/a.jpg');
     });
 
     it('paginates with numeric offset tokens', async () => {
@@ -163,11 +163,11 @@ describe('scaleway catalog service', () => {
       const page1 = await service.listPage({ max: 2, sort: 'desc' });
       expect(page1.items).toHaveLength(2);
       expect(page1.nextToken).toBe('2');
-      expect(page1.items[0]?.key).toBe('2025/12/25/d.jpg');
+      expect(page1.items[0]?.key).toBe('transfers/2025/12/25/d.jpg');
 
       const page2 = await service.listPage({ max: 2, token: page1.nextToken, sort: 'desc' });
       expect(page2.items).toHaveLength(2);
-      expect(page2.items[0]?.key).toBe('2021/06/15/b.jpg');
+      expect(page2.items[0]?.key).toBe('transfers/2021/06/15/b.jpg');
       expect(page2.nextToken).toBeUndefined();
     });
 
@@ -175,21 +175,21 @@ describe('scaleway catalog service', () => {
       const service = makeDescService();
       const page = await service.listPage({ max: 10, prefix: '2020', sort: 'desc' });
       expect(page.items).toHaveLength(1);
-      expect(page.items[0]?.key).toBe('2020/01/01/a.jpg');
+      expect(page.items[0]?.key).toBe('transfers/2020/01/01/a.jpg');
     });
 
     it('searches by filename substring when query does not start with a digit', async () => {
       const service = makeDescService();
       const page = await service.listPage({ max: 10, prefix: 'c.mp4', sort: 'desc' });
       expect(page.items).toHaveLength(1);
-      expect(page.items[0]?.key).toBe('2024/03/10/c.mp4');
+      expect(page.items[0]?.key).toBe('transfers/2024/03/10/c.mp4');
     });
 
     it('filename search is case-insensitive', async () => {
       const service = makeDescService();
       const page = await service.listPage({ max: 10, prefix: 'C.MP4', sort: 'desc' });
       expect(page.items).toHaveLength(1);
-      expect(page.items[0]?.key).toBe('2024/03/10/c.mp4');
+      expect(page.items[0]?.key).toBe('transfers/2024/03/10/c.mp4');
     });
 
     it('returns empty for invalid token', async () => {

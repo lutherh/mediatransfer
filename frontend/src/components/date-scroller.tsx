@@ -33,7 +33,7 @@ export interface DateScrollerProps {
    * sections (not currently in the DOM) can still be scrolled to correctly.
    */
   onScrollToDate?: (date: string) => void;
-  /** Optional date distribution from the API for density-proportional spacing */
+  /** Optional date distribution from the API — the FULL timeline for all media. */
   dateDistribution?: { months: { month: string; count: number }[]; totalItems: number } | null;
 }
 
@@ -69,17 +69,82 @@ export function formatTooltip(dateStr: string): string {
   return `${monthLabelFull(dateStr)} ${dateStr.slice(0, 4)}`;
 }
 
-/** Build month markers from sections array with density-proportional spacing.
- *  When distribution data is provided, months with more items get more track space
- *  (Google Photos-style). Without distribution data, falls back to linear spacing.
+/**
+ * Build month markers for the full timeline.
+ *
+ * Primary source: `distribution` (complete server-side month counts) — this
+ * covers the entire media library from newest to oldest with density-proportional
+ * spacing (Google Photos style).
+ *
+ * Fallback: builds from loaded `sections` when distribution is unavailable.
+ *
+ * Markers are returned **newest-first** (top of track = newest).
  */
 export function buildMonthMarkers(
   sections: [string, unknown[]][],
   distribution?: { months: { month: string; count: number }[]; totalItems: number } | null,
 ): MonthMarker[] {
+  // ── Primary path: use full distribution data ───────────────────────────
+  if (distribution?.months && distribution.months.length > 0) {
+    return buildMarkersFromDistribution(distribution, sections);
+  }
+
+  // ── Fallback: build from loaded sections only ──────────────────────────
+  return buildMarkersFromSections(sections);
+}
+
+/** Build from the full date-distribution API (covers entire media library) */
+function buildMarkersFromDistribution(
+  distribution: { months: { month: string; count: number }[]; totalItems: number },
+  sections: [string, unknown[]][],
+): MonthMarker[] {
+  // Distribution months are sorted ascending — reverse for newest-first
+  const distMonths = [...distribution.months].reverse();
+  if (distMonths.length === 0) return [];
+
+  // Build a lookup: "YYYY-MM" → first section date in that month (for scroll-to)
+  const sectionDateByMonth = new Map<string, string>();
+  for (const [date] of sections) {
+    const ym = date.slice(0, 7);
+    if (!sectionDateByMonth.has(ym)) {
+      sectionDateByMonth.set(ym, date);
+    }
+  }
+
+  const groups: MonthMarker[] = [];
+  let lastYear = '';
+
+  for (const dm of distMonths) {
+    const ym = dm.month; // "YYYY-MM"
+    const year = ym.slice(0, 4);
+    const isFirstOfYear = year !== lastYear;
+    lastYear = year;
+
+    // Synthetic section date for scroll — use real section date if loaded,
+    // else fabricate "YYYY-MM-01" (the virtualizer will scroll to closest)
+    const firstDate = sectionDateByMonth.get(ym) ?? `${ym}-01`;
+
+    groups.push({
+      key: ym,
+      label: monthLabel(`${ym}-01`),
+      fullLabel: monthLabelFull(`${ym}-01`),
+      year,
+      firstDate,
+      position: 0, // computed below
+      isFirstOfYear,
+      itemCount: dm.count,
+    });
+  }
+
+  computeDensityPositions(groups);
+  return groups;
+}
+
+/** Fallback: build from loaded sections only */
+function buildMarkersFromSections(sections: [string, unknown[]][]): MonthMarker[] {
   if (sections.length === 0) return [];
   const groups: MonthMarker[] = [];
-  const seen = new Map<string, number>(); // key → index in groups
+  const seen = new Map<string, number>();
   let lastYear = '';
 
   for (let i = 0; i < sections.length; i++) {
@@ -89,7 +154,6 @@ export function buildMonthMarkers(
 
     const existing = seen.get(ym);
     if (existing !== undefined) {
-      // Accumulate item count for same month
       groups[existing].itemCount += itemCount;
       continue;
     }
@@ -105,43 +169,36 @@ export function buildMonthMarkers(
       fullLabel: monthLabelFull(date),
       year,
       firstDate: date,
-      position: 0, // computed below
+      position: 0,
       isFirstOfYear,
       itemCount,
     });
   }
 
-  // Compute density-proportional positions
+  computeDensityPositions(groups);
+  return groups;
+}
+
+/**
+ * Assign density-proportional positions to markers.
+ * Each month gets weight = sqrt(count), so months with more photos
+ * occupy proportionally more track space. Minimum weight prevents
+ * sparse months from collapsing to zero height.
+ */
+function computeDensityPositions(groups: MonthMarker[]): void {
   if (groups.length <= 1) {
     if (groups.length === 1) groups[0].position = 0;
-    return groups;
+    return;
   }
 
-  // Build a count map from distribution data if available, else use section item counts
-  const distMap = new Map<string, number>();
-  if (distribution?.months) {
-    for (const m of distribution.months) {
-      distMap.set(m.month, m.count);
-    }
-  }
-
-  // Each month gets weight = sqrt(count) to compress extreme outliers while
-  // still giving denser months noticeably more space. Minimum weight ensures
-  // empty months still show and can be clicked.
   const MIN_WEIGHT = 0.3;
-  const weights: number[] = groups.map((g) => {
-    const count = distMap.get(g.key) ?? g.itemCount;
-    return Math.max(MIN_WEIGHT, Math.sqrt(count));
-  });
-
+  const weights = groups.map((g) => Math.max(MIN_WEIGHT, Math.sqrt(g.itemCount)));
   const totalWeight = weights.reduce((a, b) => a + b, 0);
   let cumulative = 0;
   for (let i = 0; i < groups.length; i++) {
     groups[i].position = cumulative / totalWeight;
     cumulative += weights[i];
   }
-
-  return groups;
 }
 
 /** Clamp a value between 0 and 1 */
@@ -166,22 +223,49 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
   // Derived: scroller visible when hovering, dragging, or recently scrolled
   const isVisible = isDragging || isHovering || isScrolling;
 
-  // ── Month markers ───────────────────────────────────────────────────────
+  // ── Month markers (full timeline) ───────────────────────────────────────
 
   const months = useMemo<MonthMarker[]>(
     () => buildMonthMarkers(sections, dateDistribution),
     [sections, dateDistribution],
   );
 
-  // ── Date at a given ratio ───────────────────────────────────────────────
+  // ── Find the closest section date for a given "YYYY-MM-DD" or "YYYY-MM-01" ──
+  // Needed because not all months in the distribution may be loaded yet.
+
+  const closestSectionDate = useCallback(
+    (targetDate: string): string | null => {
+      if (sections.length === 0) return null;
+      // Try exact match first
+      const exact = sections.find(([d]) => d === targetDate);
+      if (exact) return exact[0];
+      // Find closest loaded section by date string comparison
+      let best = sections[0][0];
+      let bestDiff = Math.abs(targetDate.localeCompare(best));
+      for (const [d] of sections) {
+        const diff = Math.abs(targetDate.localeCompare(d));
+        if (diff < bestDiff) { best = d; bestDiff = diff; }
+      }
+      return best;
+    },
+    [sections],
+  );
+
+  // ── Date at a given track ratio (using full months array) ───────────────
 
   const dateAtRatio = useCallback(
     (ratio: number): string | null => {
-      if (sections.length === 0) return null;
-      const idx = Math.round(clamp01(ratio) * (sections.length - 1));
-      return sections[Math.min(idx, sections.length - 1)]?.[0] ?? null;
+      if (months.length === 0) return null;
+      // Find the month whose position is closest to this ratio
+      const clamped = clamp01(ratio);
+      let best = months[0];
+      for (const m of months) {
+        if (m.position <= clamped) best = m;
+        else break;
+      }
+      return best.firstDate;
     },
-    [sections],
+    [months],
   );
 
   // ── Auto-hide timer logic ───────────────────────────────────────────────
@@ -202,10 +286,10 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
     };
   }, []);
 
-  // ── Scroll position → handle ratio (with rAF for smooth tracking) ──────
+  // ── Scroll position → handle ratio (via section visibility → month position) ──
 
   useEffect(() => {
-    if (sections.length === 0) return;
+    if (sections.length === 0 || months.length === 0) return;
 
     const onScroll = () => {
       if (isDragging) return;
@@ -217,29 +301,32 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
         if (!refs || refs.size === 0) return;
 
         // Find the last section whose top is above 30% of viewport
-        let bestIdx = 0;
+        let bestDate = sections[0][0];
         const viewMid = window.innerHeight * 0.3;
 
         for (let i = 0; i < sections.length; i++) {
           const el = refs.get(sections[i][0]);
           if (!el) continue;
           const rect = el.getBoundingClientRect();
-          if (rect.top <= viewMid) bestIdx = i;
+          if (rect.top <= viewMid) bestDate = sections[i][0];
           else break;
         }
 
-        const ratio = sections.length === 1 ? 0 : bestIdx / (sections.length - 1);
+        // Map the visible section date to a position on the full months track
+        const ym = bestDate.slice(0, 7);
+        const monthMarker = months.find((m) => m.key === ym);
+        const ratio = monthMarker?.position ?? 0;
         setHandleRatio(ratio);
-        setTooltipDate(sections[bestIdx]?.[0] ?? null);
+        setTooltipDate(bestDate);
       });
     };
 
     window.addEventListener('scroll', onScroll, { passive: true });
     onScroll();
     return () => window.removeEventListener('scroll', onScroll);
-  }, [isDragging, sections, sectionRefs, resetHideTimer]);
+  }, [isDragging, sections, months, sectionRefs, resetHideTimer]);
 
-  // ── Hover zone detection (Immich-style: activate when mouse is near right edge) ──
+  // ── Hover zone detection (activate when mouse is near right edge) ──────
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
@@ -272,11 +359,12 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
     (ratio: number) => {
       const date = dateAtRatio(ratio);
       if (!date) return;
+      // Find the closest loaded section for actual scrolling
+      const scrollTarget = closestSectionDate(date) ?? date;
       if (onScrollToDate) {
-        // Prefer the virtualizer-aware callback so off-screen sections are reachable
-        onScrollToDate(date);
+        onScrollToDate(scrollTarget);
       } else {
-        const el = sectionRefs.current?.get(date);
+        const el = sectionRefs.current?.get(scrollTarget);
         if (el) {
           el.scrollIntoView({ behavior: 'auto', block: 'start' });
           window.scrollBy(0, -60);
@@ -285,7 +373,7 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
       setHandleRatio(ratio);
       setTooltipDate(date);
     },
-    [dateAtRatio, sectionRefs, onScrollToDate],
+    [dateAtRatio, closestSectionDate, sectionRefs, onScrollToDate],
   );
 
   const handlePointerDown = useCallback(
@@ -327,11 +415,11 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
     [resetHideTimer],
   );
 
-  // ── Keyboard navigation (Ente-style) ───────────────────────────────────
+  // ── Keyboard navigation ────────────────────────────────────────────────
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      const step = 0.05; // 5% per key press
+      const step = 0.05;
       if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
         e.preventDefault();
         const newRatio = clamp01(handleRatio - step);
@@ -358,6 +446,11 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
   const showTooltip = isDragging || isHovering;
   const maxItemCount = Math.max(1, ...months.map((m) => m.itemCount));
 
+  // ── Tooltip text: "Mon YYYY" from the handle date ──────────────────────
+  const handleTooltipText = tooltipDate
+    ? `${monthLabel(tooltipDate.length === 7 ? tooltipDate + '-01' : tooltipDate)} ${(tooltipDate.length === 7 ? tooltipDate : tooltipDate).slice(0, 4)}`
+    : null;
+
   return (
     <div
       ref={containerRef}
@@ -371,58 +464,40 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
       <div
         ref={trackRef}
         className="relative pointer-events-auto flex flex-col items-center cursor-pointer select-none"
-        style={{ height: '80vh' }}
+        style={{ height: '85vh' }}
         role="slider"
         aria-label="Timeline scrubber"
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(handleRatio * 100)}
-        aria-valuetext={tooltipDate ? formatTooltip(tooltipDate) : undefined}
+        aria-valuetext={tooltipDate ? formatTooltip(tooltipDate.length === 7 ? tooltipDate + '-01' : tooltipDate) : undefined}
         tabIndex={0}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onKeyDown={handleKeyDown}
       >
-        {/* Track rail — Google Photos style thin vertical line */}
-        <div className={`absolute inset-y-0 right-5 w-[2px] rounded-full transition-colors duration-200 ${
-          isHovering || isDragging || isScrolling ? 'bg-slate-400/80' : 'bg-slate-300/40'
+        {/* Track rail — vertical line */}
+        <div className={`absolute inset-y-0 right-5 w-[1px] rounded-full transition-colors duration-200 ${
+          isHovering || isDragging || isScrolling ? 'bg-slate-500/50' : 'bg-slate-400/30'
         }`} />
 
-        {/* Density bars — Google Photos-style: horizontal bars proportional to month item count */}
-        {(isHovering || isDragging) && months.map((m) => {
-          const density = m.itemCount / maxItemCount;
-          const barWidth = Math.max(2, Math.round(density * 18));
-          return (
-            <div
-              key={`bar-${m.key}`}
-              className="absolute right-[21px] h-[2px] rounded-full bg-slate-300/60"
-              style={{
-                top: `${m.position * 100}%`,
-                width: `${barWidth}px`,
-                transform: 'translateY(-50%) translateX(-100%)',
-              }}
-            />
-          );
-        })}
-
-        {/* Year labels & month dots (Google Photos-style) */}
+        {/* Year labels & month dots — Google Photos style */}
         {months.map((m) => {
-          // Scale dot size based on density (more photos = bigger dot)
           const density = m.itemCount / maxItemCount;
           const dotSize = isHovering || isDragging || isScrolling
-            ? Math.max(3, Math.round(3 + density * 4))
+            ? Math.max(3, Math.round(3 + density * 3))
             : Math.max(2, Math.round(2 + density * 2));
 
           return (
             <div
               key={m.key}
-              className="absolute right-1 flex items-center gap-1"
+              className="absolute right-1 flex items-center"
               style={{ top: `${m.position * 100}%`, transform: 'translateY(-50%)' }}
             >
               {m.isFirstOfYear ? (
-                <span className={`text-[10px] font-bold whitespace-nowrap pr-1 select-none transition-colors duration-200 ${
-                  isHovering || isDragging || isScrolling ? 'text-slate-600' : 'text-slate-400'
+                <span className={`text-[10px] font-semibold whitespace-nowrap pr-1 select-none transition-colors duration-200 ${
+                  isHovering || isDragging || isScrolling ? 'text-slate-400' : 'text-slate-500/60'
                 }`}>
                   {m.year}
                 </span>
@@ -431,7 +506,7 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
                   className={`block rounded-full transition-all duration-200 ${
                     isHovering || isDragging || isScrolling
                       ? 'bg-slate-400'
-                      : 'bg-slate-300'
+                      : 'bg-slate-400/50'
                   }`}
                   style={{ width: `${dotSize}px`, height: `${dotSize}px` }}
                 />
@@ -440,38 +515,35 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
           );
         })}
 
-        {/* Handle / thumb — Google Photos-style with tooltip */}
+        {/* Handle — Google Photos-style inline label */}
         <div
-          className="absolute right-1 flex items-center"
+          className="absolute right-0 flex items-center"
           style={{
             top: `${handleRatio * 100}%`,
             transform: 'translateY(-50%)',
             transition: isDragging ? 'none' : 'top 100ms ease-out',
           }}
         >
-          {/* Tooltip bubble (Google Photos-style: rounded pill with month + year + arrow) */}
-          {showTooltip && tooltipDate && (
-            <div className="mr-2 flex items-center whitespace-nowrap rounded-lg bg-slate-800 px-3 py-1.5 text-white shadow-xl select-none animate-in fade-in slide-in-from-right-2 duration-150"
+          {/* Inline "Mon YYYY" label — Google Photos shows it as text next to the line */}
+          {showTooltip && handleTooltipText && (
+            <div
+              className="mr-1 flex items-center whitespace-nowrap select-none"
               data-testid="scrubber-tooltip"
             >
-              <span className="text-xs font-semibold">{formatTooltip(tooltipDate)}</span>
-              {/* Triangle arrow pointing right */}
-              <svg className="absolute -right-1.5 h-3 w-3 text-slate-800" viewBox="0 0 12 12"
-                aria-hidden="true"
-              >
-                <path d="M0 0 L12 6 L0 12 Z" fill="currentColor" />
-              </svg>
+              <span className="rounded bg-slate-800/90 px-2 py-0.5 text-[11px] font-semibold text-white shadow-lg">
+                {handleTooltipText}
+              </span>
             </div>
           )}
 
-          {/* Handle capsule — wider when active */}
+          {/* Handle bar */}
           <div
-            className={`rounded-full shadow-md transition-all duration-150 ${
+            className={`rounded-full transition-all duration-150 ${
               isDragging
-                ? 'h-10 w-1.5 bg-blue-600'
+                ? 'h-8 w-1 bg-white shadow-md'
                 : isHovering || isScrolling
-                  ? 'h-8 w-1.5 bg-blue-500'
-                  : 'h-6 w-1 bg-slate-400'
+                  ? 'h-6 w-1 bg-white/80 shadow-sm'
+                  : 'h-5 w-[3px] bg-slate-400/60'
             }`}
             data-testid="scrubber-handle"
           />
