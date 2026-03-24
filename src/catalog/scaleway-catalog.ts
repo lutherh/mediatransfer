@@ -865,8 +865,14 @@ export class ScalewayCatalogService implements CatalogService {
         chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       }
       const heicBuffer = Buffer.concat(chunks);
-      const jpegBuffer = await heicConvert({ buffer: heicBuffer, format: 'JPEG', quality: 0.92 });
-      sharpInput = Buffer.from(jpegBuffer);
+      try {
+        const jpegBuffer = await heicConvert({ buffer: heicBuffer, format: 'JPEG', quality: 0.92 });
+        sharpInput = Buffer.from(jpegBuffer);
+      } catch {
+        // Buffer has .HEIC extension but isn't valid HEIC data — let sharp
+        // try to decode it directly (may be JPEG/PNG with wrong extension).
+        sharpInput = heicBuffer;
+      }
     } else {
       const chunks: Buffer[] = [];
       for await (const chunk of bodyStream) {
