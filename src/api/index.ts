@@ -56,6 +56,8 @@ import type { ApiServices } from './types.js';
 import { loadEnv, type Env } from '../config/env.js';
 import { apiError } from './errors.js';
 import { delay } from '../utils/delay.js';
+import { buildDestinationKey, createDatePath } from './transfer-keys.js';
+export { buildDestinationKey, createDatePath };
 
 export type CreateApiOptions = {
 	services?: ApiServices;
@@ -178,7 +180,7 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 
 	await registerHealthRoutes(app);
 	await registerCredentialsRoutes(app, runtime.services.credentials);
-	await registerTransferRoutes(app, runtime.services.jobs, runtime.services.queue);
+	await registerTransferRoutes(app, runtime.services.jobs, runtime.services.queue, runtime.services.providers);
 	await registerProviderRoutes(app, runtime.services.providers);
 	await registerCatalogRoutes(app, runtime.services.catalog, options?.corsAllowedOrigins);
 	await registerCatalogAlbumRoutes(app, runtime.services.catalog);
@@ -674,25 +676,6 @@ function getScalewayConfigFromEnv(env: Env) {
 		secretKey: env.SCW_SECRET_KEY,
 		prefix: env.SCW_PREFIX,
 	});
-}
-
-function buildDestinationKey(filename: string, itemId: string, createTime?: string): string {
-	const sanitized = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-	const date = createDatePath(createTime);
-	return `${date}/${itemId}-${sanitized}`;
-}
-
-function createDatePath(createTime?: string): string {
-	if (createTime) {
-		const date = new Date(createTime);
-		if (!Number.isNaN(date.getTime())) {
-			return `${date.getUTCFullYear()}/${String(date.getUTCMonth() + 1).padStart(2, '0')}/${String(date.getUTCDate()).padStart(2, '0')}`;
-		}
-	}
-
-	// Explicit fallback: use a clearly-marked "unknown date" path instead of
-	// silently filing under today's date, which would produce wrong catalog dates.
-	return 'unknown-date';
 }
 
 export type { TransferJobPayload };

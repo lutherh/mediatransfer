@@ -1,8 +1,9 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { TransferStatus } from '../../generated/prisma/index.js';
-import type { JobsService, QueueService } from '../types.js';
+import type { JobsService, ProvidersService, QueueService } from '../types.js';
 import { apiError } from '../errors.js';
+import { buildDestinationKey } from '../transfer-keys.js';
 
 const createTransferSchema = z.object({
   sourceProvider: z.string().min(1),
@@ -28,6 +29,14 @@ const idParamsSchema = z.object({
     z.string().uuid(),
     z.string().regex(/^job-[A-Za-z0-9_-]+$/),
   ]),
+});
+
+const checkDuplicatesSchema = z.object({
+  items: z.array(z.object({
+    id: z.string().min(1),
+    filename: z.string().optional(),
+    createTime: z.string().optional(),
+  })).min(1).max(500),
 });
 
 /**
@@ -63,7 +72,32 @@ export async function registerTransferRoutes(
   app: FastifyInstance,
   jobs: JobsService,
   queue: QueueService,
+  providers?: ProvidersService,
 ): Promise<void> {
+  // ── Duplicate check ─────────────────────────────────────────────────────
+  app.post('/transfers/check-duplicates', async (req, reply) => {
+    if (!providers) {
+      return reply.code(503).send(apiError('PROVIDER_UNAVAILABLE', 'Provider service not available'));
+    }
+    const { items } = checkDuplicatesSchema.parse(req.body);
+
+    const results: { id: string; exists: boolean; destinationKey: string }[] = [];
+
+    for (const item of items) {
+      const destinationKey = buildDestinationKey(
+        item.filename ?? `${item.id}.bin`,
+        item.id,
+        item.createTime,
+      );
+      const existing = await providers.listObjects('scaleway', {}, { prefix: destinationKey, maxResults: 1 });
+      const exists = existing.some((obj) => obj.key === destinationKey);
+      results.push({ id: item.id, exists, destinationKey });
+    }
+
+    const duplicateCount = results.filter((r) => r.exists).length;
+    return { items: results, duplicateCount, totalChecked: results.length };
+  });
+
   app.post('/transfers', async (req, reply) => {
     const input = createTransferSchema.parse(req.body);
 

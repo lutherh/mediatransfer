@@ -1133,4 +1133,81 @@ describe('api server', () => {
 
     await app.close();
   });
+
+  it('POST /transfers/check-duplicates returns exists for matching keys', async () => {
+    const services = createServices();
+    // Mock listObjects to return a matching key for a specific prefix
+    services.providers.listObjects = vi.fn(async (_name, _config, opts) => {
+      const prefix = opts?.prefix ?? '';
+      if (prefix.includes('item-existing')) {
+        return [{ key: prefix, size: 1024, lastModified: new Date(), contentType: 'image/jpeg' }];
+      }
+      return [];
+    });
+
+    const app = await createApiServer({ services });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/transfers/check-duplicates',
+      payload: {
+        items: [
+          { id: 'item-existing', filename: 'photo.jpg', createTime: '2026-03-21T10:00:00Z' },
+          { id: 'item-new', filename: 'other.jpg', createTime: '2026-03-21T10:00:00Z' },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.totalChecked).toBe(2);
+    expect(body.duplicateCount).toBe(1);
+    expect(body.items).toHaveLength(2);
+
+    const existing = body.items.find((i: any) => i.id === 'item-existing');
+    const newItem = body.items.find((i: any) => i.id === 'item-new');
+    expect(existing.exists).toBe(true);
+    expect(newItem.exists).toBe(false);
+
+    await app.close();
+  });
+
+  it('POST /transfers/check-duplicates returns 0 duplicates when nothing exists', async () => {
+    const services = createServices();
+    services.providers.listObjects = vi.fn(async () => []);
+
+    const app = await createApiServer({ services });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/transfers/check-duplicates',
+      payload: {
+        items: [
+          { id: 'new-1', filename: 'a.jpg' },
+          { id: 'new-2', filename: 'b.jpg' },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.duplicateCount).toBe(0);
+    expect(body.items.every((i: any) => !i.exists)).toBe(true);
+
+    await app.close();
+  });
+
+  it('POST /transfers/check-duplicates validates input', async () => {
+    const app = await createApiServer({ services: createServices() });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/transfers/check-duplicates',
+      payload: { items: [] },
+    });
+
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
 });
