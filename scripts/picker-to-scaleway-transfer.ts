@@ -23,6 +23,7 @@ import {
   ScalewayProvider,
   validateScalewayConfig,
 } from '../src/providers/index.js';
+import { buildDestinationKey } from '../src/api/transfer-keys.js';
 
 dotenv.config();
 
@@ -125,6 +126,14 @@ const server = http.createServer(async (req, res) => {
       // @ts-expect-error response.body is web stream in Node fetch
       const stream = Readable.fromWeb(response.body);
       const key = buildDestinationKey(filename, item.id, item.createTime);
+
+      // Skip if already uploaded
+      const existing = await destination.list({ prefix: key, maxResults: 1 });
+      if (existing.some((obj) => obj.key === key)) {
+        console.log(`⏭️ [${index + 1}/${picked.length}] Skipped existing ${filename}`);
+        continue;
+      }
+
       await destination.upload(key, stream, mimeType, {
         'captured-at': item.createTime ?? 'unknown',
       });
@@ -243,33 +252,6 @@ async function collectPickedItems(
 function buildPickerDownloadUrl(baseUrl: string, mimeType?: string): string {
   if (mimeType?.startsWith('video/')) return `${baseUrl}=dv`;
   return `${baseUrl}=d`;
-}
-
-function buildDestinationKey(
-  filename: string,
-  itemId: string,
-  createTime?: string,
-): string {
-  const sanitized = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const datePath = toDatePath(createTime);
-  return `${datePath}/${itemId}-${sanitized}`;
-}
-
-function toDatePath(createTime?: string): string {
-  if (!createTime) {
-    return 'unknown-date';
-  }
-
-  const date = new Date(createTime);
-  if (Number.isNaN(date.getTime())) {
-    return 'unknown-date';
-  }
-
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(date.getUTCDate()).padStart(2, '0');
-
-  return `${year}/${month}/${day}`;
 }
 
 function parseDurationMs(duration?: string): number | undefined {

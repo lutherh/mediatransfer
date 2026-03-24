@@ -81,17 +81,31 @@ export async function registerTransferRoutes(
     }
     const { items } = checkDuplicatesSchema.parse(req.body);
 
+    // Check items in parallel batches to avoid sequential latency
+    const CONCURRENCY = 10;
     const results: { id: string; exists: boolean; destinationKey: string }[] = [];
 
-    for (const item of items) {
-      const destinationKey = buildDestinationKey(
-        item.filename ?? `${item.id}.bin`,
-        item.id,
-        item.createTime,
+    for (let i = 0; i < items.length; i += CONCURRENCY) {
+      const batch = items.slice(i, i + CONCURRENCY);
+      const batchResults = await Promise.all(
+        batch.map(async (item) => {
+          const destinationKey = buildDestinationKey(
+            item.filename ?? `${item.id}.bin`,
+            item.id,
+            item.createTime,
+          );
+          try {
+            const existing = await providers.listObjects('scaleway', {}, { prefix: destinationKey, maxResults: 1 });
+            const exists = existing.some((obj) => obj.key === destinationKey);
+            return { id: item.id, exists, destinationKey };
+          } catch {
+            // If a single check fails, treat as unknown (not existing) so the
+            // transfer can still proceed — worst case it re-uploads one item.
+            return { id: item.id, exists: false, destinationKey };
+          }
+        }),
       );
-      const existing = await providers.listObjects('scaleway', {}, { prefix: destinationKey, maxResults: 1 });
-      const exists = existing.some((obj) => obj.key === destinationKey);
-      results.push({ id: item.id, exists, destinationKey });
+      results.push(...batchResults);
     }
 
     const duplicateCount = results.filter((r) => r.exists).length;
