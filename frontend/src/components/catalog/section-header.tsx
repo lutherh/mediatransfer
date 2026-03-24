@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { CatalogItem } from '@/lib/api';
 
 const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -44,7 +45,7 @@ export function formatSectionDate(dateStr: string): string {
  *
  * @pattern Google Photos date-grouped section with select-all toggle
  */
-export function SectionHeader({
+export const SectionHeader = memo(function SectionHeader({
   date,
   items,
   selected,
@@ -86,4 +87,4 @@ export function SectionHeader({
       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{items.length}</span>
     </div>
   );
-}
+});

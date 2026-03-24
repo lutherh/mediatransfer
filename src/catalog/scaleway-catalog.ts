@@ -171,6 +171,7 @@ const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'avi', 'm4v', '3gp', 'mkv', 'web
 
 const DEFAULT_S3_REQUEST_TIMEOUT_MS = 300_000;
 const STATS_CACHE_TTL_MS = 5 * 60_000;
+const ALBUMS_CACHE_TTL_MS = 2 * 60_000;
 /** After this fraction of the TTL, a background refresh is triggered. */
 const STALE_REFRESH_THRESHOLD = 0.75; // refresh at 3:45 of 5:00
 const DEFAULT_MAX_PAGE_RETRIES = 5;
@@ -413,6 +414,7 @@ export class ScalewayCatalogService implements CatalogService {
   private readonly diskCache: DiskThumbnailCache | null;
   private itemsIndexCache: { items: CatalogItem[]; expiresAt: number } | null = null;
   private itemsIndexInflight: Promise<CatalogItem[]> | null = null;
+  private albumsCache: { data: AlbumsManifest; expiresAt: number } | null = null;
 
   constructor(config: ScalewayCatalogConfig, client?: S3Client) {
     this.bucket = config.bucket;
@@ -1049,6 +1051,9 @@ export class ScalewayCatalogService implements CatalogService {
   }
 
   async getAlbums(): Promise<AlbumsManifest> {
+    if (this.albumsCache && Date.now() < this.albumsCache.expiresAt) {
+      return this.albumsCache.data;
+    }
     const key = this.withPrefix('_albums.json');
     try {
       const result = await this.client.send(
@@ -1057,7 +1062,9 @@ export class ScalewayCatalogService implements CatalogService {
       );
       if (!result.Body) return { albums: [] };
       const body = await streamToString(result.Body);
-      return JSON.parse(body) as AlbumsManifest;
+      const manifest = JSON.parse(body) as AlbumsManifest;
+      this.albumsCache = { data: manifest, expiresAt: Date.now() + ALBUMS_CACHE_TTL_MS };
+      return manifest;
     } catch (err: unknown) {
       if (err instanceof Error && (err.name === 'NoSuchKey' || (err as any).$metadata?.httpStatusCode === 404)) {
         return { albums: [] };
@@ -1077,6 +1084,7 @@ export class ScalewayCatalogService implements CatalogService {
       }),
       { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
     );
+    this.albumsCache = { data: manifest, expiresAt: Date.now() + ALBUMS_CACHE_TTL_MS };
   }
 
   async findDuplicates(onProgress?: (listed: number) => void): Promise<DuplicateGroup[]> {

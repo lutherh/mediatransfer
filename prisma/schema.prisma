@@ -74,6 +74,7 @@ model TransferLog {
   job TransferJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@index([jobId])
+  @@index([jobId, createdAt])
   @@map("transfer_logs")
 }
 
@@ -93,6 +94,8 @@ model MediaItem {
 
   @@index([sha256])
   @@index([capturedAt])
+  @@index([sha256, source])
+  @@index([source, capturedAt])
   @@map("media_items")
 }
 
