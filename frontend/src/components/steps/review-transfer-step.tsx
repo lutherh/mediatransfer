@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { createTransfer, type PickedMediaItem } from '@/lib/api';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { createTransfer, checkTransferDuplicates, type PickedMediaItem, type DuplicateCheckResult } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
@@ -19,6 +19,24 @@ export function ReviewTransferStep({ items, sessionId, onTransferCreated, onBack
   const videoCount = items.filter((item) => item.mimeType?.startsWith('video/')).length;
   const otherCount = items.length - imageCount - videoCount;
 
+  // Check for duplicates against S3
+  const duplicateCheck = useQuery({
+    queryKey: ['check-duplicates', items.map((i) => i.id).join(',')],
+    queryFn: () => checkTransferDuplicates(
+      items.map((item) => ({
+        id: item.id,
+        filename: item.filename,
+        createTime: item.createTime,
+      })),
+    ),
+    staleTime: 60_000,
+  });
+
+  const duplicateIds = new Set(
+    duplicateCheck.data?.items.filter((r) => r.exists).map((r) => r.id) ?? [],
+  );
+  const newItemCount = items.length - duplicateIds.size;
+
   const transferMutation = useMutation({
     mutationFn: createTransfer,
     onSuccess: (result) => {
@@ -27,7 +45,6 @@ export function ReviewTransferStep({ items, sessionId, onTransferCreated, onBack
   });
 
   const handleStartTransfer = () => {
-    // Use media item IDs as keys, with sessionId in sourceConfig
     const keys = items.map((item) => item.id);
 
     transferMutation.mutate({
@@ -47,6 +64,39 @@ export function ReviewTransferStep({ items, sessionId, onTransferCreated, onBack
         <p className="text-sm text-slate-600">
           Review the details below and start the transfer when ready.
         </p>
+
+        {/* Duplicate warning */}
+        {duplicateCheck.isSuccess && duplicateIds.size > 0 && (
+          <Alert variant="warning">
+            <strong>{duplicateIds.size} of {items.length} item{items.length !== 1 ? 's' : ''} already exist{duplicateIds.size === 1 ? 's' : ''} in cloud storage</strong>
+            {' '}and will be skipped during transfer.
+            {newItemCount > 0
+              ? ` ${newItemCount} new item${newItemCount !== 1 ? 's' : ''} will be uploaded.`
+              : ' All selected items are already uploaded — nothing new to transfer.'}
+          </Alert>
+        )}
+
+        {duplicateCheck.isSuccess && duplicateIds.size === 0 && (
+          <Alert variant="success">
+            All {items.length} item{items.length !== 1 ? 's are' : ' is'} new — no duplicates found.
+          </Alert>
+        )}
+
+        {duplicateCheck.isLoading && (
+          <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Checking for duplicates in cloud storage...
+          </div>
+        )}
+
+        {duplicateCheck.isError && (
+          <Alert variant="error">
+            Could not check for duplicates: {duplicateCheck.error?.message ?? 'Unknown error'}
+          </Alert>
+        )}
 
         {/* Summary */}
         <div className="rounded-lg border border-slate-200 p-4">
@@ -76,6 +126,18 @@ export function ReviewTransferStep({ items, sessionId, onTransferCreated, onBack
                   .join(', ')}
               </dd>
             </div>
+            {duplicateCheck.isSuccess && (
+              <>
+                <div>
+                  <dt className="text-slate-500">New items</dt>
+                  <dd className="font-medium text-green-600">{newItemCount}</dd>
+                </div>
+                <div>
+                  <dt className="text-slate-500">Already in cloud</dt>
+                  <dd className="font-medium text-amber-600">{duplicateIds.size}</dd>
+                </div>
+              </>
+            )}
             <div>
               <dt className="text-slate-500">Picker session</dt>
               <dd className="font-mono text-xs text-slate-600 truncate" title={sessionId}>
@@ -97,22 +159,35 @@ export function ReviewTransferStep({ items, sessionId, onTransferCreated, onBack
                   <th className="pb-1 pr-2">#</th>
                   <th className="pb-1 pr-2">Filename</th>
                   <th className="pb-1 pr-2">Type</th>
-                  <th className="pb-1">Date</th>
+                  <th className="pb-1 pr-2">Date</th>
+                  <th className="pb-1">Status</th>
                 </tr>
               </thead>
               <tbody>
-                {items.map((item, index) => (
-                  <tr key={item.id} className="border-t border-slate-100">
-                    <td className="py-1 pr-2 text-slate-400">{index + 1}</td>
-                    <td className="py-1 pr-2 font-medium truncate max-w-[200px]">
-                      {item.filename ?? 'Unknown'}
-                    </td>
-                    <td className="py-1 pr-2 text-slate-500">{item.mimeType ?? '—'}</td>
-                    <td className="py-1 text-slate-500">
-                      {item.createTime ? new Date(item.createTime).toLocaleDateString() : '—'}
-                    </td>
-                  </tr>
-                ))}
+                {items.map((item, index) => {
+                  const isDuplicate = duplicateIds.has(item.id);
+                  return (
+                    <tr key={item.id} className={`border-t border-slate-100 ${isDuplicate ? 'opacity-50' : ''}`}>
+                      <td className="py-1 pr-2 text-slate-400">{index + 1}</td>
+                      <td className="py-1 pr-2 font-medium truncate max-w-[200px]">
+                        {item.filename ?? 'Unknown'}
+                      </td>
+                      <td className="py-1 pr-2 text-slate-500">{item.mimeType ?? '—'}</td>
+                      <td className="py-1 pr-2 text-slate-500">
+                        {item.createTime ? new Date(item.createTime).toLocaleDateString() : '—'}
+                      </td>
+                      <td className="py-1">
+                        {duplicateCheck.isSuccess ? (
+                          isDuplicate
+                            ? <span className="text-amber-600 font-medium">Already uploaded</span>
+                            : <span className="text-green-600 font-medium">New</span>
+                        ) : duplicateCheck.isLoading ? (
+                          <span className="text-slate-400">Checking...</span>
+                        ) : null}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -128,9 +203,15 @@ export function ReviewTransferStep({ items, sessionId, onTransferCreated, onBack
       <div className="flex flex-wrap gap-2 sm:gap-3">
         <Button
           onClick={handleStartTransfer}
-          disabled={transferMutation.isPending}
+          disabled={transferMutation.isPending || duplicateCheck.isLoading}
         >
-          {transferMutation.isPending ? 'Starting Transfer...' : `Start Transfer (${items.length} items)`}
+          {transferMutation.isPending
+            ? 'Starting Transfer...'
+            : duplicateCheck.isSuccess && duplicateIds.size === items.length
+              ? 'All Items Already Uploaded'
+              : duplicateCheck.isSuccess && duplicateIds.size > 0
+                ? `Start Transfer (${newItemCount} new item${newItemCount !== 1 ? 's' : ''})`
+                : `Start Transfer (${items.length} items)`}
         </Button>
         <Button
           className="bg-white text-slate-700 border border-slate-300 hover:bg-slate-50"

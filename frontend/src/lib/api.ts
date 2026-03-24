@@ -361,6 +361,35 @@ export async function createTransfer(payload: {
   return response.json();
 }
 
+export type DuplicateCheckItem = {
+  id: string;
+  exists: boolean;
+  destinationKey: string;
+};
+
+export type DuplicateCheckResult = {
+  items: DuplicateCheckItem[];
+  duplicateCount: number;
+  totalChecked: number;
+};
+
+export async function checkTransferDuplicates(
+  items: { id: string; filename?: string; createTime?: string }[],
+): Promise<DuplicateCheckResult> {
+  const response = await fetch(`${API_BASE_URL}/transfers/check-duplicates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+  });
+
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to check duplicates');
+  }
+
+  return response.json();
+}
+
 export async function fetchTakeoutStatus(): Promise<TakeoutStatus> {
   const response = await fetchWithTimeout(
     `${API_BASE_URL}/takeout/status`,
