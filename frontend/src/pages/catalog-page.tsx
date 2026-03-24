@@ -1012,6 +1012,16 @@ export function CatalogPage() {
 
   const selectionMode = selected.size > 0;
 
+  // ── Hide native scrollbar (DateScroller replaces it) ──
+  useEffect(() => {
+    document.documentElement.classList.add('hide-native-scrollbar');
+    document.body.classList.add('hide-native-scrollbar');
+    return () => {
+      document.documentElement.classList.remove('hide-native-scrollbar');
+      document.body.classList.remove('hide-native-scrollbar');
+    };
+  }, []);
+
   // ── Scroll-to-top FAB visibility ──
   useEffect(() => {
     const handleScroll = () => setShowScrollTop(window.scrollY > 600);

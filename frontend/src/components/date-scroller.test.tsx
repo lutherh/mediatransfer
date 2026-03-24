@@ -214,6 +214,30 @@ describe('buildMonthMarkers', () => {
     expect(markers[4].firstDate).toBe('2024-02-01');
   });
 
+  it('distribution spanning multiple years marks first-of-year correctly', () => {
+    const sections = makeSections(['2025-01-10', '2023-06-15']);
+    const dist = {
+      months: [
+        { month: '2023-06', count: 10 },
+        { month: '2023-12', count: 5 },
+        { month: '2024-03', count: 20 },
+        { month: '2024-09', count: 15 },
+        { month: '2025-01', count: 30 },
+      ],
+      totalItems: 80,
+    };
+    const markers = buildMonthMarkers(sections, dist);
+    // Newest first: 2025-01, 2024-09, 2024-03, 2023-12, 2023-06
+    expect(markers.map((m) => m.key)).toEqual([
+      '2025-01', '2024-09', '2024-03', '2023-12', '2023-06',
+    ]);
+    expect(markers[0].isFirstOfYear).toBe(true);  // 2025 first seen
+    expect(markers[1].isFirstOfYear).toBe(true);  // 2024 first seen
+    expect(markers[2].isFirstOfYear).toBe(false); // still 2024
+    expect(markers[3].isFirstOfYear).toBe(true);  // 2023 first seen
+    expect(markers[4].isFirstOfYear).toBe(false); // still 2023
+  });
+
   it('returns position 0 for single section', () => {
     const sections = makeSections(['2024-06-15']);
     const markers = buildMonthMarkers(sections);
