@@ -68,6 +68,19 @@ export type CatalogStats = {
   undatedCount: number;
 };
 
+/** Per-month item counts for the date scroller timeline. */
+export type DateDistributionMonth = {
+  /** "YYYY-MM" */
+  month: string;
+  /** Number of media items in this month */
+  count: number;
+};
+
+export type DateDistribution = {
+  months: DateDistributionMonth[];
+  totalItems: number;
+};
+
 /**
  * Allowed thumbnail size presets.
  *   • `small`  – 256px longest edge, JPEG q80 (~15-30 KB) – grid tiles
@@ -144,6 +157,8 @@ export type CatalogService = {
   saveAlbums(manifest: AlbumsManifest): Promise<void>;
   /** Generate a resized thumbnail for the given media key. Returns JPEG buffer. */
   getThumbnail(encodedKey: string, size: ThumbnailSize): Promise<ThumbnailResult>;
+  /** Get item counts per month for the date scroller. */
+  getDateDistribution(): Promise<DateDistribution>;
   /** Scan all objects and return groups of duplicates (same size + ETag). */
   findDuplicates(onProgress?: (listed: number) => void): Promise<DuplicateGroup[]>;
   /** Find and remove duplicates. Pass dryRun=true to preview without deleting. */
@@ -531,8 +546,15 @@ export class ScalewayCatalogService implements CatalogService {
 
     let items = allItems;
     if (input?.prefix) {
-      const lowerPrefix = input.prefix.toLowerCase();
-      items = allItems.filter(item => item.key.toLowerCase().startsWith(lowerPrefix));
+      const lowerQuery = input.prefix.toLowerCase();
+      // If the query looks like a date path prefix (starts with a digit), use startsWith.
+      // Otherwise treat it as a filename substring search (case-insensitive).
+      const isPathPrefix = /^\d/.test(lowerQuery);
+      if (isPathPrefix) {
+        items = allItems.filter(item => item.key.toLowerCase().startsWith(lowerQuery));
+      } else {
+        items = allItems.filter(item => item.key.toLowerCase().includes(lowerQuery));
+      }
     }
 
     const offset = input?.token ? parseInt(input.token, 10) : 0;
@@ -912,6 +934,20 @@ export class ScalewayCatalogService implements CatalogService {
         });
     }
     return this.statsInflight;
+  }
+
+  async getDateDistribution(): Promise<DateDistribution> {
+    const items = await this.getItemsIndex();
+    const monthCounts = new Map<string, number>();
+    for (const item of items) {
+      // sectionDate is "YYYY-MM-DD", take first 7 chars for "YYYY-MM"
+      const ym = item.sectionDate.slice(0, 7);
+      monthCounts.set(ym, (monthCounts.get(ym) ?? 0) + 1);
+    }
+    const months: DateDistributionMonth[] = [...monthCounts.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, count]) => ({ month, count }));
+    return { months, totalItems: items.length };
   }
 
   async listAll(prefix?: string): Promise<CatalogItem[]> {

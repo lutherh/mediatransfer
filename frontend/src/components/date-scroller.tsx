@@ -33,6 +33,8 @@ export interface DateScrollerProps {
    * sections (not currently in the DOM) can still be scrolled to correctly.
    */
   onScrollToDate?: (date: string) => void;
+  /** Optional date distribution from the API for density-proportional spacing */
+  dateDistribution?: { months: { month: string; count: number }[]; totalItems: number } | null;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -67,8 +69,14 @@ export function formatTooltip(dateStr: string): string {
   return `${monthLabelFull(dateStr)} ${dateStr.slice(0, 4)}`;
 }
 
-/** Build month markers from sections array */
-export function buildMonthMarkers(sections: [string, unknown[]][]): MonthMarker[] {
+/** Build month markers from sections array with density-proportional spacing.
+ *  When distribution data is provided, months with more items get more track space
+ *  (Google Photos-style). Without distribution data, falls back to linear spacing.
+ */
+export function buildMonthMarkers(
+  sections: [string, unknown[]][],
+  distribution?: { months: { month: string; count: number }[]; totalItems: number } | null,
+): MonthMarker[] {
   if (sections.length === 0) return [];
   const groups: MonthMarker[] = [];
   const seen = new Map<string, number>(); // key → index in groups
@@ -97,11 +105,42 @@ export function buildMonthMarkers(sections: [string, unknown[]][]): MonthMarker[
       fullLabel: monthLabelFull(date),
       year,
       firstDate: date,
-      position: sections.length === 1 ? 0 : i / (sections.length - 1),
+      position: 0, // computed below
       isFirstOfYear,
       itemCount,
     });
   }
+
+  // Compute density-proportional positions
+  if (groups.length <= 1) {
+    if (groups.length === 1) groups[0].position = 0;
+    return groups;
+  }
+
+  // Build a count map from distribution data if available, else use section item counts
+  const distMap = new Map<string, number>();
+  if (distribution?.months) {
+    for (const m of distribution.months) {
+      distMap.set(m.month, m.count);
+    }
+  }
+
+  // Each month gets weight = sqrt(count) to compress extreme outliers while
+  // still giving denser months noticeably more space. Minimum weight ensures
+  // empty months still show and can be clicked.
+  const MIN_WEIGHT = 0.3;
+  const weights: number[] = groups.map((g) => {
+    const count = distMap.get(g.key) ?? g.itemCount;
+    return Math.max(MIN_WEIGHT, Math.sqrt(count));
+  });
+
+  const totalWeight = weights.reduce((a, b) => a + b, 0);
+  let cumulative = 0;
+  for (let i = 0; i < groups.length; i++) {
+    groups[i].position = cumulative / totalWeight;
+    cumulative += weights[i];
+  }
+
   return groups;
 }
 
@@ -112,7 +151,7 @@ export function clamp01(v: number): number {
 
 // ── Component ──────────────────────────────────────────────────────────────
 
-export function DateScroller({ sections, sectionRefs, onScrollToDate }: DateScrollerProps) {
+export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistribution }: DateScrollerProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
@@ -129,7 +168,10 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate }: DateScro
 
   // ── Month markers ───────────────────────────────────────────────────────
 
-  const months = useMemo<MonthMarker[]>(() => buildMonthMarkers(sections), [sections]);
+  const months = useMemo<MonthMarker[]>(
+    () => buildMonthMarkers(sections, dateDistribution),
+    [sections, dateDistribution],
+  );
 
   // ── Date at a given ratio ───────────────────────────────────────────────
 
@@ -314,6 +356,7 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate }: DateScro
   if (months.length < 2) return null;
 
   const showTooltip = isDragging || isHovering;
+  const maxItemCount = Math.max(1, ...months.map((m) => m.itemCount));
 
   return (
     <div
@@ -328,7 +371,7 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate }: DateScro
       <div
         ref={trackRef}
         className="relative pointer-events-auto flex flex-col items-center cursor-pointer select-none"
-        style={{ height: '75vh' }}
+        style={{ height: '80vh' }}
         role="slider"
         aria-label="Timeline scrubber"
         aria-valuemin={0}
@@ -341,35 +384,63 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate }: DateScro
         onPointerUp={handlePointerUp}
         onKeyDown={handleKeyDown}
       >
-        {/* Track rail — thin line with subtle glow when active */}
+        {/* Track rail — Google Photos style thin vertical line */}
         <div className={`absolute inset-y-0 right-5 w-[2px] rounded-full transition-colors duration-200 ${
-          isHovering || isDragging || isScrolling ? 'bg-slate-400/80' : 'bg-slate-300/50'
+          isHovering || isDragging || isScrolling ? 'bg-slate-400/80' : 'bg-slate-300/40'
         }`} />
 
-        {/* Year labels & month dots (Immich-style) */}
-        {months.map((m) => (
-          <div
-            key={m.key}
-            className="absolute right-1 flex items-center gap-1"
-            style={{ top: `${m.position * 100}%`, transform: 'translateY(-50%)' }}
-          >
-            {m.isFirstOfYear ? (
-              <span className={`text-[10px] font-bold whitespace-nowrap pr-1 select-none transition-colors duration-200 ${
-                isHovering || isDragging || isScrolling ? 'text-slate-600' : 'text-slate-400'
-              }`}>
-                {m.year}
-              </span>
-            ) : (
-              <span className={`block rounded-full transition-all duration-200 ${
-                isHovering || isDragging || isScrolling
-                  ? 'h-[5px] w-[5px] bg-slate-400'
-                  : 'h-1 w-1 bg-slate-300'
-              }`} />
-            )}
-          </div>
-        ))}
+        {/* Density bars — Google Photos-style: horizontal bars proportional to month item count */}
+        {(isHovering || isDragging) && months.map((m) => {
+          const density = m.itemCount / maxItemCount;
+          const barWidth = Math.max(2, Math.round(density * 18));
+          return (
+            <div
+              key={`bar-${m.key}`}
+              className="absolute right-[21px] h-[2px] rounded-full bg-slate-300/60"
+              style={{
+                top: `${m.position * 100}%`,
+                width: `${barWidth}px`,
+                transform: 'translateY(-50%) translateX(-100%)',
+              }}
+            />
+          );
+        })}
 
-        {/* Handle / thumb — Immich-style capsule with tooltip */}
+        {/* Year labels & month dots (Google Photos-style) */}
+        {months.map((m) => {
+          // Scale dot size based on density (more photos = bigger dot)
+          const density = m.itemCount / maxItemCount;
+          const dotSize = isHovering || isDragging || isScrolling
+            ? Math.max(3, Math.round(3 + density * 4))
+            : Math.max(2, Math.round(2 + density * 2));
+
+          return (
+            <div
+              key={m.key}
+              className="absolute right-1 flex items-center gap-1"
+              style={{ top: `${m.position * 100}%`, transform: 'translateY(-50%)' }}
+            >
+              {m.isFirstOfYear ? (
+                <span className={`text-[10px] font-bold whitespace-nowrap pr-1 select-none transition-colors duration-200 ${
+                  isHovering || isDragging || isScrolling ? 'text-slate-600' : 'text-slate-400'
+                }`}>
+                  {m.year}
+                </span>
+              ) : (
+                <span
+                  className={`block rounded-full transition-all duration-200 ${
+                    isHovering || isDragging || isScrolling
+                      ? 'bg-slate-400'
+                      : 'bg-slate-300'
+                  }`}
+                  style={{ width: `${dotSize}px`, height: `${dotSize}px` }}
+                />
+              )}
+            </div>
+          );
+        })}
+
+        {/* Handle / thumb — Google Photos-style with tooltip */}
         <div
           className="absolute right-1 flex items-center"
           style={{
@@ -378,9 +449,9 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate }: DateScro
             transition: isDragging ? 'none' : 'top 100ms ease-out',
           }}
         >
-          {/* Tooltip bubble (Ente-style: rounded pill with month + year) */}
+          {/* Tooltip bubble (Google Photos-style: rounded pill with month + year + arrow) */}
           {showTooltip && tooltipDate && (
-            <div className="mr-2 flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-slate-800 px-3 py-1.5 text-white shadow-xl select-none animate-in fade-in slide-in-from-right-2 duration-150"
+            <div className="mr-2 flex items-center whitespace-nowrap rounded-lg bg-slate-800 px-3 py-1.5 text-white shadow-xl select-none animate-in fade-in slide-in-from-right-2 duration-150"
               data-testid="scrubber-tooltip"
             >
               <span className="text-xs font-semibold">{formatTooltip(tooltipDate)}</span>
@@ -393,7 +464,7 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate }: DateScro
             </div>
           )}
 
-          {/* Handle capsule — wider when active (Immich-style) */}
+          {/* Handle capsule — wider when active */}
           <div
             className={`rounded-full shadow-md transition-all duration-150 ${
               isDragging

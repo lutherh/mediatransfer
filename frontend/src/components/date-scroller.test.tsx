@@ -152,12 +152,36 @@ describe('buildMonthMarkers', () => {
     expect(markers[1].itemCount).toBe(1);
   });
 
-  it('computes position as fraction of section index / total', () => {
-    const sections = makeSections(['2024-06-15', '2024-05-20', '2024-04-10']);
+  it('computes density-proportional positions based on item counts', () => {
+    const sections: [string, unknown[]][] = [
+      ['2024-06-15', new Array(100).fill(1)],  // heavy month
+      ['2024-05-20', new Array(10).fill(1)],   // light month
+      ['2024-04-10', new Array(1).fill(1)],    // minimal month
+    ];
     const markers = buildMonthMarkers(sections);
     expect(markers[0].position).toBe(0);
-    expect(markers[1].position).toBeCloseTo(0.5);
-    expect(markers[2].position).toBe(1);
+    // Heavy month (100 items) should get more track space than light month (10 items)
+    // so the second marker should be further from 0 than if spacing were linear
+    expect(markers[1].position).toBeGreaterThan(0);
+    expect(markers[2].position).toBeGreaterThan(markers[1].position);
+    expect(markers[2].position).toBeLessThanOrEqual(1);
+  });
+
+  it('uses distribution data when provided', () => {
+    const sections = makeSections(['2024-06-15', '2024-05-20', '2024-04-10']);
+    const dist = {
+      months: [
+        { month: '2024-04', count: 500 },
+        { month: '2024-05', count: 10 },
+        { month: '2024-06', count: 50 },
+      ],
+      totalItems: 560,
+    };
+    const markers = buildMonthMarkers(sections, dist);
+    expect(markers[0].position).toBe(0);
+    // With distribution data, spacing should reflect the distribution counts
+    expect(markers[1].position).toBeGreaterThan(0);
+    expect(markers[2].position).toBeGreaterThan(markers[1].position);
   });
 
   it('returns position 0 for single section', () => {

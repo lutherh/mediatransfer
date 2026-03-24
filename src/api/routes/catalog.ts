@@ -139,6 +139,25 @@ export async function registerCatalogRoutes(
     return { items };
   });
 
+  app.get('/catalog/api/date-distribution', async (_req, reply) => {
+    const catalogService = requireCatalog(catalog, reply);
+    if (!catalogService) {
+      return;
+    }
+
+    try {
+      const dist = await catalogService.getDateDistribution();
+      reply.header('Cache-Control', 'private, max-age=60, stale-while-revalidate=300');
+      return dist;
+    } catch (err) {
+      const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+      const status = isTimeout ? 503 : 500;
+      const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to fetch date distribution';
+      console.error('[catalog] /catalog/api/date-distribution error:', err);
+      return reply.status(status).send({ error: message });
+    }
+  });
+
   app.get('/catalog/api/undated', async (_req, reply) => {
     const catalogService = requireCatalog(catalog, reply);
     if (!catalogService) {

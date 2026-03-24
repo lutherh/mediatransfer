@@ -178,6 +178,20 @@ describe('scaleway catalog service', () => {
       expect(page.items[0]?.key).toBe('2020/01/01/a.jpg');
     });
 
+    it('searches by filename substring when query does not start with a digit', async () => {
+      const service = makeDescService();
+      const page = await service.listPage({ max: 10, prefix: 'c.mp4', sort: 'desc' });
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0]?.key).toBe('2024/03/10/c.mp4');
+    });
+
+    it('filename search is case-insensitive', async () => {
+      const service = makeDescService();
+      const page = await service.listPage({ max: 10, prefix: 'C.MP4', sort: 'desc' });
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0]?.key).toBe('2024/03/10/c.mp4');
+    });
+
     it('returns empty for invalid token', async () => {
       const service = makeDescService();
       const page = await service.listPage({ max: 10, token: 'not-a-number', sort: 'desc' });
@@ -201,6 +215,36 @@ describe('scaleway catalog service', () => {
       await service.listPage({ sort: 'desc' });
       // Second call should use cache — only 1 S3 list call
       expect(listCallCount).toBe(1);
+    });
+  });
+
+  describe('getDateDistribution', () => {
+    it('returns per-month item counts sorted ascending', async () => {
+      let callCount = 0;
+      const send = vi.fn(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            Contents: [
+              { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
+              { Key: '2020/01/15/a2.jpg', Size: 100, LastModified: new Date('2020-01-15') },
+              { Key: '2021/06/15/b.jpg', Size: 200, LastModified: new Date('2021-06-15') },
+              { Key: '2024/03/10/c.mp4', Size: 300, LastModified: new Date('2024-03-10') },
+            ],
+            IsTruncated: false,
+          };
+        }
+        return { Contents: [], IsTruncated: false };
+      });
+      const service = makeService(send);
+      const dist = await service.getDateDistribution();
+
+      expect(dist.totalItems).toBe(4);
+      expect(dist.months).toHaveLength(3);
+      // Two items in Jan 2020, one in Jun 2021, one in Mar 2024
+      expect(dist.months[0]).toEqual({ month: '2020-01', count: 2 });
+      expect(dist.months[1]).toEqual({ month: '2021-06', count: 1 });
+      expect(dist.months[2]).toEqual({ month: '2024-03', count: 1 });
     });
   });
 
