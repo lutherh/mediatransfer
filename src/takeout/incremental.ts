@@ -386,6 +386,19 @@ export async function runTakeoutIncremental(
     }
   }
 
+  // Reconcile stale manifest entries when all archives have been processed.
+  // The scan phase writes manifest entries with destinationKeys that may differ
+  // from the upload phase (due to date refinement).  After incremental upload
+  // completes, the manifest contains BOTH sets — the scan's stale keys (no
+  // state record) and the upload's valid keys.  Remove the stale ones so the
+  // status endpoint shows accurate counts instead of phantom "pending" items.
+  const reconcileResult = await reconcileManifest(globalManifestPath, config.statePath);
+  if (reconcileResult.removed > 0) {
+    console.log(
+      `[incremental] Manifest reconciled: removed ${reconcileResult.removed} stale entries, kept ${reconcileResult.kept}`,
+    );
+  }
+
   const entries = await loadManifestJsonl(globalManifestPath);
   const state = await loadUploadState(config.statePath);
   const finalSummary: UploadSummary = {
@@ -673,6 +686,76 @@ export function reconcileArchiveEntries(
   }
 
   return { archives: nextArchives, reconciled };
+}
+
+// ─── Manifest reconciliation ───────────────────────────────────────────────
+
+/**
+ * Remove stale manifest entries whose `destinationKey` has no corresponding
+ * record in the upload state (state.json).
+ *
+ * This happens when the scan phase writes manifest entries with one set of
+ * destinationKeys and the incremental upload later appends entries with
+ * different keys (due to improved date refinement with sidecar/metadata).
+ * The old scan entries become orphaned "pending" items that can never be
+ * uploaded because their archives are already marked completed.
+ *
+ * Also repairs old "source file missing" failures by converting them to
+ * 'skipped' status (matching current uploader behaviour).
+ *
+ * Returns the number of entries removed and kept.
+ */
+export async function reconcileManifest(
+  manifestPath: string,
+  statePath: string,
+): Promise<{ removed: number; kept: number; repairedFailures: number }> {
+  let entries: ManifestEntry[];
+  try {
+    entries = await loadManifestJsonl(manifestPath);
+  } catch {
+    return { removed: 0, kept: 0, repairedFailures: 0 };
+  }
+
+  if (entries.length === 0) {
+    return { removed: 0, kept: 0, repairedFailures: 0 };
+  }
+
+  const state = await loadUploadState(statePath);
+  const stateKeys = new Set(Object.keys(state.items));
+
+  // Keep entries that have a matching record in the upload state
+  const kept = entries.filter((e) => stateKeys.has(e.destinationKey));
+  const removed = entries.length - kept.length;
+
+  if (removed > 0) {
+    await persistManifestJsonl(kept, manifestPath);
+  }
+
+  // Repair old "source file missing" failures → convert to 'skipped'
+  let repairedFailures = 0;
+  let stateChanged = false;
+  for (const item of Object.values(state.items)) {
+    if (
+      item.status === 'failed' &&
+      item.error &&
+      /source file missing/i.test(item.error)
+    ) {
+      item.status = 'skipped';
+      item.skipReason = 'source_file_missing';
+      item.error = undefined;
+      repairedFailures += 1;
+      stateChanged = true;
+    }
+  }
+
+  if (stateChanged) {
+    state.updatedAt = new Date().toISOString();
+    const tmpPath = `${statePath}.tmp`;
+    await fs.writeFile(tmpPath, JSON.stringify(state, null, 2), 'utf8');
+    await fs.rename(tmpPath, statePath);
+  }
+
+  return { removed, kept: kept.length, repairedFailures };
 }
 
 // ─── Summary / progress helpers ────────────────────────────────────────────
