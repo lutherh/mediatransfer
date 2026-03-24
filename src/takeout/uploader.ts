@@ -502,7 +502,7 @@ export async function loadUploadState(statePath: string): Promise<UploadState> {
   try {
     const raw = (await fs.readFile(statePath, 'utf8')).replace(/^\uFEFF/, '');
     const parsed = JSON.parse(raw) as UploadState;
-    if (parsed.version !== 1 || typeof parsed.items !== 'object' || !parsed.items) {
+    if (!parsed || parsed.version !== 1 || typeof parsed.items !== 'object' || !parsed.items) {
       return createEmptyState();
     }
 
@@ -549,7 +549,7 @@ export async function persistUploadState(
   }
 }
 
-function createEmptyState(): UploadState {
+export function createEmptyState(): UploadState {
   return {
     version: 1,
     updatedAt: new Date(0).toISOString(),

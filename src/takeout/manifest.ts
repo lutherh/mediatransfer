@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { inferDateFromFilename, extractExifMetadata, extractVideoCreationDate } from '../utils/exif.js';
 import { isWrongDate, parseSidecarDate } from '../utils/date-repair.js';
-import { UNDATED_PREFIX } from '../utils/storage-paths.js';
+import { UNDATED_PREFIX, toDatePath } from '../utils/storage-paths.js';
 import { MEDIA_EXTENSIONS } from '../utils/media-extensions.js';
 import type { ArchiveMetadata, MediaItemMetadata } from './archive-metadata.js';
 
@@ -429,12 +429,7 @@ function getNestedString(obj: Record<string, unknown>, pathParts: string[]): str
   return typeof current === 'string' ? current : undefined;
 }
 
-function toDatePath(date: Date): string {
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(date.getUTCDate()).padStart(2, '0');
-  return `${year}/${month}/${day}`;
-}
+
 
 function sanitizeRelativePath(relativePath: string): string {
   return toPosix(relativePath)
