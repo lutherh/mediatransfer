@@ -82,6 +82,56 @@ export async function extractExifMetadata(source: Buffer | string): Promise<Exif
   }
 }
 
+/**
+ * Single-parse extraction that returns both structured metadata AND the full
+ * raw EXIF dump. Used by the EXIF detail endpoint to avoid parsing twice.
+ */
+export async function extractExifMetadataFull(source: Buffer | string): Promise<{
+  metadata: ExifMetadata;
+  raw: Record<string, unknown> | undefined;
+}> {
+  try {
+    const raw = await exifr.parse(source, {
+      translateValues: true,
+      mergeOutput: true,
+      exif: true,
+      iptc: true,
+      tiff: true,
+      xmp: true,
+      gps: true,
+    });
+
+    if (!raw || typeof raw !== 'object') {
+      return { metadata: {}, raw: undefined };
+    }
+
+    const capturedAt = pickCapturedAt(raw as Record<string, unknown>);
+    const width = raw.ExifImageWidth ?? raw.ImageWidth;
+    const height = raw.ExifImageHeight ?? raw.ImageHeight;
+
+    const metadata: ExifMetadata = {
+      capturedAt: capturedAt ?? undefined,
+      width: typeof width === 'number' ? width : undefined,
+      height: typeof height === 'number' ? height : undefined,
+      make: typeof raw.Make === 'string' ? raw.Make : undefined,
+      model: typeof raw.Model === 'string' ? raw.Model : undefined,
+      latitude: typeof raw.latitude === 'number' ? raw.latitude : undefined,
+      longitude: typeof raw.longitude === 'number' ? raw.longitude : undefined,
+    };
+
+    // Sanitize the raw dump: remove binary blobs, convert Dates to ISO strings
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (value instanceof Uint8Array || Buffer.isBuffer(value)) continue;
+      sanitized[key] = value instanceof Date ? value.toISOString() : value;
+    }
+
+    return { metadata, raw: sanitized };
+  } catch {
+    return { metadata: {}, raw: undefined };
+  }
+}
+
 function pickCapturedAt(exif: Record<string, unknown>): Date | undefined {
   for (const tag of CAPTURED_AT_TAGS) {
     const parsed = toDate(exif[tag]);

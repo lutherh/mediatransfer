@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { CatalogService, DuplicateGroup, ThumbnailSize } from '../../catalog/scaleway-catalog.js';
 import { decodeKey } from '../../catalog/scaleway-catalog.js';
-import { extractExifMetadata } from '../../utils/exif.js';
+import { extractExifMetadataFull } from '../../utils/exif.js';
 import { apiError } from '../errors.js';
 import { buildCatalogHtml } from './catalog-html.js';
 
@@ -465,22 +465,7 @@ export async function registerCatalogRoutes(
 
     try {
       const { buffer, contentType, contentLength } = await catalogService.getObjectBuffer(encodedKey, 65536);
-      const exif = await extractExifMetadata(buffer);
-
-      let rawExif: Record<string, unknown> | undefined;
-      try {
-        const exifr = await import('exifr');
-        const raw = await exifr.default.parse(buffer, { translateValues: true, mergeOutput: true });
-        if (raw && typeof raw === 'object') {
-          rawExif = {};
-          for (const [key, value] of Object.entries(raw)) {
-            if (value instanceof Uint8Array || Buffer.isBuffer(value)) continue;
-            rawExif[key] = value instanceof Date ? value.toISOString() : value;
-          }
-        }
-      } catch (err) {
-        app.log.debug({ err, encodedKey }, 'Raw EXIF extraction unavailable');
-      }
+      const { metadata: exif, raw: rawExif } = await extractExifMetadataFull(buffer);
 
       return {
         capturedAt: exif.capturedAt?.toISOString() ?? null,
