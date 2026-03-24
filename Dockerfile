@@ -1,4 +1,4 @@
-FROM node:22-alpine AS deps
+FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -12,10 +12,15 @@ COPY prisma ./prisma
 COPY src ./src
 RUN npm run build
 
-FROM node:22-alpine AS production
+FROM node:22-bookworm-slim AS production
 WORKDIR /app
 
 ENV NODE_ENV=production
+
+# libheif + libvips for HEIC/HEIF thumbnail generation, ffmpeg for video frames
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libvips-dev libheif-dev ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
 RUN npm ci

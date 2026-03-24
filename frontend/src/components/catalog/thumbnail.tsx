@@ -1,10 +1,7 @@
 import { useCallback, useState } from 'react';
-import { catalogMediaUrl, catalogThumbnailUrl } from '@/lib/api';
+import { catalogThumbnailUrl } from '@/lib/api';
 import { useThumbnailQueue, isThumbnailFailed, markThumbnailFailed } from '@/lib/thumbnail-queue';
 import type { CatalogItem } from '@/lib/api';
-
-/** Formats the browser can decode natively but Sharp cannot thumbnail (HEVC codec). */
-const BROWSER_NATIVE_FORMATS = new Set(['heic', 'heif']);
 
 /**
  * Single grid cell representing one media item. Since the parent virtualizer
@@ -45,16 +42,12 @@ export function Thumbnail({
     lastDot > 0 && lastDot < filename.length - 1
       ? filename.slice(lastDot + 1).toLowerCase()
       : '';
-  const isBrowserNative = BROWSER_NATIVE_FORMATS.has(extension);
   const shouldSkipThumbnail = isVideo;
 
   // The virtualizer ensures this cell is visible — load immediately.
-  // HEIC/HEIF: use raw media URL so the browser decodes natively (Sharp lacks HEVC).
   const wantUrl = shouldSkipThumbnail
     ? null
-    : isBrowserNative
-      ? catalogMediaUrl(item.encodedKey, apiToken)
-      : catalogThumbnailUrl(item.encodedKey, 'small', apiToken);
+    : catalogThumbnailUrl(item.encodedKey, 'small', apiToken);
   const alreadyFailed = wantUrl ? isThumbnailFailed(wantUrl) : false;
   const skipThumbnail = !wantUrl || alreadyFailed;
   const [thumbFailed, setThumbFailed] = useState(skipThumbnail);

@@ -516,11 +516,7 @@ function Lightbox({
   // Full-resolution URL for download only
   const fullMediaUrl = catalogMediaUrl(item.encodedKey, apiToken);
   // Lightbox preview: use large (1920px) thumbnail for images, full URL for videos.
-  // HEIC/HEIF go straight to full media URL — the browser decodes natively and
-  // Sharp cannot resize them (no HEVC support), so skip the doomed 415 round-trip.
-  const ext = item.key.split('.').pop()?.toLowerCase() ?? '';
-  const isBrowserNative = ext === 'heic' || ext === 'heif';
-  const thumbUrl = (item.mediaType === 'video' || isBrowserNative)
+  const thumbUrl = item.mediaType === 'video'
     ? fullMediaUrl
     : catalogThumbnailUrl(item.encodedKey, 'large', apiToken);
 
