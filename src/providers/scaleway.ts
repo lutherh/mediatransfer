@@ -281,11 +281,14 @@ export class ScalewayProvider implements CloudProvider {
         });
       } catch (err) {
         lastError = err;
+        const httpStatus = (err as Record<string, unknown>)?.['$metadata'] != null
+          ? ((err as Record<string, Record<string, unknown>>)['$metadata']?.['httpStatusCode'] as number | undefined)
+          : undefined;
         const isRetryable =
           err instanceof Error &&
           (err.name === 'AbortError' || err.name === 'TimeoutError' ||
            err.name === 'NetworkingError' || err.name === 'ECONNRESET' ||
-           ('$metadata' in err && typeof (err as Record<string, unknown>)['$metadata'] === 'object'));
+           (typeof httpStatus === 'number' && httpStatus >= 500));
         if (!isRetryable) throw err;
         if (attempt < ScalewayProvider.S3_MAX_RETRIES - 1) {
           const delay = Math.min(1000 * 2 ** attempt, 15_000);

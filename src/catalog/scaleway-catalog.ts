@@ -1093,8 +1093,11 @@ export class ScalewayCatalogService implements CatalogService {
   async moveObject(encodedKey: string, newDatePrefix: string): Promise<{ from: string; to: string }> {
     const oldKey = decodeKey(encodedKey);
     const filename = oldKey.split('/').pop() ?? oldKey;
-    // newDatePrefix should be like "2020/03/15"
-    const newKey = `${newDatePrefix}/${filename}`;
+    // Preserve the transfers/ prefix so the moved object stays visible to catalog queries.
+    // oldKey is like "transfers/YYYY/MM/DD/file.jpg"; newDatePrefix is like "2020/03/15".
+    const oldSegments = oldKey.split('/');
+    const topDir = oldSegments[0] === 'transfers' ? 'transfers/' : '';
+    const newKey = `${topDir}${newDatePrefix}/${filename}`;
     const fullOldKey = this.withPrefix(oldKey);
     const fullNewKey = this.withPrefix(newKey);
 

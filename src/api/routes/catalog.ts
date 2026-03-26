@@ -300,7 +300,8 @@ export async function registerCatalogRoutes(
     const corsHeaders: Record<string, string> = origin
       ? { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Credentials': 'true' }
       : {};
-    void reply.raw.writeHead(200, {
+    reply.hijack();
+    reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',

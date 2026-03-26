@@ -23,8 +23,13 @@ export async function main(): Promise<void> {
   });
 
   const shutdown = async (): Promise<void> => {
-    await app.close();
-    await disconnectPrisma();
+    try {
+      await app.close();
+      await disconnectPrisma();
+    } catch (err) {
+      console.error('Shutdown error', err);
+      process.exit(1);
+    }
     process.exit(0);
   };
 
