@@ -130,23 +130,23 @@ describe('buildRowModel', () => {
 });
 
 describe('estimateRowHeight', () => {
-  it('returns 200 for month-divider', () => {
+  it('returns 44 for month-divider', () => {
     const row: VirtualRow = {
       type: 'month-divider', monthKey: '2025-06',
       label: 'June', year: '2025', itemCount: 5, coverItem: undefined,
     };
-    expect(estimateRowHeight(row, 1024, 8)).toBe(200);
+    expect(estimateRowHeight(row, 1024, 8)).toBe(44);
   });
 
-  it('returns 52 for section-header', () => {
+  it('returns 36 for section-header', () => {
     const row: VirtualRow = { type: 'section-header', date: '2025-06-16', items: [], isFirst: false };
-    expect(estimateRowHeight(row, 1024, 8)).toBe(52);
+    expect(estimateRowHeight(row, 1024, 8)).toBe(36);
   });
 
   it('returns tile height + gap for items-row', () => {
     const row: VirtualRow = { type: 'items-row', items: [], startIndex: 0 };
-    // 1024 / 8 = 128 + 4 = 132
-    expect(estimateRowHeight(row, 1024, 8)).toBe(132);
+    // 1024 / 8 = 128 + 2 = 130
+    expect(estimateRowHeight(row, 1024, 8)).toBe(130);
   });
 
   it('returns fallback for zero-width container', () => {

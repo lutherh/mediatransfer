@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import type { CatalogItem } from '@/lib/api';
 
 const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -56,9 +56,12 @@ export const SectionHeader = memo(function SectionHeader({
   selected: Set<string>;
   onToggleAll: (keys: string[], select: boolean) => void;
 }) {
-  const keys = items.map((i) => i.encodedKey);
-  const allSelected = keys.length > 0 && keys.every((k) => selected.has(k));
-  const someSelected = !allSelected && keys.some((k) => selected.has(k));
+  // Memoize key extraction — items array identity changes each buildRowModel call
+  const keys = useMemo(() => items.map((i) => i.encodedKey), [items]);
+  const { allSelected, someSelected } = useMemo(() => {
+    const all = keys.length > 0 && keys.every((k) => selected.has(k));
+    return { allSelected: all, someSelected: !all && keys.some((k) => selected.has(k)) };
+  }, [keys, selected]);
 
   return (
     <div className="group/section flex items-center gap-2 py-1">

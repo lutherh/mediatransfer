@@ -1269,9 +1269,13 @@ export function CatalogPage() {
 
       {/* ── Header ──────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-lg font-semibold sm:text-xl">Catalog</h1>
-          <p className="text-xs text-slate-500">Your photos and videos, organized by date.</p>
+        <div className="flex items-center gap-3">
+          <h1 className="text-lg font-semibold">Catalog</h1>
+          {statsQuery.data && (
+            <span className="text-xs text-slate-500">
+              {statsQuery.data.totalFiles.toLocaleString()} files · {formatBytes(statsQuery.data.totalBytes)}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Link
