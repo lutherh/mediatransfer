@@ -102,10 +102,10 @@ export function estimateRowHeight(
   cols: number,
 ): number {
   switch (row.type) {
-    case 'month-divider': return 200;
-    case 'section-header': return 52;
+    case 'month-divider': return 44;
+    case 'section-header': return 36;
     case 'items-row': return containerWidth > 0
-      ? Math.floor(containerWidth / cols) + 4   // tile + 4px gap
+      ? Math.floor(containerWidth / cols) + 2   // tile + 2px gap
       : 120;
   }
 }

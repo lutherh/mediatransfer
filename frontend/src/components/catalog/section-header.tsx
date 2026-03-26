@@ -61,30 +61,29 @@ export const SectionHeader = memo(function SectionHeader({
   const someSelected = !allSelected && keys.some((k) => selected.has(k));
 
   return (
-    <div className="flex items-center gap-2.5 py-1.5">
+    <div className="group/section flex items-center gap-2 py-1">
       <button
         type="button"
         onClick={() => onToggleAll(keys, !allSelected)}
-        className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
+        className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border-2 transition-all ${
           allSelected
-            ? 'border-blue-500 bg-blue-500'
+            ? 'border-blue-500 bg-blue-500 opacity-100'
             : someSelected
-              ? 'border-blue-400 bg-blue-100'
-              : 'border-slate-300 bg-white hover:border-blue-400'
+              ? 'border-blue-400 bg-blue-100 opacity-100'
+              : 'border-slate-400 bg-transparent opacity-0 group-hover/section:opacity-100'
         }`}
         aria-label={allSelected ? 'Deselect section' : 'Select section'}
       >
         {allSelected && (
-          <svg viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth={2.5} className="h-3 w-3">
+          <svg viewBox="0 0 12 12" fill="none" stroke="white" strokeWidth={2.5} className="h-2.5 w-2.5">
             <path d="M2 6l3 3 5-5" />
           </svg>
         )}
         {someSelected && !allSelected && (
-          <div className="h-2 w-2 rounded-full bg-blue-500" />
+          <div className="h-1.5 w-1.5 rounded-full bg-blue-500" />
         )}
       </button>
-      <h2 className="text-base font-bold text-slate-800">{formatSectionDate(date)}</h2>
-      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{items.length}</span>
+      <h2 className="text-[13px] font-semibold text-slate-700">{formatSectionDate(date)}</h2>
     </div>
   );
 });

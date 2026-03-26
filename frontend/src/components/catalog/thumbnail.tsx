@@ -66,7 +66,7 @@ export const Thumbnail = memo(function Thumbnail({
 
   return (
     <div
-      className={`group relative aspect-square cursor-pointer overflow-hidden rounded-lg bg-slate-200 ${
+      className={`group relative aspect-square cursor-pointer overflow-hidden rounded bg-slate-200 ${
         selected ? 'ring-2 ring-blue-500 ring-offset-1' : ''
       }`}
       onClick={handleClick}
@@ -130,14 +130,12 @@ export const Thumbnail = memo(function Thumbnail({
         </div>
       )}
 
-      {/* Video play icon overlay */}
+      {/* Video badge — bottom-right corner (Google Photos style) */}
       {item.mediaType === 'video' && !selected && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div className="rounded-full bg-black/50 p-1.5">
-            <svg className="h-4 w-4 text-white" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          </div>
+        <div className="pointer-events-none absolute bottom-1 right-1 flex items-center gap-0.5 rounded-sm bg-black/60 px-1 py-0.5">
+          <svg className="h-2.5 w-2.5 text-white" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8 5v14l11-7z" />
+          </svg>
         </div>
       )}
 

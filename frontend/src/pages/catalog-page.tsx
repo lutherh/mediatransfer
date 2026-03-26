@@ -31,38 +31,13 @@ import {
   moveCatalogItem,
   type Album,
   type CatalogItem,
-  type CatalogStats,
   type ExifData,
 } from '@/lib/api';
-import { Card } from '@/components/ui/card';
 import { DateScroller } from '@/components/date-scroller';
 import { VirtualizedGrid } from '@/components/virtualized-grid';
 import { formatBytes } from '@/lib/format';
 import { DateTimeEditor } from '@/components/catalog/date-time-editor';
 import { useApiToken } from '@/lib/use-api-token';
-
-// ── Stats bar ──────────────────────────────────────────────────────────────
-
-/**
- * Compact summary row showing total files, size, photo/video counts, and
- * date range. Placed inside a Card at the top of the catalog page.
- */
-function StatsBar({ stats }: { stats: CatalogStats }) {
-  return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-slate-700 sm:grid-cols-3 lg:grid-cols-6">
-      <div><span className="font-medium">Files:</span> {stats.totalFiles.toLocaleString()}</div>
-      <div><span className="font-medium">Size:</span> {formatBytes(stats.totalBytes)}</div>
-      <div><span className="font-medium">Photos:</span> {stats.imageCount.toLocaleString()}</div>
-      <div><span className="font-medium">Videos:</span> {stats.videoCount.toLocaleString()}</div>
-      {stats.oldestDate && (
-        <div><span className="font-medium">Oldest:</span> {stats.oldestDate.slice(0, 10)}</div>
-      )}
-      {stats.newestDate && (
-        <div><span className="font-medium">Newest:</span> {stats.newestDate.slice(0, 10)}</div>
-      )}
-    </div>
-  );
-}
 
 // ── Add to Album modal ────────────────────────────────────────────────────
 
@@ -1278,7 +1253,7 @@ export function CatalogPage() {
 
   return (
     <div
-      className="relative space-y-2"
+      className="relative space-y-1.5"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -1362,24 +1337,6 @@ export function CatalogPage() {
           </div>
         </div>
       )}
-
-      {/* ── Stats card ──────────────────────────────────────────────── */}
-      <Card className="p-2.5">
-        {statsQuery.isLoading ? (
-          /* Stats skeleton: mimics the 6-column grid while data loads */
-          <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-3 lg:grid-cols-6">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="h-4 animate-pulse rounded bg-slate-200" />
-            ))}
-          </div>
-        ) : statsQuery.isError ? (
-          <p className="text-xs text-amber-700">
-            {statsQuery.error instanceof Error ? statsQuery.error.message : 'Catalog unavailable — check SCW_* env vars'}
-          </p>
-        ) : statsQuery.data ? (
-          <StatsBar stats={statsQuery.data} />
-        ) : null}
-      </Card>
 
       {/* ── Prefix filter + sort toggle ─────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-1.5">
