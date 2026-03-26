@@ -300,6 +300,13 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
     };
   }, []);
 
+  // Pre-compute month key → position map for O(1) lookups in scroll handler
+  const monthPositionMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const m of months) map.set(m.key, m.position);
+    return map;
+  }, [months]);
+
   // ── Scroll position → handle ratio (via section visibility → month position) ──
 
   useEffect(() => {
@@ -328,8 +335,7 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
 
         // Map the visible section date to a position on the full months track
         const ym = bestDate.slice(0, 7);
-        const monthMarker = months.find((m) => m.key === ym);
-        const ratio = monthMarker?.position ?? 0;
+        const ratio = monthPositionMap.get(ym) ?? 0;
         setHandleRatio(ratio);
         setTooltipDate(bestDate);
       });
@@ -338,7 +344,7 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
     window.addEventListener('scroll', onScroll, { passive: true });
     onScroll();
     return () => window.removeEventListener('scroll', onScroll);
-  }, [isDragging, sections, months, sectionRefs, resetHideTimer]);
+  }, [isDragging, sections, months, sectionRefs, resetHideTimer, monthPositionMap]);
 
   // ── Hover zone detection (activate when mouse is near right edge) ──────
 

@@ -111,6 +111,19 @@ export function estimateRowHeight(
 }
 
 /**
+ * Build a date → row-index lookup map from the row model.
+ * Call once when rowModel changes, then use for O(1) lookups.
+ */
+export function buildSectionDateIndex(rowModel: VirtualRow[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (let i = 0; i < rowModel.length; i++) {
+    const row = rowModel[i];
+    if (row.type === 'section-header') map.set(row.date, i);
+  }
+  return map;
+}
+
+/**
  * Find the row index of a section-header row for a given ISO date string.
  * Returns undefined if not found.
  */

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import type { CatalogItem } from '@/lib/api';
-import { buildRowModel, estimateRowHeight, sectionDateToRowIndex } from '@/lib/virtual-row-model';
+import { buildRowModel, buildSectionDateIndex, estimateRowHeight } from '@/lib/virtual-row-model';
 import { getColumnCount } from '@/lib/grid-columns';
 import { Thumbnail } from '@/components/catalog/thumbnail';
 import { SectionHeader } from '@/components/catalog/section-header';
@@ -75,6 +75,12 @@ export function VirtualizedGrid({
     [sections, cols],
   );
 
+  // Pre-compute date → row-index map for O(1) scrollToDate lookups
+  const sectionDateIndex = useMemo(
+    () => buildSectionDateIndex(rowModel),
+    [rowModel],
+  );
+
   // scrollMargin = distance from top of window to top of grid container
   const [scrollMargin, setScrollMargin] = useState(0);
   useEffect(() => {
@@ -104,13 +110,13 @@ export function VirtualizedGrid({
   useEffect(() => {
     if (!onRegisterScrollToDate) return;
     onRegisterScrollToDate((date: string) => {
-      const idx = sectionDateToRowIndex(rowModel, date);
+      const idx = sectionDateIndex.get(date);
       if (idx !== undefined) {
         virtualizer.scrollToIndex(idx, { align: 'start', behavior: 'auto' });
         requestAnimationFrame(() => window.scrollBy(0, -60));
       }
     });
-  }, [onRegisterScrollToDate, rowModel, virtualizer]);
+  }, [onRegisterScrollToDate, sectionDateIndex, virtualizer]);
 
   // Infinite scroll: fetch next page when near the end of the row model
   const lastItem = virtualItems[virtualItems.length - 1];
@@ -121,16 +127,22 @@ export function VirtualizedGrid({
     }
   }, [lastItem?.index, rowModel.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
-  // Update sectionRefs for DateScroller: register visible section-header rows
+  // Update sectionRefs for DateScroller: register visible section-header rows.
+  // Debounced to avoid expensive DOM queries on every scroll frame.
+  const sectionRefsTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => {
-    sectionRefs.current.clear();
-    for (const vItem of virtualItems) {
-      const row = rowModel[vItem.index];
-      if (row.type === 'section-header') {
-        const el = document.querySelector<HTMLElement>(`[data-virtual-index="${vItem.index}"]`);
-        if (el) sectionRefs.current.set(row.date, el);
+    if (sectionRefsTimerRef.current) clearTimeout(sectionRefsTimerRef.current);
+    sectionRefsTimerRef.current = setTimeout(() => {
+      sectionRefs.current.clear();
+      for (const vItem of virtualItems) {
+        const row = rowModel[vItem.index];
+        if (row.type === 'section-header') {
+          const el = document.querySelector<HTMLElement>(`[data-virtual-index="${vItem.index}"]`);
+          if (el) sectionRefs.current.set(row.date, el);
+        }
       }
-    }
+    }, 150);
+    return () => { if (sectionRefsTimerRef.current) clearTimeout(sectionRefsTimerRef.current); };
   }, [virtualItems, rowModel, sectionRefs]);
 
   return (
@@ -195,7 +207,7 @@ export function VirtualizedGrid({
                       selected={selected.has(item.encodedKey)}
                       selectionMode={selectionMode}
                       lightboxIndex={row.startIndex + i}
-                      onToggleSelect={() => onToggleSelect(item.encodedKey, row.startIndex + i)}
+                      onToggleSelect={onToggleSelect}
                       onOpenLightbox={onOpenLightbox}
                       onShiftClick={onShiftClick}
                     />

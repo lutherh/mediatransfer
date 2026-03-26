@@ -29,7 +29,7 @@ export const Thumbnail = memo(function Thumbnail({
   selected: boolean;
   selectionMode: boolean;
   lightboxIndex: number;
-  onToggleSelect: () => void;
+  onToggleSelect: (encodedKey: string, flatIndex: number) => void;
   onOpenLightbox: (index: number) => void;
   /** Called when the user shift-clicks a thumbnail for range selection. */
   onShiftClick: (index: number) => void;
@@ -55,14 +55,14 @@ export const Thumbnail = memo(function Thumbnail({
       onShiftClick(lightboxIndex);
       return;
     }
-    if (selectionMode) onToggleSelect();
+    if (selectionMode) onToggleSelect(item.encodedKey, lightboxIndex);
     else onOpenLightbox(lightboxIndex);
-  }, [selectionMode, onToggleSelect, onOpenLightbox, lightboxIndex, onShiftClick]);
+  }, [selectionMode, onToggleSelect, onOpenLightbox, lightboxIndex, onShiftClick, item.encodedKey]);
 
   const handleCheckClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    onToggleSelect();
-  }, [onToggleSelect]);
+    onToggleSelect(item.encodedKey, lightboxIndex);
+  }, [onToggleSelect, item.encodedKey, lightboxIndex]);
 
   return (
     <div
@@ -76,7 +76,7 @@ export const Thumbnail = memo(function Thumbnail({
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           if (e.shiftKey) onShiftClick(lightboxIndex);
-          else if (selectionMode) onToggleSelect();
+          else if (selectionMode) onToggleSelect(item.encodedKey, lightboxIndex);
           else onOpenLightbox(lightboxIndex);
         }
       }}
@@ -93,7 +93,7 @@ export const Thumbnail = memo(function Thumbnail({
           src={thumbSrc}
           loading="lazy"
           decoding="async"
-          className={`h-full w-full select-none object-cover transition-all duration-300 ${
+          className={`h-full w-full select-none object-cover transition-[opacity,transform] duration-300 ${
             loaded ? 'opacity-100' : 'opacity-0'
           } ${!selectionMode ? 'group-hover:scale-105' : ''} ${selected ? 'brightness-75' : ''}`}
           onLoad={() => { markComplete(); setLoaded(true); }}

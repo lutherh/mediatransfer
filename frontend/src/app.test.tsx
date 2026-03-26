@@ -113,7 +113,16 @@ vi.mock('@/lib/api', () => ({
     newestDate: '2026-02-31',
   })),
   fetchCatalogItems: vi.fn(async () => ({ items: [], nextToken: undefined })),
+  fetchDateDistribution: vi.fn(async () => null),
+  fetchCatalogExif: vi.fn(async () => ({})),
+  fetchAlbums: vi.fn(async () => ({ albums: [] })),
+  createAlbum: vi.fn(async () => ({ id: 'test-album' })),
+  updateAlbum: vi.fn(async () => ({})),
+  moveCatalogItem: vi.fn(async () => ({})),
+  bulkMoveCatalogItems: vi.fn(async () => ({})),
   catalogMediaUrl: vi.fn((encodedKey: string) => `/catalog/media/${encodedKey}`),
+  catalogThumbnailUrl: vi.fn((encodedKey: string, size: string) => `/catalog/thumb/${size}/${encodedKey}`),
+  deleteCatalogItems: vi.fn(async () => {}),
 }));
 
 function renderRoute(path: string) {
@@ -187,7 +196,8 @@ describe('frontend pages', () => {
   it('renders catalog page', async () => {
     renderRoute('/catalog');
     expect(await screen.findByRole('heading', { name: 'Catalog' })).toBeInTheDocument();
-    expect(await screen.findByText(/your photos and videos/i)).toBeInTheDocument();
+    // Inline stats: "42 files · 1 GB"
+    expect(await screen.findByText(/42 files/)).toBeInTheDocument();
   });
 
   it('shows navigation links', async () => {

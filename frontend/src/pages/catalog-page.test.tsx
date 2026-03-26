@@ -58,6 +58,13 @@ vi.mock('@/lib/api', () => ({
     ],
     nextToken: undefined,
   })),
+  fetchDateDistribution: vi.fn(async () => null),
+  fetchCatalogExif: vi.fn(async () => ({})),
+  fetchAlbums: vi.fn(async () => ({ albums: [] })),
+  createAlbum: vi.fn(async () => ({ id: 'test-album' })),
+  updateAlbum: vi.fn(async () => ({})),
+  moveCatalogItem: vi.fn(async () => ({})),
+  bulkMoveCatalogItems: vi.fn(async () => ({})),
   catalogMediaUrl: vi.fn((encodedKey: string) => `/catalog/media/${encodedKey}`),
   catalogThumbnailUrl: vi.fn((encodedKey: string, size: string) => `/catalog/thumb/${size}/${encodedKey}`),
   deleteCatalogItems: vi.fn(async () => {}),
@@ -125,16 +132,16 @@ describe('CatalogPage', () => {
     localStorage.clear();
   });
 
-  it('renders the page heading and subtext', async () => {
+  it('renders the page heading and stats inline', async () => {
     renderCatalogPage();
     expect(await screen.findByRole('heading', { name: 'Catalog' })).toBeInTheDocument();
-    expect(await screen.findByText(/your photos and videos/i)).toBeInTheDocument();
+    // Stats are now inline in header — "10 files · ..."
+    expect(await screen.findByText(/10 files/)).toBeInTheDocument();
   });
 
-  it('renders stats bar with file count and size', async () => {
+  it('renders stats with file count and size inline', async () => {
     renderCatalogPage();
-    expect(await screen.findByText(/Files:/)).toBeInTheDocument();
-    expect(await screen.findByText(/Size:/)).toBeInTheDocument();
+    expect(await screen.findByText(/10 files/)).toBeInTheDocument();
   });
 
   it('renders the deduplication link', async () => {
@@ -227,7 +234,7 @@ describe('CatalogPage', () => {
 
   it('renders prefix filter input', async () => {
     renderCatalogPage();
-    const input = await screen.findByPlaceholderText(/Search by date or folder/);
+    const input = await screen.findByPlaceholderText(/Search by date/);
     expect(input).toBeInTheDocument();
   });
 
@@ -238,24 +245,24 @@ describe('CatalogPage', () => {
     expect(dividers.length).toBe(2);
   });
 
-  it('shows "Best of [Month]" label inside month divider', async () => {
+  it('shows month and year label inside month divider', async () => {
     renderCatalogPage();
-    // 2025-06 items → "Best of June", 2024-03 items → "Best of March"
-    expect(await screen.findByText('Best of June')).toBeInTheDocument();
-    expect(await screen.findByText('Best of March')).toBeInTheDocument();
+    // Slim dividers show "June 2025" and "March 2024"
+    expect(await screen.findByText('June 2025')).toBeInTheDocument();
+    expect(await screen.findByText('March 2024')).toBeInTheDocument();
   });
 
-  it('shows highlights count in month divider', async () => {
+  it('shows item count in month divider', async () => {
     renderCatalogPage();
     // June has 2 items, March has 1 item
-    expect(await screen.findByText('2 highlights')).toBeInTheDocument();
-    expect(await screen.findByText('1 highlight')).toBeInTheDocument();
+    expect(await screen.findByText('2 items')).toBeInTheDocument();
+    expect(await screen.findByText('1 item')).toBeInTheDocument();
   });
 
   it('renders month heading in month divider', async () => {
     renderCatalogPage();
-    expect(await screen.findByText('June')).toBeInTheDocument();
-    expect(await screen.findByText('March')).toBeInTheDocument();
+    expect(await screen.findByText('June 2025')).toBeInTheDocument();
+    expect(await screen.findByText('March 2024')).toBeInTheDocument();
   });
 
   it('shows actionable links when the catalog is empty', async () => {
@@ -280,7 +287,7 @@ describe('CatalogPage', () => {
 
     renderCatalogPage();
 
-    const input = await screen.findByPlaceholderText(/Search by date or folder/);
+    const input = await screen.findByPlaceholderText(/Search by date/);
     fireEvent.change(input, { target: { value: 'missing-folder' } });
 
     expect(await screen.findByText('No media found matching "missing-folder"')).toBeInTheDocument();
@@ -288,7 +295,9 @@ describe('CatalogPage', () => {
       expect.objectContaining({ prefix: 'missing-folder' }),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    // Both the EmptyState and the input X icon have "Clear search"; click the EmptyState one
+    const clearButtons = screen.getAllByRole('button', { name: 'Clear search' });
+    fireEvent.click(clearButtons[clearButtons.length - 1]);
 
     expect(await screen.findByDisplayValue('')).toBeInTheDocument();
     expect(screen.queryByText('No media found matching "missing-folder"')).not.toBeInTheDocument();
