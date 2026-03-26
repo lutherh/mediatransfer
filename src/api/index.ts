@@ -879,13 +879,30 @@ function buildCorsOriginHandler(allowedOrigins: string[]) {
 		return false;
 	}
 
-	const allowed = new Set(normalized);
+	const exact = new Set<string>();
+	const patterns: RegExp[] = [];
+
+	for (const origin of normalized) {
+		if (origin.includes('*')) {
+			// Convert wildcard pattern to regex: escape dots, replace * with \d+
+			const escaped = origin.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '\\d+');
+			patterns.push(new RegExp(`^${escaped}$`));
+		} else {
+			exact.add(origin);
+		}
+	}
+
 	return (origin: string | undefined, callback: (err: Error | null, allow: boolean) => void): void => {
 		if (!origin) {
 			callback(null, false);
 			return;
 		}
 
-		callback(null, allowed.has(origin));
+		if (exact.has(origin)) {
+			callback(null, true);
+			return;
+		}
+
+		callback(null, patterns.some((p) => p.test(origin)));
 	};
 }
