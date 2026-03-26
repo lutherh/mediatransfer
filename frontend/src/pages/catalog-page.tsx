@@ -38,6 +38,7 @@ import { VirtualizedGrid } from '@/components/virtualized-grid';
 import { formatBytes } from '@/lib/format';
 import { DateTimeEditor } from '@/components/catalog/date-time-editor';
 import { useApiToken } from '@/lib/use-api-token';
+import { useToast, ToastContainer } from '@/components/ui/toast';
 
 // ── Add to Album modal ────────────────────────────────────────────────────
 
@@ -958,6 +959,8 @@ export function CatalogPage() {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deletingKeys, setDeletingKeys] = useState<Set<string>>(() => new Set());
+  const { toasts, push: pushToast, dismiss: dismissToast } = useToast();
   const [sortNewestFirst, setSortNewestFirst] = useState(() => {
     try {
       const saved = localStorage.getItem('catalog-sort-newest-first');
@@ -1184,19 +1187,30 @@ export function CatalogPage() {
   }, []);
 
   // ── Bulk delete mutation ──
-  // Batches deletions in chunks of 200 to stay within API limits
+  // Batches deletions in chunks of 200 to stay within API limits.
+  // Optimistically fades out selected thumbnails and shows a toast on completion.
   const deleteMutation = useMutation({
     mutationFn: async (encodedKeys: string[]) => {
+      // Optimistic: immediately fade out the thumbnails
+      setDeletingKeys(new Set(encodedKeys));
+      setSelected(new Set());
+      setConfirmDelete(false);
       for (let i = 0; i < encodedKeys.length; i += 200) {
         await deleteCatalogItems(encodedKeys.slice(i, i + 200), apiToken);
       }
     },
-    onSuccess: () => {
-      setSelected(new Set());
-      setConfirmDelete(false);
+    onSuccess: (_data, encodedKeys) => {
+      setDeletingKeys(new Set());
       void queryClient.invalidateQueries({ queryKey: ['catalog-items'] });
       void queryClient.invalidateQueries({ queryKey: ['catalog-stats'] });
       void queryClient.invalidateQueries({ queryKey: ['catalog-duplicates'] });
+      const count = encodedKeys.length;
+      pushToast('success', `${count} item${count === 1 ? '' : 's'} deleted`);
+    },
+    onError: (_err, encodedKeys) => {
+      // Restore thumbnails on failure
+      setDeletingKeys(new Set());
+      pushToast('error', `Failed to delete ${encodedKeys.length} item${encodedKeys.length === 1 ? '' : 's'}`);
     },
   });
 
@@ -1326,22 +1340,6 @@ export function CatalogPage() {
         />
       )}
 
-      {deleteMutation.isError && (
-        <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-4">
-          <svg className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="8" x2="12" y2="12" />
-            <line x1="12" y1="16" x2="12.01" y2="16" />
-          </svg>
-          <div>
-            <p className="text-sm font-medium text-red-800">Delete failed</p>
-            <p className="mt-0.5 text-sm text-red-700">
-              {deleteMutation.error instanceof Error ? deleteMutation.error.message : 'Something went wrong. Please try again.'}
-            </p>
-          </div>
-        </div>
-      )}
-
       {/* ── Prefix filter + sort toggle ─────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-1.5">
         <div className="relative w-full max-w-xs">
@@ -1442,6 +1440,7 @@ export function CatalogPage() {
           isFetchingNextPage={itemsQuery.isFetchingNextPage}
           fetchNextPage={() => void itemsQuery.fetchNextPage()}
           onRegisterScrollToDate={(fn) => { scrollToDateRef.current = fn; }}
+          deletingKeys={deletingKeys}
         />
       )}
 
@@ -1492,6 +1491,9 @@ export function CatalogPage() {
           onDateChanged={handleDateChanged}
         />
       )}
+
+      {/* ── Toast notifications ─────────────────────────────────────── */}
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

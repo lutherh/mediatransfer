@@ -19,6 +19,7 @@ export const Thumbnail = memo(function Thumbnail({
   apiToken,
   selected,
   selectionMode,
+  deleting,
   lightboxIndex,
   onToggleSelect,
   onOpenLightbox,
@@ -28,6 +29,8 @@ export const Thumbnail = memo(function Thumbnail({
   apiToken: string | undefined;
   selected: boolean;
   selectionMode: boolean;
+  /** True while this item is being deleted — triggers fade-out animation */
+  deleting: boolean;
   lightboxIndex: number;
   onToggleSelect: (encodedKey: string, flatIndex: number) => void;
   onOpenLightbox: (index: number) => void;
@@ -68,7 +71,7 @@ export const Thumbnail = memo(function Thumbnail({
     <div
       className={`group relative aspect-square cursor-pointer overflow-hidden rounded bg-slate-200 ${
         selected ? 'ring-2 ring-blue-500 ring-offset-1' : ''
-      }`}
+      } ${deleting ? 'thumb-deleting' : ''}`}
       onClick={handleClick}
       role="gridcell"
       tabIndex={0}
