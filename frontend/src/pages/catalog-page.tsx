@@ -1244,10 +1244,53 @@ export function CatalogPage() {
   }, [queryClient]);
 
   // ── Scroll-to-date (wired from VirtualizedGrid via onRegisterScrollToDate) ──
+  // When the target date isn't loaded yet, we store it as a pending target
+  // and progressively fetch pages until the target month appears.
   const scrollToDateRef = useRef<((date: string) => void) | null>(null);
+  const pendingScrollTarget = useRef<string | null>(null);
+
   const scrollToDate = useCallback((date: string) => {
-    scrollToDateRef.current?.(date);
-  }, []);
+    // Check if the target month is already in loaded sections
+    const targetMonth = date.slice(0, 7);
+    const loaded = sections.some(([d]) => d.slice(0, 7) === targetMonth);
+
+    if (loaded) {
+      // Target is loaded — scroll directly and clear any pending target
+      pendingScrollTarget.current = null;
+      scrollToDateRef.current?.(date);
+      return;
+    }
+
+    // Target date not loaded yet — scroll to the closest loaded section
+    // for immediate feedback, then start progressive fetching.
+    pendingScrollTarget.current = date;
+    scrollToDateRef.current?.(date); // approximate: VirtualizedGrid will find closest
+    if (itemsQuery.hasNextPage && !itemsQuery.isFetchingNextPage) {
+      void itemsQuery.fetchNextPage();
+    }
+  }, [sections, itemsQuery]);
+
+  // Effect: when new pages load, check if the pending target is now available
+  useEffect(() => {
+    const target = pendingScrollTarget.current;
+    if (!target) return;
+    const targetMonth = target.slice(0, 7);
+    const match = sections.find(([d]) => d.slice(0, 7) === targetMonth);
+
+    if (match) {
+      // Found it — scroll there and clear
+      pendingScrollTarget.current = null;
+      // Small delay so the row model rebuilds before scrolling
+      requestAnimationFrame(() => scrollToDateRef.current?.(match[0]));
+    } else if (itemsQuery.hasNextPage && !itemsQuery.isFetchingNextPage) {
+      // Keep fetching
+      void itemsQuery.fetchNextPage();
+    } else if (!itemsQuery.hasNextPage) {
+      // No more data — the date doesn't exist. Scroll to closest.
+      pendingScrollTarget.current = null;
+      scrollToDateRef.current?.(target);
+    }
+  }, [sections, itemsQuery.hasNextPage, itemsQuery.isFetchingNextPage]);
 
   // ── Drag-and-drop visual overlay ──
   const handleDragOver = useCallback((e: React.DragEvent) => {

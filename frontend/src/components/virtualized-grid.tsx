@@ -109,11 +109,35 @@ export function VirtualizedGrid({
 
   const virtualItems = virtualizer.getVirtualItems();
 
-  // Register scrollToDate with parent so DateScroller can trigger it
+  // Register scrollToDate with parent so DateScroller can trigger it.
+  // Supports exact dates, same-month fallback, and closest-date binary search.
   useEffect(() => {
     if (!onRegisterScrollToDate) return;
     onRegisterScrollToDate((date: string) => {
-      const idx = sectionDateIndex.get(date);
+      // 1. Exact match
+      let idx = sectionDateIndex.get(date);
+
+      // 2. Same-month fallback
+      if (idx === undefined) {
+        const targetMonth = date.slice(0, 7);
+        for (const [d, i] of sectionDateIndex) {
+          if (d.slice(0, 7) === targetMonth) { idx = i; break; }
+        }
+      }
+
+      // 3. Closest date (binary search on sorted date keys)
+      if (idx === undefined && sectionDateIndex.size > 0) {
+        const entries = [...sectionDateIndex.entries()]; // sorted by row model order
+        const targetNum = parseInt(date.replace(/-/g, ''), 10);
+        let best = entries[0];
+        let bestDist = Infinity;
+        for (const entry of entries) {
+          const dist = Math.abs(parseInt(entry[0].replace(/-/g, ''), 10) - targetNum);
+          if (dist < bestDist) { best = entry; bestDist = dist; }
+        }
+        idx = best[1];
+      }
+
       if (idx !== undefined) {
         virtualizer.scrollToIndex(idx, { align: 'start', behavior: 'auto' });
         requestAnimationFrame(() => window.scrollBy(0, -60));
