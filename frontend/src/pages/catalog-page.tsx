@@ -39,6 +39,7 @@ import { formatBytes } from '@/lib/format';
 import { DateTimeEditor } from '@/components/catalog/date-time-editor';
 import { useApiToken } from '@/lib/use-api-token';
 import { useToast, ToastContainer } from '@/components/ui/toast';
+import { clearThumbnailFailures } from '@/lib/thumbnail-queue';
 
 // ── Add to Album modal ────────────────────────────────────────────────────
 
@@ -490,6 +491,13 @@ function Lightbox({
   onDateChanged: () => void;
 }) {
   const item = items[index];
+
+  // Guard: if index is somehow out of bounds, close the lightbox
+  if (!item) {
+    onClose();
+    return null;
+  }
+
   // Full-resolution URL for download only
   const fullMediaUrl = catalogMediaUrl(item.encodedKey, apiToken);
   // Lightbox preview: use large (1920px) thumbnail for images, full URL for videos.
@@ -1023,6 +1031,13 @@ export function CatalogPage() {
 
   // ── Data queries ──
 
+  // Clear cached thumbnail failures when network recovers so transient
+  // errors are retried instead of showing broken icons permanently.
+  useEffect(() => {
+    window.addEventListener('online', clearThumbnailFailures);
+    return () => window.removeEventListener('online', clearThumbnailFailures);
+  }, []);
+
   const statsQuery = useQuery({
     queryKey: ['catalog-stats', apiToken],
     queryFn: () => fetchCatalogStats(apiToken),
@@ -1221,8 +1236,8 @@ export function CatalogPage() {
   }, []);
 
   const selectAll = useCallback(() => {
-    setSelected(new Set(allItems.map((i) => i.encodedKey)));
-  }, [allItems]);
+    setSelected(new Set(filteredItems.map((i) => i.encodedKey)));
+  }, [filteredItems]);
 
   const clearAll = useCallback(() => {
     setSelected(new Set());

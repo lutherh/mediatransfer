@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { Layout } from '@/components/layout';
+import { ErrorBoundary } from '@/components/ui/error-boundary';
 import { TransfersListPage } from '@/pages/transfers-list-page';
 import { NewTransferPage } from '@/pages/new-transfer-page';
 import { TransferDetailPage } from '@/pages/transfer-detail-page';
@@ -21,6 +22,7 @@ const queryClient = new QueryClient();
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
+      <ErrorBoundary>
       <BrowserRouter>
         <Routes>
           {/* OAuth callback renders outside the main layout */}
@@ -43,6 +45,7 @@ export function App() {
           <Route element={<Navigate replace to="/" />} path="*" />
         </Routes>
       </BrowserRouter>
+      </ErrorBoundary>
     </QueryClientProvider>
   );
 }

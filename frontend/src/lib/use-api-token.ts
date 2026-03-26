@@ -1,12 +1,18 @@
-import { useMemo } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 
 /**
- * Read an optional `apiToken` query-parameter from the URL. Memoized so the
- * URLSearchParams parse happens only once per mount.
+ * Read an optional `apiToken` query-parameter from the URL.
+ * Reacts to popstate / pushState changes so the token stays current.
  */
 export function useApiToken(): string | undefined {
-  return useMemo(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('apiToken') ?? undefined;
+  const subscribe = useCallback((onStoreChange: () => void) => {
+    window.addEventListener('popstate', onStoreChange);
+    return () => window.removeEventListener('popstate', onStoreChange);
   }, []);
+
+  return useSyncExternalStore(
+    subscribe,
+    () => new URLSearchParams(window.location.search).get('apiToken') ?? undefined,
+    () => undefined, // SSR snapshot
+  );
 }

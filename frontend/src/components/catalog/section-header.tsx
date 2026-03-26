@@ -22,7 +22,9 @@ export function formatSectionDate(dateStr: string): string {
   const year = Number(parts[0]);
   const month = Number(parts[1]) - 1;
   const day = Number(parts[2]);
+  if (Number.isNaN(year) || Number.isNaN(month) || Number.isNaN(day)) return dateStr;
   const date = new Date(year, month, day);
+  if (Number.isNaN(date.getTime())) return dateStr;
 
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
