@@ -13,6 +13,8 @@ export interface VirtualizedGridProps {
   selectionMode: boolean;
   /** Set of encodedKeys currently being deleted — triggers fade-out animation */
   deletingKeys: Set<string>;
+  /** Set of image encodedKeys that are iPhone Live Photos (have a .MOV companion) */
+  livePhotoKeys: Set<string>;
   apiToken: string | undefined;
   onToggleSelect: (encodedKey: string, flatIndex: number) => void;
   onOpenLightbox: (index: number) => void;
@@ -45,6 +47,7 @@ export function VirtualizedGrid({
   selected,
   selectionMode,
   deletingKeys,
+  livePhotoKeys,
   apiToken,
   onToggleSelect,
   onOpenLightbox,
@@ -234,6 +237,7 @@ export function VirtualizedGrid({
                       selected={selected.has(item.encodedKey)}
                       selectionMode={selectionMode}
                       deleting={deletingKeys.has(item.encodedKey)}
+                      livePhoto={livePhotoKeys.has(item.encodedKey)}
                       lightboxIndex={row.startIndex + i}
                       onToggleSelect={onToggleSelect}
                       onOpenLightbox={onOpenLightbox}
