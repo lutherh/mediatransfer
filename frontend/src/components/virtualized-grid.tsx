@@ -170,7 +170,7 @@ export function VirtualizedGrid({
               )}
 
               {row.type === 'section-header' && (
-                <div className={!row.isFirst ? 'border-t border-slate-200 pt-4' : ''}>
+                <div className={!row.isFirst ? 'pt-2' : ''}>
                   <SectionHeader
                     date={row.date}
                     items={row.items}
@@ -182,7 +182,7 @@ export function VirtualizedGrid({
 
               {row.type === 'items-row' && (
                 <div
-                  className="grid gap-1"
+                  className="grid gap-0.5"
                   style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
                   role="grid"
                   aria-label="Photo grid"
