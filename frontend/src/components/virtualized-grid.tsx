@@ -11,6 +11,8 @@ export interface VirtualizedGridProps {
   sections: [string, CatalogItem[]][];
   selected: Set<string>;
   selectionMode: boolean;
+  /** Set of encodedKeys currently being deleted — triggers fade-out animation */
+  deletingKeys: Set<string>;
   apiToken: string | undefined;
   onToggleSelect: (encodedKey: string, flatIndex: number) => void;
   onOpenLightbox: (index: number) => void;
@@ -42,6 +44,7 @@ export function VirtualizedGrid({
   sections,
   selected,
   selectionMode,
+  deletingKeys,
   apiToken,
   onToggleSelect,
   onOpenLightbox,
@@ -206,6 +209,7 @@ export function VirtualizedGrid({
                       apiToken={apiToken}
                       selected={selected.has(item.encodedKey)}
                       selectionMode={selectionMode}
+                      deleting={deletingKeys.has(item.encodedKey)}
                       lightboxIndex={row.startIndex + i}
                       onToggleSelect={onToggleSelect}
                       onOpenLightbox={onOpenLightbox}
