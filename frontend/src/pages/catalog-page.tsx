@@ -1065,12 +1065,55 @@ export function CatalogPage() {
   );
 
   /**
+   * Detect iPhone Live Photo pairs: a .HEIC/.JPG image + a .MOV video with the
+   * same base path. Build a Set of image encodedKeys that are Live Photos and a
+   * Map from image encodedKey → companion MOV encodedKey (for bulk-delete).
+   */
+  const { livePhotoKeys, liveCompanionMap, filteredItems } = useMemo(() => {
+    const imageBaseMap = new Map<string, CatalogItem>(); // basePath → image item
+    const videoBaseMap = new Map<string, CatalogItem>(); // basePath → MOV item
+    const liveKeys = new Set<string>();
+    const companionMap = new Map<string, string>(); // image encodedKey → MOV encodedKey
+
+    for (const item of allItems) {
+      const lastDot = item.key.lastIndexOf('.');
+      if (lastDot <= 0) continue;
+      const basePath = item.key.slice(0, lastDot);
+      const ext = item.key.slice(lastDot + 1).toLowerCase();
+
+      if (item.mediaType === 'image') {
+        imageBaseMap.set(basePath, item);
+      } else if (item.mediaType === 'video' && ext === 'mov') {
+        videoBaseMap.set(basePath, item);
+      }
+    }
+
+    // Pair up: image + companion MOV with identical base path
+    const companionEncodedKeys = new Set<string>();
+    for (const [basePath, imageItem] of imageBaseMap) {
+      const movItem = videoBaseMap.get(basePath);
+      if (movItem) {
+        liveKeys.add(imageItem.encodedKey);
+        companionMap.set(imageItem.encodedKey, movItem.encodedKey);
+        companionEncodedKeys.add(movItem.encodedKey);
+      }
+    }
+
+    // Filter out companion MOVs from visible items
+    const filtered = companionEncodedKeys.size > 0
+      ? allItems.filter((item) => !companionEncodedKeys.has(item.encodedKey))
+      : allItems;
+
+    return { livePhotoKeys: liveKeys, liveCompanionMap: companionMap, filteredItems: filtered };
+  }, [allItems]);
+
+  /**
    * Group items by `sectionDate`, then sort both sections and intra-section
    * items according to the user's chosen sort direction.
    */
   const sections = useMemo(() => {
     const map = new Map<string, CatalogItem[]>();
-    for (const item of allItems) {
+    for (const item of filteredItems) {
       if (!map.has(item.sectionDate)) map.set(item.sectionDate, []);
       map.get(item.sectionDate)!.push(item);
     }
@@ -1078,7 +1121,7 @@ export function CatalogPage() {
     return [...map.entries()]
       .sort(([a], [b]) => dir * a.localeCompare(b))
       .map(([date, items]) => [date, items.sort((a, b) => dir * a.capturedAt.localeCompare(b.capturedAt))] as [string, CatalogItem[]]);
-  }, [allItems, sortNewestFirst]);
+  }, [filteredItems, sortNewestFirst]);
 
   /**
    * Flat sorted list matching the visual order on screen. Used as the single
@@ -1362,13 +1405,22 @@ export function CatalogPage() {
       {selectionMode && (
         <SelectionBar
           count={selected.size}
-          totalItems={allItems.length}
+          totalItems={filteredItems.length}
           onSelectAll={selectAll}
           onClearAll={clearAll}
           onDelete={() => setConfirmDelete(true)}
           isDeleting={deleteMutation.isPending}
           confirmDelete={confirmDelete}
-          onConfirmDelete={() => deleteMutation.mutate([...selected])}
+          onConfirmDelete={() => {
+            // Include companion MOV keys when deleting Live Photo images
+            const keysToDelete: string[] = [];
+            for (const key of selected) {
+              keysToDelete.push(key);
+              const companion = liveCompanionMap.get(key);
+              if (companion) keysToDelete.push(companion);
+            }
+            deleteMutation.mutate(keysToDelete);
+          }}
           onCancelConfirm={() => setConfirmDelete(false)}
           onAddToAlbum={() => setShowAlbumModal(true)}
         />
@@ -1484,6 +1536,7 @@ export function CatalogPage() {
           fetchNextPage={() => void itemsQuery.fetchNextPage()}
           onRegisterScrollToDate={(fn) => { scrollToDateRef.current = fn; }}
           deletingKeys={deletingKeys}
+          livePhotoKeys={livePhotoKeys}
         />
       )}
 

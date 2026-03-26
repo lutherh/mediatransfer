@@ -20,6 +20,7 @@ export const Thumbnail = memo(function Thumbnail({
   selected,
   selectionMode,
   deleting,
+  livePhoto,
   lightboxIndex,
   onToggleSelect,
   onOpenLightbox,
@@ -31,6 +32,8 @@ export const Thumbnail = memo(function Thumbnail({
   selectionMode: boolean;
   /** True while this item is being deleted — triggers fade-out animation */
   deleting: boolean;
+  /** True if this image has a Live Photo .MOV companion */
+  livePhoto: boolean;
   lightboxIndex: number;
   onToggleSelect: (encodedKey: string, flatIndex: number) => void;
   onOpenLightbox: (index: number) => void;
@@ -138,6 +141,16 @@ export const Thumbnail = memo(function Thumbnail({
         <div className="pointer-events-none absolute bottom-1 right-1 flex items-center gap-0.5 rounded-sm bg-black/60 px-1 py-0.5">
           <svg className="h-2.5 w-2.5 text-white" viewBox="0 0 24 24" fill="currentColor">
             <path d="M8 5v14l11-7z" />
+          </svg>
+        </div>
+      )}
+
+      {/* Live Photo badge — bottom-right corner */}
+      {livePhoto && item.mediaType !== 'video' && !selected && (
+        <div className="pointer-events-none absolute bottom-1 right-1 flex items-center gap-0.5 rounded-sm bg-black/60 px-1 py-0.5">
+          <svg className="h-2.5 w-2.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <circle cx="12" cy="12" r="3" />
+            <circle cx="12" cy="12" r="9" strokeDasharray="3 3" />
           </svg>
         </div>
       )}
