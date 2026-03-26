@@ -213,6 +213,8 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
   const containerRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  /** Timestamp of last drag release — used to suppress scroll handler during settle */
+  const dragEndTimeRef = useRef(0);
 
   const [handleRatio, setHandleRatio] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
@@ -314,6 +316,8 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
 
     const onScroll = () => {
       if (isDragging) return;
+      // Suppress handle updates while virtualizer settles after a drag jump
+      if (Date.now() - dragEndTimeRef.current < 600) return;
       resetHideTimer();
 
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -321,19 +325,33 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
         const refs = sectionRefs.current;
         if (!refs || refs.size === 0) return;
 
-        // Find the last section whose top is above 30% of viewport
-        let bestDate = sections[0][0];
+        // Iterate only the rendered section refs (small set from virtualizer)
+        // and find the one whose top is closest to but above 30% of viewport.
         const viewMid = window.innerHeight * 0.3;
+        let bestDate = '';
+        let bestTop = -Infinity;
 
-        for (let i = 0; i < sections.length; i++) {
-          const el = refs.get(sections[i][0]);
-          if (!el) continue;
-          const rect = el.getBoundingClientRect();
-          if (rect.top <= viewMid) bestDate = sections[i][0];
-          else break;
+        for (const [date, el] of refs) {
+          const top = el.getBoundingClientRect().top;
+          if (top <= viewMid && top > bestTop) {
+            bestDate = date;
+            bestTop = top;
+          }
         }
 
-        // Map the visible section date to a position on the full months track
+        // Fallback: if no section is above the midpoint, use the first visible
+        if (!bestDate) {
+          let closest = '';
+          let closestDist = Infinity;
+          for (const [date, el] of refs) {
+            const dist = Math.abs(el.getBoundingClientRect().top - viewMid);
+            if (dist < closestDist) { closest = date; closestDist = dist; }
+          }
+          bestDate = closest;
+        }
+
+        if (!bestDate) return;
+
         const ym = bestDate.slice(0, 7);
         const ratio = monthPositionMap.get(ym) ?? 0;
         setHandleRatio(ratio);
@@ -379,11 +397,12 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
     (ratio: number) => {
       const date = dateAtRatio(ratio);
       if (!date) return;
-      // Find the closest loaded section for actual scrolling
-      const scrollTarget = closestSectionDate(date) ?? date;
       if (onScrollToDate) {
-        onScrollToDate(scrollTarget);
+        // Pass the raw target date — let the catalog page handle
+        // finding the right section and fetching data if needed.
+        onScrollToDate(date);
       } else {
+        const scrollTarget = closestSectionDate(date) ?? date;
         const el = sectionRefs.current?.get(scrollTarget);
         if (el) {
           el.scrollIntoView({ behavior: 'auto', block: 'start' });
@@ -430,6 +449,7 @@ export function DateScroller({ sections, sectionRefs, onScrollToDate, dateDistri
       const target = e.target as HTMLElement;
       if (target.releasePointerCapture) target.releasePointerCapture(e.pointerId);
       setIsDragging(false);
+      dragEndTimeRef.current = Date.now();
       resetHideTimer();
     },
     [resetHideTimer],
