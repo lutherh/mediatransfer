@@ -92,6 +92,14 @@ export function isThumbnailFailed(url: string): boolean {
 }
 
 /**
+ * Clear all cached thumbnail failures. Called on network recovery so
+ * thumbnails that failed during an outage get retried.
+ */
+export function clearThumbnailFailures(): void {
+  failedThumbnails.clear();
+}
+
+/**
  * Hook that returns `src` only once the queue grants a loading slot.
  * Pass `null` to skip queueing (e.g. for videos).
  */
