@@ -214,55 +214,42 @@ if ($DryRun) {
     exit 0
 }
 
-Write-Host "Executing duplicate resolution..." -ForegroundColor Cyan
+Write-Host "Executing duplicate resolution (trashing duplicates)..." -ForegroundColor Cyan
 $totalResolved = 0
 $totalFailed = 0
 
-for ($batch = 0; $batch -lt $autoResolve.Count; $batch += $BatchSize) {
-    $end = [Math]::Min($batch + $BatchSize, $autoResolve.Count)
-    $batchItems = $autoResolve[$batch..($end - 1)]
+# Collect all asset IDs to trash
+$allTrashIds = @()
+foreach ($item in $autoResolve) {
+    $allTrashIds += $item.trashAssetIds
+}
 
-    $groups = @()
-    foreach ($item in $batchItems) {
-        $groups += @{
-            duplicateId   = $item.duplicateId
-            keepAssetIds  = $item.keepAssetIds
-            trashAssetIds = $item.trashAssetIds
-        }
-    }
+Write-Host "Total assets to trash: $($allTrashIds.Count)"
 
-    $body = @{ groups = $groups } | ConvertTo-Json -Depth 5 -Compress
+# Batch delete (trash) via DELETE /assets with force=false
+for ($batch = 0; $batch -lt $allTrashIds.Count; $batch += $BatchSize) {
+    $end = [Math]::Min($batch + $BatchSize, $allTrashIds.Count)
+    $batchIds = $allTrashIds[$batch..($end - 1)]
+
+    $body = @{ ids = $batchIds; force = $false } | ConvertTo-Json -Depth 3 -Compress
 
     try {
-        $result = Invoke-WebRequest -Uri "$ImmichUrl/api/duplicates/resolve" -Method POST -Headers $headers -Body $body -UseBasicParsing
-
-        $parsed = $result.Content | ConvertFrom-Json
-        $succeeded = ($parsed | Where-Object { $_.success -eq $true }).Count
-        $failed = ($parsed | Where-Object { $_.success -ne $true }).Count
-        $totalResolved += $succeeded
-        $totalFailed += $failed
-
-        if ($failed -gt 0) { $batchColor = "Yellow" } else { $batchColor = "Green" }
+        $null = Invoke-WebRequest -Uri "$ImmichUrl/api/assets" -Method DELETE -Headers $headers -Body $body -UseBasicParsing
+        $totalResolved += $batchIds.Count
         $batchNum = [math]::Floor($batch / $BatchSize) + 1
-        Write-Host "  Batch ${batchNum}: resolved $succeeded, failed $failed" -ForegroundColor $batchColor
-
-        if ($failed -gt 0) {
-            $parsed | Where-Object { $_.success -ne $true } | ForEach-Object {
-                Write-Host "    FAILED: $($_.id) - $($_.error)" -ForegroundColor Red
-            }
-        }
+        Write-Host "  Batch ${batchNum}: trashed $($batchIds.Count) assets" -ForegroundColor Green
     }
     catch {
         Write-Host "  Batch failed: $($_.Exception.Message)" -ForegroundColor Red
-        $totalFailed += $batchItems.Count
+        $totalFailed += $batchIds.Count
     }
 }
 
 Write-Host ""
 Write-Host "=== Done ===" -ForegroundColor Cyan
-Write-Host "Resolved: $totalResolved groups"
+Write-Host "Resolved: $totalResolved assets trashed"
 if ($totalFailed -gt 0) {
-    Write-Host "Failed:   $totalFailed groups" -ForegroundColor Red
+    Write-Host "Failed:   $totalFailed assets" -ForegroundColor Red
 }
 Write-Host "Remaining for manual review: $($stats.manualReview) groups"
 Write-Host ""
