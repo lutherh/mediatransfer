@@ -100,30 +100,29 @@ $stats = @{
 
 foreach ($group in $dupes) {
     $assets = $group.assets
-    $suggestedKeep = $group.suggestedKeepAssetIds
 
     $isVariantGroup = Test-IsVariantGroup $assets
 
-    if ($isVariantGroup -and $suggestedKeep.Count -gt 0) {
+    if ($isVariantGroup) {
+        # Pick the best asset: prefer the original (no -edited suffix), then largest file
         $keepIds = [System.Collections.Generic.List[string]]::new()
         $trashIds = [System.Collections.Generic.List[string]]::new()
 
-        foreach ($a in $assets) {
-            if ($suggestedKeep -contains $a.id) {
-                $keepIds.Add($a.id)
+        # Sort: non-edited first, then by file size descending
+        $sorted = $assets | Sort-Object @{
+            Expression = {
+                $fn = $_.originalFileName
+                if ($fn -match '-edited\.' -or $fn -match '-EFFECTS\.' -or $fn -match '-ANIMATION\.' -or $fn -match '-COLLAGE\.' -or $fn -match '_\d+_\.') { 1 } else { 0 }
             }
-            else {
-                $trashIds.Add($a.id)
-            }
+        }, @{
+            Expression = { $_.exifInfo.fileSizeInByte }
+            Descending = $true
         }
 
-        if ($keepIds.Count -eq 0) {
-            $sorted = $assets | Sort-Object { $_.exifInfo.fileSizeInByte } -Descending
-            $keepIds.Add($sorted[0].id)
-            $trashIds = [System.Collections.Generic.List[string]]::new()
-            for ($i = 1; $i -lt $sorted.Count; $i++) {
-                $trashIds.Add($sorted[$i].id)
-            }
+        # Keep the first (best) asset, trash the rest
+        $keepIds.Add($sorted[0].id)
+        for ($i = 1; $i -lt $sorted.Count; $i++) {
+            $trashIds.Add($sorted[$i].id)
         }
 
         if ($trashIds.Count -gt 0) {
