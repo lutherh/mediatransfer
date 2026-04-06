@@ -246,7 +246,7 @@ for ($batch = 0; $batch -lt $autoResolve.Count; $batch += $BatchSize) {
         $totalResolved += $succeeded
         $totalFailed += $failed
 
-        $batchColor = if ($failed -gt 0) { "Yellow" } else { "Green" }
+        if ($failed -gt 0) { $batchColor = "Yellow" } else { $batchColor = "Green" }
         Write-Host "  Batch $([math]::Floor($batch / $BatchSize) + 1): resolved $succeeded, failed $failed" -ForegroundColor $batchColor
 
         if ($failed -gt 0) {
