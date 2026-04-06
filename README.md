@@ -236,3 +236,55 @@ To start everything again later, just run `npm run app:dev`.
 - Cloud credentials are encrypted at rest (AES-256)
 - Docker ports are only accessible from your machine (bound to `127.0.0.1`)
 - The `.env` file with your secrets is excluded from Git (won't be uploaded if you push the code)
+
+---
+
+## Immich Integration (iPhone Auto-Backup)
+
+You can run [Immich](https://immich.app/) alongside MediaTransfer to get automatic photo backup from iPhones and Android devices — no app store or cloud subscription required.
+
+### Setup
+
+1. Copy the example environment file:
+   ```bash
+   cp .env.immich.example .env.immich
+   ```
+
+2. Start the Immich stack:
+   ```bash
+   docker compose -f docker-compose.immich.yml up -d
+   ```
+
+3. Open **http://localhost:2283** and create your admin account.
+
+4. Install the Immich app on your phone ([iOS](https://apps.apple.com/app/immich/id1613945686) / [Android](https://play.google.com/store/apps/details?id=app.alextran.immich)) and connect it to `http://<your-pc-ip>:2283`.
+
+> **Firewall:** On Windows, you may need to allow port 2283 through the firewall:
+> ```powershell
+> New-NetFirewallRule -DisplayName "Immich Server" -Direction Inbound -LocalPort 2283 -Protocol TCP -Action Allow -Profile Private
+> ```
+
+### Migrating existing S3 photos into Immich
+
+If you already have photos in your Scaleway bucket (from Takeout migration), you can import them into Immich using the included migration script. It requires [rclone](https://rclone.org/) and [immich-go](https://github.com/simulot/immich-go):
+
+```powershell
+# Configure rclone with your Scaleway credentials (one-time)
+rclone config
+
+# Run the migration (downloads year-by-year, uploads to Immich, cleans up)
+.\scripts\migrate-s3-to-immich.ps1
+```
+
+The script is resume-safe — re-running it skips years already completed.
+
+### Architecture
+
+Immich stores photos locally in `data/immich/` (managed by Docker volumes). To back up Immich photos to S3, set up an rclone sync schedule:
+
+```powershell
+# One-time sync
+rclone sync ./data/immich/library scaleway:photosync/immich/library --progress
+
+# Or create a Windows scheduled task for automatic backup
+```
