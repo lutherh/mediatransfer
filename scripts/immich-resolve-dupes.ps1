@@ -36,6 +36,58 @@ function Get-BaseName {
     return $name
 }
 
+function Test-IsVariantGroup {
+    param($assets)
+
+    # Pattern 1: Any file has an -edited, -EFFECTS, _N_ suffix
+    foreach ($a in $assets) {
+        $fn = $a.originalFileName
+        if ($fn -match '-edited\.' -or $fn -match '-EFFECTS\.' -or $fn -match '-ANIMATION\.' -or $fn -match '-COLLAGE\.' -or $fn -match '_\d+_\.') {
+            return $true
+        }
+    }
+
+    # Pattern 2: All base names match after stripping suffixes
+    $baseNames = @()
+    foreach ($a in $assets) {
+        $baseNames += Get-BaseName $a.originalFileName
+    }
+    $unique = $baseNames | Sort-Object -Unique
+    if ($unique.Count -eq 1) {
+        return $true
+    }
+
+    # Pattern 3: All assets share the same capture timestamp
+    $dates = @()
+    foreach ($a in $assets) {
+        if ($a.fileCreatedAt) {
+            $dates += $a.fileCreatedAt.Substring(0, 19)
+        }
+    }
+    $uniqueDates = $dates | Sort-Object -Unique
+    if ($uniqueDates.Count -eq 1 -and $dates.Count -eq $assets.Count) {
+        return $true
+    }
+
+    # Pattern 4: filenames differ only by formatting (e.g. 2012-04-06_18.48.20 vs 20120406_184820)
+    # Extract digits-only from filenames and compare
+    $digitPatterns = @()
+    foreach ($a in $assets) {
+        $nameOnly = [System.IO.Path]::GetFileNameWithoutExtension($a.originalFileName)
+        $nameOnly = $nameOnly -replace '-edited$', ''
+        $digits = $nameOnly -replace '[^0-9]', ''
+        if ($digits.Length -ge 8) {
+            $digitPatterns += $digits.Substring(0, [Math]::Min(14, $digits.Length))
+        }
+    }
+    $uniqueDigits = $digitPatterns | Sort-Object -Unique
+    if ($uniqueDigits.Count -eq 1 -and $digitPatterns.Count -eq $assets.Count) {
+        return $true
+    }
+
+    return $false
+}
+
 $autoResolve = @()
 $manualReview = @()
 $stats = @{
@@ -50,30 +102,7 @@ foreach ($group in $dupes) {
     $assets = $group.assets
     $suggestedKeep = $group.suggestedKeepAssetIds
 
-    $baseNames = @()
-    foreach ($a in $assets) {
-        $baseNames += Get-BaseName $a.originalFileName
-    }
-    $uniqueBaseNames = $baseNames | Sort-Object -Unique
-
-    $isVariantGroup = $false
-    if ($uniqueBaseNames.Count -eq 1) {
-        $isVariantGroup = $true
-    }
-
-    if (-not $isVariantGroup) {
-        foreach ($a in $assets) {
-            $fn = $a.originalFileName
-            if ($fn -match '-edited\.' -or $fn -match '-EFFECTS\.' -or $fn -match '-ANIMATION\.') {
-                $isVariantGroup = $true
-                break
-            }
-            if ($fn -match '_\d+_\.') {
-                $isVariantGroup = $true
-                break
-            }
-        }
-    }
+    $isVariantGroup = Test-IsVariantGroup $assets
 
     if ($isVariantGroup -and $suggestedKeep.Count -gt 0) {
         $keepIds = [System.Collections.Generic.List[string]]::new()
