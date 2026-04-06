@@ -1,0 +1,65 @@
+# Immich — Self-hosted photo backup for iOS devices
+#
+# Start:  docker compose -f docker-compose.immich.yml up -d
+# Stop:   docker compose -f docker-compose.immich.yml down
+#
+# Then open http://localhost:2283 to create your admin account.
+# Configure S3 storage in: Administration → Settings → Storage Backend
+# On each iPhone, install the Immich app and point it to http://<your-pc-ip>:2283
+
+services:
+  immich-server:
+    image: ghcr.io/immich-app/immich-server:release
+    container_name: immich_server
+    restart: unless-stopped
+    ports:
+      - "2283:2283"
+    volumes:
+      - ${UPLOAD_LOCATION:-./data/immich}:/usr/src/app/upload
+    env_file:
+      - .env.immich
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  immich-machine-learning:
+    image: ghcr.io/immich-app/immich-machine-learning:release
+    container_name: immich_machine_learning
+    restart: unless-stopped
+    volumes:
+      - immich-model-cache:/cache
+    env_file:
+      - .env.immich
+
+  database:
+    image: ghcr.io/tensorchord/pgvecto-rs:pg16-v0.3.0
+    container_name: immich_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-immich}
+      POSTGRES_USER: ${DB_USERNAME:-immich}
+      POSTGRES_DB: ${DB_DATABASE_NAME:-immich}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - immich-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d ${DB_DATABASE_NAME:-immich} -U ${DB_USERNAME:-immich}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: immich_redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  immich-pgdata:
+  immich-model-cache:
