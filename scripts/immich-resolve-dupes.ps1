@@ -1,10 +1,11 @@
 param(
     [switch]$Apply,
     [string]$ImmichUrl = "http://localhost:2283",
-    [string]$ApiKey    = "***REMOVED***",
+    [string]$ApiKey    = $env:IMMICH_API_KEY,
     [int]$BatchSize    = 50
 )
 
+if (-not $ApiKey) { Write-Error "IMMICH_API_KEY env var not set. Add it to .env or set it in your shell."; exit 1 }
 $DryRun = -not $Apply
 $headers = @{
     "x-api-key"    = $ApiKey

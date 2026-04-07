@@ -1,4 +1,5 @@
-$headers = @{ 'x-api-key' = '***REMOVED***' }
+if (-not $env:IMMICH_API_KEY) { Write-Error "IMMICH_API_KEY env var not set. Add it to .env or set it in your shell."; exit 1 }
+$headers = @{ 'x-api-key' = $env:IMMICH_API_KEY }
 
 # Get server stats
 $resp = Invoke-WebRequest -Uri 'http://localhost:2283/api/server/statistics' -Headers $headers -UseBasicParsing
