@@ -1,290 +1,265 @@
 # MediaTransfer
 
-A tool that moves your Google Photos library to your own private cloud storage (Scaleway Object Storage). Runs entirely on your computer — your photos never pass through a third-party server.
+Keep your photo archive portable. MediaTransfer runs on your machine, pulls media out of Google Photos, and writes it into storage you control instead of trapping everything inside a giant consumer photo cloud.
 
----
+This repo is local-first. There is no hosted relay server run by this app. The current tested path is:
 
-## What can it do?
+- Google Photos Picker -> Scaleway Object Storage
+- Google Takeout archives -> Scaleway Object Storage
 
-| Mode | Best for | How it works |
-|------|----------|--------------|
-| **Wizard** (web page) | Picking specific photos | Select photos in your browser, click transfer |
-| **Takeout** (web page or terminal) | Moving your **entire** library | Download your library from Google, then upload it all in one go |
+If you want the short version: this is a practical migration tool for getting out of Google Photos while keeping ownership of the storage layer.
 
----
+## What It Does
 
-## Before you start
+- Transfer selected items from Google Photos in the browser
+- Import a full library from Google Takeout
+- Resume interrupted uploads safely
+- Verify uploaded files
+- Browse your uploaded library in a local catalog UI
+- Review duplicates and organize albums
+- Optionally run Immich for phone auto-backup and local photo browsing
 
-You need three things installed on your computer:
+## What It Is Today
 
-1. **Node.js 22 or newer** — [Download here](https://nodejs.org/) (pick the LTS version)
-2. **Docker Desktop** — [Download here](https://www.docker.com/products/docker-desktop/) (used to run the database behind the scenes)
-3. **Git** — [Download here](https://git-scm.com/downloads)
+- The polished storage target in this repo is Scaleway Object Storage
+- The codebase is structured around local services plus S3-style object storage, but the documented setup assumes Scaleway
+- This is not a hosted SaaS and not a generic no-config multi-cloud appliance yet
 
-> **Not sure if you have them?** Open a terminal (PowerShell on Windows, Terminal on Mac) and type:
-> ```
-> node --version
-> docker --version
-> git --version
-> ```
-> Each should print a version number. If instead you see an error, install the missing tool from the links above.
+## Requirements
 
----
+Install these first:
 
-## Step 1 — Get your cloud account keys
+1. Node.js 20.19+ or 22.12+
+2. Docker Desktop
+3. Git
 
-You need credentials from two services. This is a one-time setup.
+Check them with:
 
-### Scaleway (where your photos will be stored)
+```bash
+node --version
+docker --version
+git --version
+```
 
-1. Create a free account at [scaleway.com](https://www.scaleway.com/)
-2. In the Scaleway console, go to **Object Storage** → **Create a bucket**
-   - Pick a region (e.g. `fr-par`) and give it a name (e.g. `my-photos-backup`)
-3. Go to **IAM** → **API Keys** → **Create API Key**
-   - Save the **Access Key** and **Secret Key** — you will need them below
+## Quick Start
 
-### Google Cloud (to let the app read your Google Photos)
-
-1. Go to [console.cloud.google.com](https://console.cloud.google.com/)
-2. Create a new project (e.g. "Photos Backup")
-3. Go to **APIs & Services** → **Library** → search for **Google Photos Picker API** → **Enable** it
-4. Go to **APIs & Services** → **Credentials** → **Create Credentials** → **OAuth client ID**
-   - Application type: **Web application**
-   - Authorized redirect URI: `http://localhost:3000/auth/google/callback`
-5. Save the **Client ID** and **Client Secret**
-
-> **Tip:** You may also need to set up the OAuth consent screen (same section). Choose "External", fill in the app name, and add your own email as a test user.
-
----
-
-## Step 2 — Download and configure
-
-Open a terminal and run:
+Clone the repo:
 
 ```bash
 git clone https://github.com/lutherh/mediatransfer.git
 cd mediatransfer
 ```
 
-Create your configuration file:
+Create your local config file:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+On macOS or Linux:
 
 ```bash
 cp .env.example .env
 ```
 
-Now open the `.env` file in any text editor (Notepad, VS Code, etc.) and fill in the values you got in Step 1:
+Fill in these values in `.env`:
 
-| Line in `.env` | What to put there |
-|---|---|
-| `SCW_ACCESS_KEY=` | Your Scaleway Access Key |
-| `SCW_SECRET_KEY=` | Your Scaleway Secret Key |
-| `SCW_REGION=` | The region you chose (e.g. `fr-par`) |
-| `SCW_BUCKET=` | The bucket name you created (e.g. `my-photos-backup`) |
-| `GOOGLE_CLIENT_ID=` | Your Google OAuth Client ID |
-| `GOOGLE_CLIENT_SECRET=` | Your Google OAuth Client Secret |
+- `SCW_ACCESS_KEY`
+- `SCW_SECRET_KEY`
+- `SCW_BUCKET`
+- `SCW_REGION` if you are not using the default
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_REDIRECT_URI` should stay `http://localhost:5173/auth/google/callback` unless you intentionally change the frontend port
 
-Optional tuning for very large buckets or slower links:
-- `SCW_S3_REQUEST_TIMEOUT_MS=300000`
-- `SCW_S3_LIST_MAX_RETRIES=5`
-
-> **Leave everything else as-is.** The defaults work for local development. The setup script will auto-generate a secure encryption key for you.
-
----
-
-## Step 3 — Install and run
+Then run setup:
 
 ```bash
 npm run app:setup
 ```
 
-This one-time command will:
-- Install all dependencies
-- Start the database (via Docker) 
-- Set up the database tables
-- Generate a secure encryption key
+That command:
 
-Then start the app:
+- installs dependencies
+- starts PostgreSQL and Redis with Docker
+- prepares the database
+- generates `ENCRYPTION_SECRET` if it is still a placeholder
+
+Start the app:
 
 ```bash
 npm run app:dev
 ```
 
-Open your browser to **http://localhost:5173** — that's it, the app is running!
+Open [http://localhost:5173](http://localhost:5173).
 
-> **What `app:dev` does behind the scenes:** It starts Docker Desktop if needed, frees any blocked ports, launches the backend API on port 3000 and the frontend on port 5173, and includes a watchdog that auto-restarts everything if your computer goes to sleep.
+## Google Cloud Setup
 
----
+To use the Google Photos picker flow, create OAuth credentials in Google Cloud:
 
-## How to use it
+1. Create a project in [Google Cloud Console](https://console.cloud.google.com/)
+2. Enable `Google Photos Picker API`
+3. Create an OAuth client of type `Web application`
+4. Add this redirect URI exactly:
 
-### Option A — Transfer specific photos (Wizard)
-
-1. Open **http://localhost:5173**
-2. Click **Connect Google Account** and sign in
-3. Pick the photos you want to transfer
-4. Click **Start Transfer** and wait for the progress bar to finish
-
-### Option B — Transfer your entire library (Takeout)
-
-This is the best option for a full backup. It works in two stages:
-
-#### Stage 1 — Download your library from Google
-
-1. Go to [takeout.google.com](https://takeout.google.com/)
-2. Deselect everything, then select only **Google Photos**
-3. Choose export format: **.zip** files, size **2 GB** (or the largest option available)
-4. Click **Create export** and wait for Google to prepare it (can take hours to days)
-5. Download all the `.zip` files into the `mediatransfer/data/takeout/input/` folder
-
-#### Stage 2 — Upload to your cloud storage
-
-Open **http://localhost:5173/takeout** in your browser:
-
-1. Click **Scan** — the app will find and organize all your photos from the archives
-2. Click **Upload** — the app will upload everything to your Scaleway bucket
-3. Click **Verify** — confirms all files arrived safely
-
-> **Don't worry about interruptions.** If your upload gets interrupted (internet drops, computer sleeps, etc.), just click **Upload** again — it will pick up exactly where it left off. Nothing gets uploaded twice.
-
-**Prefer the command line?** You can also do it with terminal commands:
-```bash
-npm run takeout:scan       # find and organize photos
-npm run takeout:upload     # upload to cloud
-npm run takeout:verify     # confirm everything landed
-npm run takeout:resume     # resume if interrupted
+```text
+http://localhost:5173/auth/google/callback
 ```
 
-### Option C — Continuous download + upload (for huge libraries)
+If prompted, configure the OAuth consent screen and add yourself as a test user.
 
-If your Google Takeout is larger than your available disk space (e.g. 1.7 TB takeout, but only 50 GB free), use the **download watcher** mode. It processes each archive as it downloads, deleting it to free space for the next one:
+## Scaleway Setup
 
-1. Go to [takeout.google.com](https://takeout.google.com/) and request your export
-2. Start downloading all parts in your browser (they go to your Downloads folder)
-3. In a separate terminal, start the watcher:
+To use Scaleway as the storage target:
+
+1. Create a bucket in Scaleway Object Storage
+2. Create an API key in Scaleway IAM
+3. Put the access key, secret key, region, and bucket name into `.env`
+
+## Main Workflows
+
+## 1. Browser Picker
+
+Use this when you only want selected photos.
+
+1. Open [http://localhost:5173](http://localhost:5173)
+2. Connect your Google account
+3. Pick the media you want
+4. Start the transfer
+
+## 2. Full Library Import With Google Takeout
+
+Use this when you want the whole library.
+
+1. Create a Google Takeout export with only `Google Photos`
+2. Download the archive files into `data/takeout/input/`
+3. Open [http://localhost:5173/takeout](http://localhost:5173/takeout)
+4. Run `Scan`
+5. Run `Upload`
+6. Run `Verify`
+
+The upload path is resume-safe. If the machine sleeps or the network drops, run it again and it continues from saved state.
+
+You can also do the same flow from the terminal:
+
+```bash
+npm run takeout:scan
+npm run takeout:upload
+npm run takeout:verify
+npm run takeout:resume
+```
+
+## 3. Low-Disk Watcher Mode
+
+Use this when the Takeout export is much larger than your free disk space.
+
+Start the watcher:
 
 ```bash
 npm run takeout:watch
 ```
 
-That's it. The watcher will:
-- Detect when each ~4 GB download finishes (even from Chrome's `.crdownload` temp files)
-- Unpack it, upload all photos to your Scaleway bucket
-- Delete the archive to free space for the next download
-- Keep going until all parts are done
+The watcher will:
 
-**You only need ~15-20 GB of free space**, regardless of total takeout size.
+- detect finished archive downloads
+- unpack them
+- upload media to object storage
+- delete processed archives to free space
 
-To watch a different folder or customize behavior:
-```bash
-npm run takeout:watch -- --downloads-dir "D:\My Downloads" --concurrency 8
-npm run takeout:watch -- --help     # see all options
+This is the practical path for multi-hundred-GB or multi-TB exports on a small SSD.
+
+## 4. Catalog And Cleanup
+
+After upload, use the local catalog UI:
+
+- [http://localhost:5173/catalog](http://localhost:5173/catalog) for browsing
+- [http://localhost:5173/catalog/dedup](http://localhost:5173/catalog/dedup) for duplicate review
+- [http://localhost:5173/catalog/albums](http://localhost:5173/catalog/albums) for albums
+- [http://localhost:5173/catalog/undated](http://localhost:5173/catalog/undated) for undated items
+
+## Useful Pages
+
+| URL | Purpose |
+|---|---|
+| `http://localhost:5173/` | Google Photos picker flow |
+| `http://localhost:5173/upload` | Local upload page |
+| `http://localhost:5173/takeout` | Takeout scan, upload, verify |
+| `http://localhost:5173/takeout/sequences` | Sequence analysis |
+| `http://localhost:5173/transfers` | Transfer jobs |
+| `http://localhost:5173/catalog` | Uploaded media catalog |
+| `http://localhost:5173/costs` | Storage cost view |
+
+## Useful Commands
+
+| Command | Purpose |
+|---|---|
+| `npm run app:setup` | Install deps and prepare local services |
+| `npm run app:dev` | Run backend and frontend in dev mode |
+| `npm run build` | TypeScript build |
+| `npm run test` | Run tests |
+| `npm run takeout:scan` | Scan Takeout input |
+| `npm run takeout:upload` | Upload processed Takeout media |
+| `npm run takeout:verify` | Verify uploaded media |
+| `npm run takeout:resume` | Resume interrupted Takeout upload |
+| `npm run takeout:watch` | Watch downloads and process incrementally |
+
+## Optional: Immich
+
+If you want phone auto-backup in addition to object storage, you can run Immich locally alongside this project.
+
+Create the Immich env file:
+
+```powershell
+Copy-Item .env.immich.example .env.immich
 ```
 
-> **Safe to interrupt.** Press Ctrl+C at any time. When you restart, it picks up exactly where it left off — nothing gets re-uploaded.
+Start Immich:
 
----
+```bash
+docker compose -f docker-compose.immich.yml up -d
+```
 
-## Browsing your uploaded photos
+Open [http://localhost:2283](http://localhost:2283) and create the admin account.
 
-Once photos are uploaded, go to **http://localhost:5173/catalog** to:
+To connect a phone, point the Immich mobile app at:
 
-- Browse all your uploaded media in a grid view, grouped by date
-- Click any photo to preview it full-size
-- Find and remove duplicate files (Dedup tab)
-- Organize photos into albums
+```text
+http://<your-pc-ip>:2283
+```
 
----
+On Windows you may need a firewall rule for port `2283`.
 
-## All pages
+If you already uploaded media into Scaleway, the repo includes PowerShell helpers to import that media into Immich with `rclone` and `immich-go`.
 
-| Address | What it does |
-|---|---|
-| `http://localhost:5173` | Photo Transfer wizard (select & transfer) |
-| `http://localhost:5173/takeout` | Takeout migration (full library) |
-| `http://localhost:5173/transfers` | View all transfer jobs + cloud storage usage |
-| `http://localhost:5173/catalog` | Browse & manage your uploaded photos |
+## Security Notes
 
----
+- `.env` is gitignored and should stay local
+- The app validates config at startup and fails fast on bad env values
+- `ENCRYPTION_SECRET` is used to encrypt stored cloud credentials
+- In local development, services are intended to stay on your machine unless you explicitly expose them
 
 ## Troubleshooting
 
-| Problem | Solution |
+| Problem | What to check |
 |---|---|
-| **"Docker is not running"** | Open Docker Desktop manually, wait until it says "Running", then try again |
-| **Port 3000 or 5173 already in use** | The dev script auto-frees ports — if it fails, close other apps using those ports |
-| **Google sign-in doesn't work** | Make sure your redirect URI in Google Cloud Console exactly matches `http://localhost:3000/auth/google/callback` |
-| **Upload seems stuck** | Check your internet connection. Restart with `npm run app:dev` — it will resume from where it stopped |
-| **"ENCRYPTION_SECRET must be set"** | Run `npm run app:setup` again — it generates one automatically |
+| Docker not running | Start Docker Desktop and rerun `npm run app:dev` |
+| Google login fails | Confirm the redirect URI is exactly `http://localhost:5173/auth/google/callback` |
+| Upload interrupted | Rerun the same upload command or button action; the state is resumable |
+| `ENCRYPTION_SECRET` error | Run `npm run app:setup` to generate a local secret |
+| Wrong object storage target | Re-check `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_REGION`, and `SCW_BUCKET` |
 
----
+## Stopping Everything
 
-## Stopping the app
+Stop the dev app with `Ctrl+C`.
 
-Press `Ctrl+C` in the terminal where `npm run app:dev` is running. To also stop the database:
+Stop the Docker services with:
 
 ```bash
 docker compose down
 ```
 
-To start everything again later, just run `npm run app:dev`.
+If you are also running Immich:
 
----
-
-## Security notes
-
-- All your data stays on your computer and your own Scaleway bucket — nothing goes through third-party servers
-- Cloud credentials are encrypted at rest (AES-256)
-- Docker ports are only accessible from your machine (bound to `127.0.0.1`)
-- The `.env` file with your secrets is excluded from Git (won't be uploaded if you push the code)
-
----
-
-## Immich Integration (iPhone Auto-Backup)
-
-You can run [Immich](https://immich.app/) alongside MediaTransfer to get automatic photo backup from iPhones and Android devices — no app store or cloud subscription required.
-
-### Setup
-
-1. Copy the example environment file:
-   ```bash
-   cp .env.immich.example .env.immich
-   ```
-
-2. Start the Immich stack:
-   ```bash
-   docker compose -f docker-compose.immich.yml up -d
-   ```
-
-3. Open **http://localhost:2283** and create your admin account.
-
-4. Install the Immich app on your phone ([iOS](https://apps.apple.com/app/immich/id1613945686) / [Android](https://play.google.com/store/apps/details?id=app.alextran.immich)) and connect it to `http://<your-pc-ip>:2283`.
-
-> **Firewall:** On Windows, you may need to allow port 2283 through the firewall:
-> ```powershell
-> New-NetFirewallRule -DisplayName "Immich Server" -Direction Inbound -LocalPort 2283 -Protocol TCP -Action Allow -Profile Private
-> ```
-
-### Migrating existing S3 photos into Immich
-
-If you already have photos in your Scaleway bucket (from Takeout migration), you can import them into Immich using the included migration script. It requires [rclone](https://rclone.org/) and [immich-go](https://github.com/simulot/immich-go):
-
-```powershell
-# Configure rclone with your Scaleway credentials (one-time)
-rclone config
-
-# Run the migration (downloads year-by-year, uploads to Immich, cleans up)
-.\scripts\migrate-s3-to-immich.ps1
-```
-
-The script is resume-safe — re-running it skips years already completed.
-
-### Architecture
-
-Immich stores photos locally in `data/immich/` (managed by Docker volumes). To back up Immich photos to S3, set up an rclone sync schedule:
-
-```powershell
-# One-time sync
-rclone sync ./data/immich/library scaleway:photosync/immich/library --progress
-
-# Or create a Windows scheduled task for automatic backup
+```bash
+docker compose -f docker-compose.immich.yml down
 ```
