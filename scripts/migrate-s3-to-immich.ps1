@@ -11,12 +11,13 @@
 
 param(
     [string]$ImmichUrl   = "http://localhost:2283",
-    [string]$ApiKey      = "***REMOVED***",
+    [string]$ApiKey      = $env:IMMICH_API_KEY,
     [string]$S3Remote    = "scaleway:photosync/transfers",
     [string]$TempDir     = "$env:TEMP\immich-migration",
     [string]$ImmichGo    = "$env:LOCALAPPDATA\immich-go\immich-go.exe",
     [string]$DoneFile    = "$PSScriptRoot\migration-done-years.txt"
 )
+if (-not $ApiKey) { Write-Error "IMMICH_API_KEY env var not set. Add it to .env or set it in your shell."; exit 1 }
 
 $ErrorActionPreference = "Stop"
 

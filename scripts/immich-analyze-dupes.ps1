@@ -4,8 +4,9 @@
 #>
 param(
     [string]$ImmichUrl = "http://localhost:2283",
-    [string]$ApiKey    = "***REMOVED***"
+    [string]$ApiKey    = $env:IMMICH_API_KEY
 )
+if (-not $ApiKey) { Write-Error "IMMICH_API_KEY env var not set. Add it to .env or set it in your shell."; exit 1 }
 
 $headers = @{ "x-api-key" = $ApiKey }
 $resp = Invoke-WebRequest -Uri "$ImmichUrl/api/duplicates" -Headers $headers -UseBasicParsing
