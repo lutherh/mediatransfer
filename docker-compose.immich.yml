@@ -8,6 +8,18 @@
 # On each iPhone, install the Immich app and point it to http://<your-pc-ip>:2283
 
 services:
+  immich-init:
+    image: busybox:latest
+    container_name: immich_init
+    restart: "no"
+    volumes:
+      - ${UPLOAD_LOCATION:-./data/immich}:/upload
+    entrypoint: /bin/sh
+    command: >
+      -c "for d in encoded-video thumbs upload library profile backups; do
+        mkdir -p /upload/$$d && touch /upload/$$d/.immich;
+      done"
+
   immich-server:
     image: ghcr.io/immich-app/immich-server:release
     container_name: immich_server
@@ -19,6 +31,8 @@ services:
     env_file:
       - .env.immich
     depends_on:
+      immich-init:
+        condition: service_completed_successfully
       database:
         condition: service_healthy
       redis:
