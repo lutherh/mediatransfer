@@ -35,3 +35,4 @@ data/thumbs/*
 data/immich/
 .env.immich
 migration-done-years.txt
+scripts/immich-update-log.txt
