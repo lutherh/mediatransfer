@@ -246,6 +246,7 @@ export class ScalewayProvider implements CloudProvider {
         Key: this.fullKey(key),
         Body: stream,
         ContentType: contentType,
+        StorageClass: 'ONEZONE_IA',
         ...(metadata && Object.keys(metadata).length > 0 ? { Metadata: metadata } : {}),
       },
     });
