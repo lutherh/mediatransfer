@@ -8,6 +8,7 @@
 #   ./scripts/sync-immich-to-s3.sh              # dry run (default)
 #   ./scripts/sync-immich-to-s3.sh --execute    # actually sync
 #   ./scripts/sync-immich-to-s3.sh --execute --verify  # sync + verify checksums
+#   ./scripts/sync-immich-to-s3.sh --cleanup    # delete local files already verified in S3
 #
 # S3 credentials are read from .env (same as mount scripts).
 # No rclone remote or rclone.conf is needed.
@@ -20,10 +21,12 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
 EXECUTE=false
 VERIFY=false
+CLEANUP=false
 for arg in "$@"; do
   case "$arg" in
     --execute|-e) EXECUTE=true ;;
     --verify|-v)  VERIFY=true ;;
+    --cleanup|-c) CLEANUP=true ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
 done
@@ -210,20 +213,114 @@ echo ""
 echo "======================================================="
 if [ "$total_errors" -gt 0 ]; then
   echo "  COMPLETED with $total_errors error(s). Review the log above."
-elif ! $EXECUTE; then
+elif ! $EXECUTE && ! $CLEANUP; then
   echo "  DRY RUN complete -- no changes made."
   echo "  Run with --execute to sync, or --execute --verify to sync + verify."
 else
   echo "  SYNC COMPLETE -- all files uploaded to S3."
-  echo ""
-  echo "  Next steps:"
-  echo "    1. Run the verify script:  npx tsx scripts/verify-s3-immich-compat.ts"
-  echo "    2. Start the S3 mount:     ./scripts/mount-s3.sh"
-  echo "    3. Start Immich:           docker compose -f docker-compose.immich.yml up -d"
-  echo "    4. Verify Immich works (browse photos, check for missing thumbnails)"
-  echo "    5. Once confirmed, you can delete local originals:"
-  echo "       rm -rf data/immich/library data/immich/upload"
 fi
 echo "======================================================="
+
+# -- Cleanup: delete local files verified in S3 --
+if $CLEANUP; then
+  echo ""
+  echo "======================================================="
+  echo "  Cleanup: deleting local files verified in S3"
+  echo "======================================================="
+  echo ""
+
+  cleanup_deleted=0
+  cleanup_skipped=0
+  cleanup_errors=0
+
+  for d in "${DIRS_TO_SYNC[@]}"; do
+    source_dir="$LOCAL_IMMICH/$d"
+    [ ! -d "$source_dir" ] && continue
+
+    dest="$DESTINATION/$d"
+    echo "[$d] Verifying before cleanup..."
+
+    # Run rclone check first — abort cleanup for this dir if ANY file fails
+    if ! rclone check "$source_dir" "$dest" \
+        "${S3_FLAGS[@]}" \
+        --one-way --fast-list --log-level INFO 2>&1; then
+      echo "[$d] Verification FAILED — skipping cleanup for this directory." >&2
+      cleanup_errors=$((cleanup_errors + 1))
+      continue
+    fi
+
+    echo "[$d] Verification passed. Building S3 manifest..."
+
+    # Build a manifest of all S3 files in one call (much faster than per-file lsl)
+    s3_manifest=$(mktemp)
+    trap 'rm -f "$s3_manifest"' EXIT
+    if ! rclone lsl "$dest" "${S3_FLAGS[@]}" --fast-list > "$s3_manifest" 2>/dev/null; then
+      echo "[$d] ERROR: Failed to list S3 contents — skipping cleanup for this directory." >&2
+      rm -f "$s3_manifest"
+      cleanup_errors=$((cleanup_errors + 1))
+      continue
+    fi
+
+    echo "[$d] Deleting local files verified in S3..."
+
+    # Delete files one by one, checking each against the S3 manifest
+    while IFS= read -r -d '' local_file; do
+      rel_path="${local_file#"$source_dir"/}"
+      local_size=$(stat -c '%s' "$local_file" 2>/dev/null || stat -f '%z' "$local_file" 2>/dev/null || true)
+
+      if [ -z "$local_size" ]; then
+        echo "  SKIP: $rel_path — cannot read local file size" >&2
+        cleanup_skipped=$((cleanup_skipped + 1))
+        continue
+      fi
+
+      # Look up file in the S3 manifest (rclone lsl format: "  SIZE DATE TIME PATH")
+      # Use awk for exact path matching (handles spaces, dots, special chars)
+      remote_size=$(awk -v path="$rel_path" '{
+        fname=""; for(i=4;i<=NF;i++) fname=(fname?fname" ":"")$i
+        if(fname==path){print $1; exit}
+      }' "$s3_manifest" || true)
+
+      if [ -z "$remote_size" ]; then
+        echo "  SKIP: $rel_path — not found in S3" >&2
+        cleanup_skipped=$((cleanup_skipped + 1))
+        continue
+      fi
+
+      if [ "$local_size" != "$remote_size" ]; then
+        echo "  SKIP: $rel_path — size mismatch (local=${local_size}, S3=${remote_size})" >&2
+        cleanup_skipped=$((cleanup_skipped + 1))
+        continue
+      fi
+
+      rm -f "$local_file"
+      cleanup_deleted=$((cleanup_deleted + 1))
+    done < <(find "$source_dir" -type f -print0)
+
+    rm -f "$s3_manifest"
+
+    # Remove empty directories left behind
+    find "$source_dir" -type d -empty -delete 2>/dev/null || true
+
+    echo "[$d] Cleanup done."
+  done
+
+  echo ""
+  echo "======================================================="
+  echo "  Cleanup summary:"
+  echo "    Deleted:  $cleanup_deleted files"
+  echo "    Skipped:  $cleanup_skipped files (not in S3 or size mismatch)"
+  echo "    Errors:   $cleanup_errors directories skipped entirely"
+
+  freed_mb=0
+  for d in "${DIRS_TO_SYNC[@]}"; do
+    dir_path="$LOCAL_IMMICH/$d"
+    if [ -d "$dir_path" ]; then
+      remaining=$(du -sm "$dir_path" 2>/dev/null | cut -f1)
+      echo "    Remaining in $d/: ${remaining:-0} MB"
+    fi
+  done
+  echo "======================================================="
+fi
 
 exit "$total_errors"

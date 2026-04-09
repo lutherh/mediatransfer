@@ -275,9 +275,18 @@ If you already have photos in `data/immich/library/`, sync them to S3 first:
 ```bash
 ./scripts/sync-immich-to-s3.sh              # dry run -- shows what would happen
 ./scripts/sync-immich-to-s3.sh --execute    # actually copies files
+./scripts/sync-immich-to-s3.sh --execute --verify  # copies + verifies checksums
 ```
 
 This uploads your local originals to S3 so they're still accessible after the switch.
+
+Once Immich is running on the S3 mount and everything looks good, free up local disk space:
+
+```bash
+./scripts/sync-immich-to-s3.sh --cleanup    # verifies each file in S3, then deletes local copy
+```
+
+This only deletes a local file if the S3 copy has a matching size. Files that are missing or differ are kept.
 
 ### Step 5: Start Immich
 
