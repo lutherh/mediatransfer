@@ -115,35 +115,21 @@ function ScheduleRow({
   const [cleanupPhase, setCleanupPhase] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Clean up polling interval on unmount
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, []);
+  const mountedRef = useRef(true);
 
   const isCleanup = task.id === 'local-cleanup';
 
-  const handleRunNow = async () => {
-    setRunning(true);
-    setCleanupPhase(0);
-    setError(null);
+  /** Start polling a job by ID. Shared between "Run Now" and mount-resume. */
+  const startPolling = useCallback((jobId: string) => {
+    if (pollRef.current) clearInterval(pollRef.current);
 
-    const jobId = await onRunNow(task.id);
-    if (!jobId) {
-      setRunning(false);
-      return;
-    }
-
-    // Poll for job completion
     pollRef.current = setInterval(async () => {
       try {
         const res = await apiFetch(`${API_BASE_URL}/pipeline/jobs/${jobId}`);
-        if (!res.ok) { if (pollRef.current) clearInterval(pollRef.current); pollRef.current = null; setRunning(false); return; }
+        if (!res.ok) { if (pollRef.current) clearInterval(pollRef.current); pollRef.current = null; if (mountedRef.current) setRunning(false); return; }
         const data = await res.json();
 
-        if (isCleanup) {
+        if (isCleanup && mountedRef.current) {
           // Derive cleanup phase from output lines
           const output = (data.output as string[]) ?? [];
           const last = output[output.length - 1] ?? '';
@@ -157,6 +143,7 @@ function ScheduleRow({
         if (data.status === 'completed' || data.status === 'failed') {
           if (pollRef.current) clearInterval(pollRef.current);
           pollRef.current = null;
+          if (!mountedRef.current) return;
           if (data.status === 'failed') {
             const output = (data.output as string[]) ?? [];
             const lastLines = output.slice(-3).join(' ').replace(/\[stderr\]\s*/g, '').trim();
@@ -168,10 +155,51 @@ function ScheduleRow({
       } catch {
         if (pollRef.current) clearInterval(pollRef.current);
         pollRef.current = null;
-        setRunning(false);
-        setCleanupPhase(0);
+        if (mountedRef.current) { setRunning(false); setCleanupPhase(0); }
       }
     }, 1500);
+  }, [isCleanup]);
+
+  // On mount: check backend for an active job for this task and resume polling
+  useEffect(() => {
+    mountedRef.current = true;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await apiFetch(`${API_BASE_URL}/pipeline/jobs`);
+        if (!res.ok || cancelled) return;
+        const jobs = (await res.json()) as { id: string; taskId: string; status: string }[];
+        const active = jobs.find((j) => j.taskId === task.id && j.status === 'running');
+        if (active && !cancelled) {
+          setRunning(true);
+          setError(null);
+          startPolling(active.id);
+        }
+      } catch {
+        // Silently ignore — no running job to resume
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      mountedRef.current = false;
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [task.id, startPolling]);
+
+  const handleRunNow = async () => {
+    setRunning(true);
+    setCleanupPhase(0);
+    setError(null);
+
+    const jobId = await onRunNow(task.id);
+    if (!jobId) {
+      setRunning(false);
+      return;
+    }
+
+    startPolling(jobId);
   };
 
   const runningBorder = running
