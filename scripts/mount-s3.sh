@@ -52,11 +52,17 @@ if [ -z "$ACCESS_KEY" ] || [ -z "$SECRET_KEY" ]; then
   exit 1
 fi
 
-# Resolve endpoint from region (region code or full URL)
+# Resolve endpoint and signing region from SCW_REGION (accepts code or full URL)
 if [[ "$REGION" =~ ^https?:// ]]; then
   ENDPOINT="$REGION"
+  SIGNING_REGION=$(echo "$REGION" | sed -n 's|.*s3\.\([a-z0-9-]*\)\.scw\.cloud.*|\1|p')
+  if [ -z "$SIGNING_REGION" ]; then
+    echo "ERROR: Cannot derive signing region from endpoint URL: $REGION" >&2
+    exit 1
+  fi
 else
   ENDPOINT="https://s3.${REGION}.scw.cloud"
+  SIGNING_REGION="$REGION"
 fi
 
 # Mount config from .env.immich (falls back to .env for bucket)
@@ -109,7 +115,7 @@ RCLONE_ARGS=(
   --s3-access-key-id "$ACCESS_KEY"
   --s3-secret-access-key "$SECRET_KEY"
   --s3-endpoint "$ENDPOINT"
-  --s3-region nl-ams
+  --s3-region "$SIGNING_REGION"
   ${STORAGE_CLASS:+--s3-storage-class "$STORAGE_CLASS"}
   --vfs-cache-mode writes
   --vfs-write-back 5s

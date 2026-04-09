@@ -42,5 +42,8 @@ export async function main(): Promise<void> {
 const currentPath = fileURLToPath(import.meta.url);
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
 if (currentPath === invokedPath) {
-  void main();
+  main().catch((err) => {
+    console.error('Fatal startup error:', err);
+    process.exit(1);
+  });
 }
