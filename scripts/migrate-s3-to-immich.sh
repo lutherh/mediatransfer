@@ -27,7 +27,7 @@ DONE_FILE="$SCRIPT_DIR/migration-done-years.txt"
 read_env_val() {
   local file="$1" key="$2" default="${3:-}"
   local val
-  val=$(grep -E "^\s*${key}\s*=" "$file" 2>/dev/null | head -1 | sed "s/^[^=]*=\s*//" | sed "s/^[\"']//;s/[\"']\s*$//")
+  val=$(grep -E "^\s*${key}\s*=" "$file" 2>/dev/null | head -1 | sed "s/^[^=]*=\s*//" | sed "s/^[\"']//;s/[\"']\s*$//" | tr -d '\r')
   echo "${val:-$default}"
 }
 

@@ -314,7 +314,7 @@ export function CatalogDedupPage() {
     stopPolling();
     pollRef.current = setInterval(async () => {
       try {
-        const status = await fetchDedupScanStatus(apiToken);
+        const status = await fetchDedupScanStatus();
         if (status.status === 'scanning') {
           setProgress({ listed: status.listed, totalFiles: status.totalFiles });
         } else if (status.status === 'done') {
@@ -335,7 +335,7 @@ export function CatalogDedupPage() {
         // Network error — keep polling
       }
     }, 3_000);
-  }, [apiToken, stopPolling]);
+  }, [stopPolling]);
 
   /** Kick off a new scan via SSE, with automatic fallback to polling. */
   const startScan = useCallback(() => {
@@ -358,7 +358,6 @@ export function CatalogDedupPage() {
           setProgress({ listed: 'listed' in event ? event.listed : 0, totalFiles: event.totalFiles });
         }
       },
-      apiToken,
       controller.signal,
     )
       .then((result) => {
@@ -377,12 +376,12 @@ export function CatalogDedupPage() {
         setScanError(msg || 'Scan failed');
         setScanStatus('error');
       });
-  }, [apiToken, pollForResult, stopPolling]);
+  }, [pollForResult, stopPolling]);
 
   // On mount: check if the server already has scan results or a scan in progress
   useEffect(() => {
     let cancelled = false;
-    fetchDedupScanStatus(apiToken)
+    fetchDedupScanStatus()
       .then((status) => {
         if (cancelled) return;
         if (status.status === 'done') {
@@ -399,7 +398,7 @@ export function CatalogDedupPage() {
         // Catalog unavailable — show idle, user can retry
       });
     return () => { cancelled = true; };
-  }, [apiToken, pollForResult]);
+  }, [pollForResult]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -464,7 +463,7 @@ export function CatalogDedupPage() {
       setDeleteProgress({ deleted: 0, total });
       // Delete in batches of 200 to respect body size limits
       for (let i = 0; i < encodedKeys.length; i += DELETE_BATCH_SIZE) {
-        await deleteCatalogItems(encodedKeys.slice(i, i + DELETE_BATCH_SIZE), apiToken);
+        await deleteCatalogItems(encodedKeys.slice(i, i + DELETE_BATCH_SIZE));
         setDeleteProgress({ deleted: Math.min(i + DELETE_BATCH_SIZE, total), total });
       }
       return allDupKeys;

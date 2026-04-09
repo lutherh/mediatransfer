@@ -9,6 +9,7 @@ const mockCreateTransfer = vi.fn();
 
 vi.mock('@/lib/api', () => ({
   createTransfer: (...args: unknown[]) => mockCreateTransfer(...args),
+  checkTransferDuplicates: vi.fn(async () => ({ items: [], duplicateCount: 0, totalChecked: 0 })),
 }));
 
 const mockItems: PickedMediaItem[] = [
@@ -85,10 +86,12 @@ describe('ReviewTransferStep', () => {
     const onTransferCreated = vi.fn();
     renderStep(onTransferCreated);
 
-    const startBtn = screen.getByRole('button', { name: /start transfer/i });
-    expect(startBtn).toBeInTheDocument();
+    // Wait for duplicate check to finish so the button becomes enabled
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /start transfer/i })).not.toBeDisabled();
+    });
 
-    fireEvent.click(startBtn);
+    fireEvent.click(screen.getByRole('button', { name: /start transfer/i }));
 
     await waitFor(() => {
       expect(onTransferCreated).toHaveBeenCalledWith('job-new-1');
@@ -108,6 +111,9 @@ describe('ReviewTransferStep', () => {
     mockCreateTransfer.mockRejectedValue(new Error('Queue full'));
 
     renderStep();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /start transfer/i })).not.toBeDisabled();
+    });
     fireEvent.click(screen.getByRole('button', { name: /start transfer/i }));
 
     expect(await screen.findByText(/queue full/i)).toBeInTheDocument();
@@ -125,6 +131,9 @@ describe('ReviewTransferStep', () => {
     mockCreateTransfer.mockReturnValue(new Promise(() => {})); // never resolves
 
     renderStep();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /start transfer/i })).not.toBeDisabled();
+    });
     fireEvent.click(screen.getByRole('button', { name: /start transfer/i }));
 
     await waitFor(() => {

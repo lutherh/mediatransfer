@@ -52,11 +52,9 @@ import { clearThumbnailFailures } from '@/lib/thumbnail-queue';
 function AddToAlbumModal({
   onClose,
   onAdd,
-  apiToken,
 }: {
   onClose: () => void;
   onAdd: (albumId: string) => void;
-  apiToken: string | undefined;
 }) {
   const queryClient = useQueryClient();
   const [newAlbumMode, setNewAlbumMode] = useState(false);
@@ -64,12 +62,12 @@ function AddToAlbumModal({
 
   const albumsQuery = useQuery({
     queryKey: ['albums'],
-    queryFn: () => fetchAlbums(apiToken),
+    queryFn: () => fetchAlbums(),
     staleTime: 30_000,
   });
 
   const createMutation = useMutation({
-    mutationFn: (name: string) => createAlbum(name, apiToken),
+    mutationFn: (name: string) => createAlbum(name),
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: ['albums'] });
       onAdd(result.id);
@@ -327,7 +325,7 @@ function InfoPanel({
 
   const exifQuery = useQuery({
     queryKey: ['catalog-exif', item.encodedKey],
-    queryFn: () => fetchCatalogExif(item.encodedKey, apiToken),
+    queryFn: () => fetchCatalogExif(item.encodedKey),
     staleTime: 5 * 60_000,
     retry: false,
   });
@@ -340,7 +338,7 @@ function InfoPanel({
 
   const moveMutation = useMutation({
     mutationFn: ({ encodedKey, newDatePrefix }: { encodedKey: string; newDatePrefix: string }) =>
-      moveCatalogItem(encodedKey, newDatePrefix, apiToken),
+      moveCatalogItem(encodedKey, newDatePrefix),
     onSuccess: () => {
       setSaveResult('success');
       // Pre-invalidate so the grid is ready when the lightbox closes.
@@ -1039,8 +1037,8 @@ export function CatalogPage() {
   }, []);
 
   const statsQuery = useQuery({
-    queryKey: ['catalog-stats', apiToken],
-    queryFn: () => fetchCatalogStats(apiToken),
+    queryKey: ['catalog-stats'],
+    queryFn: () => fetchCatalogStats(),
     retry: false,
     staleTime: 5 * 60_000,
     refetchOnWindowFocus: false,
@@ -1048,8 +1046,8 @@ export function CatalogPage() {
   });
 
   const dateDistQuery = useQuery({
-    queryKey: ['catalog-date-distribution', apiToken],
-    queryFn: () => fetchDateDistribution(apiToken),
+    queryKey: ['catalog-date-distribution'],
+    queryFn: () => fetchDateDistribution(),
     retry: false,
     staleTime: 5 * 60_000,
     refetchOnWindowFocus: false,
@@ -1059,9 +1057,9 @@ export function CatalogPage() {
   const sortDirection = sortNewestFirst ? 'desc' : 'asc';
 
   const itemsQuery = useInfiniteQuery({
-    queryKey: ['catalog-items', prefix, sortDirection, apiToken],
+    queryKey: ['catalog-items', prefix, sortDirection],
     queryFn: ({ pageParam }) =>
-      fetchCatalogItems({ token: pageParam as string | undefined, prefix: prefix || undefined, max: 100, sort: sortDirection, apiToken }),
+      fetchCatalogItems({ token: pageParam as string | undefined, prefix: prefix || undefined, max: 100, sort: sortDirection }),
     getNextPageParam: (lastPage) => lastPage.nextToken,
     initialPageParam: undefined as string | undefined,
     staleTime: 5 * 60_000,
@@ -1254,7 +1252,7 @@ export function CatalogPage() {
       setSelected(new Set());
       setConfirmDelete(false);
       for (let i = 0; i < encodedKeys.length; i += 200) {
-        await deleteCatalogItems(encodedKeys.slice(i, i + 200), apiToken);
+        await deleteCatalogItems(encodedKeys.slice(i, i + 200));
       }
     },
     onSuccess: (_data, encodedKeys) => {
@@ -1283,7 +1281,7 @@ export function CatalogPage() {
   const addToAlbumMutation = useMutation({
     mutationFn: (albumId: string) => {
       const rawKeys = [...selected].map((ek) => encodedToKey.get(ek) ?? ek);
-      return updateAlbum(albumId, { addKeys: rawKeys }, apiToken);
+      return updateAlbum(albumId, { addKeys: rawKeys });
     },
     onSuccess: () => {
       setShowAlbumModal(false);
@@ -1444,7 +1442,6 @@ export function CatalogPage() {
       {/* ── Add to Album modal ───────────────────────────────────────── */}
       {showAlbumModal && (
         <AddToAlbumModal
-          apiToken={apiToken}
           onClose={() => setShowAlbumModal(false)}
           onAdd={(albumId) => addToAlbumMutation.mutate(albumId)}
         />
