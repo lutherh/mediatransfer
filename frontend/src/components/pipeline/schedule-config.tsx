@@ -1,8 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? `http://${window.location.hostname}:3000`;
+import { apiFetch, API_BASE_URL } from '@/lib/api';
 
 /* ─── Types ────────────────────────────────────────────────────── */
 type ScheduleTask = {
@@ -140,7 +139,7 @@ function ScheduleRow({
     // Poll for job completion
     pollRef.current = setInterval(async () => {
       try {
-        const res = await fetch(`${API_BASE_URL}/pipeline/jobs/${jobId}`);
+        const res = await apiFetch(`${API_BASE_URL}/pipeline/jobs/${jobId}`);
         if (!res.ok) { if (pollRef.current) clearInterval(pollRef.current); pollRef.current = null; setRunning(false); return; }
         const data = await res.json();
 
@@ -342,7 +341,7 @@ export function ScheduleConfig() {
 
   const handleRunNow = useCallback(async (id: string): Promise<string | null> => {
     try {
-      const res = await fetch(`${API_BASE_URL}/pipeline/run/${id}`, { method: 'POST' });
+      const res = await apiFetch(`${API_BASE_URL}/pipeline/run/${id}`, { method: 'POST' });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         console.error(`[schedule] Run failed: ${body.error ?? res.statusText}`);
