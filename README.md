@@ -29,7 +29,7 @@ If you want the short version: this is a practical migration tool for getting ou
 
 Install these first:
 
-1. Node.js 20.19+ or 22.12+
+1. Node.js 20.19+, 22.12+, or 24.0+
 2. Docker Desktop
 3. Git
 
@@ -67,7 +67,8 @@ Fill in these values in `.env`:
 - `SCW_ACCESS_KEY`
 - `SCW_SECRET_KEY`
 - `SCW_BUCKET`
-- `SCW_REGION` if you are not using the default
+- `SCW_REGION` if you are not using the default (`fr-par`)
+- `SCW_STORAGE_CLASS` defaults to `ONEZONE_IA` (cheaper for infrequently-accessed backup data)
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `GOOGLE_REDIRECT_URI` should stay `http://localhost:5173/auth/google/callback` unless you intentionally change the frontend port
@@ -202,15 +203,22 @@ After upload, use the local catalog UI:
 | `npm run takeout:verify` | Verify uploaded media |
 | `npm run takeout:resume` | Resume interrupted Takeout upload |
 | `npm run takeout:watch` | Watch downloads and process incrementally |
+| `npm run takeout:process` | Scan + upload in one step |
+| `npm run takeout:cleanup` | Clean up processed Takeout files |
+| `npm run takeout:repair-dates` | Repair dates from sidecar metadata |
+| `npm run takeout:repair-dates-s3` | Repair dates for `unknown-date` prefix in S3 |
+| `npm run lint` | Type-check without emitting |
 
 ## Optional: Immich
 
 If you want phone auto-backup in addition to object storage, you can run Immich locally alongside this project.
 
 Immich does not have a native S3 storage backend. The supported approach is:
-- mount your bucket on the host (for example via `rclone mount`)
-- set `UPLOAD_LOCATION` to that mounted path (originals)
-- keep `THUMB_LOCATION` and `ENCODED_VIDEO_LOCATION` local for performance
+- mount your S3 bucket on the host with rclone
+- point `UPLOAD_LOCATION` at the mount (originals go to S3)
+- keep thumbs, transcodes, profile, and backups on local disk for performance
+
+### Setup
 
 Create the Immich env file:
 
@@ -219,10 +227,26 @@ Copy-Item .env.immich.example .env.immich
 ```
 
 Edit `.env.immich` and set:
-- `UPLOAD_LOCATION` -> your S3 mount path
-- `THUMB_LOCATION`, `ENCODED_VIDEO_LOCATION`, `PROFILE_LOCATION`, `BACKUP_LOCATION` -> local disk paths
+- `RCLONE_BUCKET` — your S3 bucket name
+- `RCLONE_PREFIX` — path prefix inside the bucket (default: `immich`)
 
-Start Immich:
+The defaults point `UPLOAD_LOCATION` at `./data/immich-s3` (the mount point) and keep generated files local under `./data/immich/`.
+
+### Mount your bucket
+
+The repo includes mount scripts that read config from `.env.immich`:
+
+```powershell
+# Windows (requires WinFsp + rclone)
+.\scripts\mount-s3.ps1
+
+# Linux (requires fuse3 + rclone)
+./scripts/mount-s3.sh
+```
+
+Both scripts support `-Background` / `--background` for daemon mode and `-Unmount` / `--unmount` to tear down.
+
+### Start Immich
 
 ```bash
 docker compose -f docker-compose.immich.yml up -d
@@ -238,11 +262,11 @@ http://<your-pc-ip>:2283
 
 On Windows you may need a firewall rule for port `2283`.
 
-If you already uploaded media into Scaleway, the repo includes PowerShell helpers to import that media into Immich with `rclone` and `immich-go`.
+If you already have media in Scaleway from earlier uploads, the repo includes helpers to migrate that data into Immich (`scripts/migrate-s3-to-immich.ps1`, `scripts/sync-immich-to-s3.ps1`).
 
 ## Security Notes
 
-- `.env` is gitignored and should stay local
+- `.env` and all `.env.*` files (except the `.example` templates) are gitignored
 - The app validates config at startup and fails fast on bad env values
 - `ENCRYPTION_SECRET` is used to encrypt stored cloud credentials
 - In local development, services are intended to stay on your machine unless you explicitly expose them
