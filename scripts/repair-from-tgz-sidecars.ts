@@ -7,9 +7,9 @@
  * undated S3 files.
  *
  * Usage:
- *   npx tsx scripts/repair-from-tgz-sidecars.ts --tgz-dir "D:\archive-already-uploaded"
- *   npx tsx scripts/repair-from-tgz-sidecars.ts --tgz-dir "D:\archive-already-uploaded" --apply
- *   npx tsx scripts/repair-from-tgz-sidecars.ts --tgz-dir "D:\archive-already-uploaded" --prefix unknown-date --apply
+ *   npx tsx scripts/repair-from-tgz-sidecars.ts --tgz-dir "/path/to/archives"
+ *   npx tsx scripts/repair-from-tgz-sidecars.ts --tgz-dir "/path/to/archives" --apply
+ *   npx tsx scripts/repair-from-tgz-sidecars.ts --tgz-dir "/path/to/archives" --prefix unknown-date --apply
  */
 import * as dotenv from 'dotenv';
 import fs from 'node:fs';
@@ -43,7 +43,7 @@ const tgzDir = readStringArg(args, '--tgz-dir');
 
 if (!tgzDir) {
   console.error('❌ --tgz-dir is required. Point it at the directory with your .tgz archives.');
-  console.error('   Example: npx tsx scripts/repair-from-tgz-sidecars.ts --tgz-dir "D:\\archive-already-uploaded"');
+  console.error('   Example: npx tsx scripts/repair-from-tgz-sidecars.ts --tgz-dir "/path/to/archives"');
   process.exit(1);
 }
 
