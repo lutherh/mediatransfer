@@ -64,7 +64,7 @@ const IO_CONCURRENCY = 32;
  * @returns The metadata object (also persisted to disk)
  */
 export async function extractAndPersistArchiveMetadata(
-  extractDir: string,
+  _extractDir: string,
   entries: ManifestEntry[],
   archiveName: string,
   metadataDir: string,
