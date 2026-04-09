@@ -52,21 +52,15 @@ git clone https://github.com/lutherh/mediatransfer.git
 cd mediatransfer
 ```
 
-### Step 2: Create your config file
+### Step 2: Add your Scaleway credentials
 
-Windows (PowerShell):
-```powershell
-Copy-Item .env.example .env
-```
-
-macOS / Linux:
 ```bash
-cp .env.example .env
+npm run app:setup
 ```
 
-### Step 3: Fill in your `.env`
+If `.env` doesn't exist yet, setup creates it from `.env.example` automatically.
 
-Open `.env` in any text editor. You need to fill in **at minimum** these values:
+Open `.env` in any text editor and fill in **at minimum** these values:
 
 | Variable | Where to get it | Example |
 |---|---|---|
@@ -79,7 +73,7 @@ Leave everything else as-is for now. The defaults work.
 
 > **Tip:** `SCW_STORAGE_CLASS` defaults to `ONEZONE_IA` which is cheaper for backup data. You don't need to change it.
 
-### Step 4: Run setup
+### Step 3: Run setup again (with credentials)
 
 ```bash
 npm run app:setup
@@ -90,16 +84,11 @@ This does everything for you:
 - Starts PostgreSQL and Redis via Docker
 - Creates the database tables
 - Generates a random `ENCRYPTION_SECRET` (if yours still says `change-me-to-a-random-secret`)
+- Verifies S3 connectivity (you should see `4 passed, 0 failed`)
 
-### Step 5: Verify S3 connectivity
+If the S3 check fails, double-check your Scaleway keys in `.env` and run setup again.
 
-```bash
-npx tsx scripts/test-s3-quick.ts
-```
-
-You should see `4 passed, 0 failed`. If it fails, double-check your Scaleway keys.
-
-### Step 6: Start the app
+### Step 4: Start the app
 
 ```bash
 npm run app:dev
@@ -213,7 +202,7 @@ After upload, use the local catalog UI:
 
 | Command | Purpose |
 |---|---|
-| `npm run app:setup` | Install deps and prepare local services |
+| `npm run app:setup` | Install deps, start services, create DB tables, verify S3 |
 | `npm run app:dev` | Run backend and frontend in dev mode |
 | `npm run build` | TypeScript build |
 | `npm run test` | Run tests |
@@ -236,26 +225,23 @@ Immich gives you phone auto-backup and a local photo browsing UI — like Google
 
 ### Step 1: Install prerequisites
 
-**Windows:**
-```powershell
-winget install Rclone.Rclone
-winget install WinFsp.WinFsp
-```
-> You may need to **restart your terminal** after installing WinFsp.
+All scripts are bash. On Windows, run them inside **WSL2** (which Docker Desktop already uses).
 
-**Linux:**
+**Windows (inside WSL2):**
 ```bash
-sudo apt install rclone fuse3
+sudo apt update && sudo apt install rclone fuse3
+```
+
+> Don't have WSL2? Run `wsl --install` in PowerShell, then reboot. Docker Desktop already requires it.
+
+**Linux / macOS:**
+```bash
+sudo apt install rclone fuse3   # Linux
+brew install rclone macfuse      # macOS
 ```
 
 ### Step 2: Create the Immich config
 
-Windows:
-```powershell
-Copy-Item .env.immich.example .env.immich
-```
-
-Linux / macOS:
 ```bash
 cp .env.immich.example .env.immich
 ```
@@ -269,31 +255,26 @@ That's it. S3 credentials are read from your main `.env` automatically — no ne
 
 ### Step 3: Start the S3 mount
 
-```powershell
-.\scripts\mount-s3.ps1
-```
-
-Or on Linux:
 ```bash
 ./scripts/mount-s3.sh
 ```
 
 You should see:
 ```
-Mounting :s3:my-photos/immich -> C:\dev\...\data\immich-s3
+Mounting :s3:my-photos/immich -> /path/to/data/immich-s3
 ```
 
 **Leave this terminal open.** The mount must stay running while Immich is up.
 
-> **Tip:** Use `-Background` (Windows) or `--background` (Linux) to run it as a daemon so you don't need to keep the terminal open. Use `-Unmount` / `--unmount` to stop it later.
+> **Tip:** Use `--background` to run as a daemon. Use `--unmount` to stop it later.
 
 ### Step 4: Migrate existing Immich data to S3 (skip if fresh install)
 
 If you already have photos in `data/immich/library/`, sync them to S3 first:
 
-```powershell
-.\scripts\sync-immich-to-s3.ps1           # dry run — shows what would happen
-.\scripts\sync-immich-to-s3.ps1 -Execute  # actually copies files
+```bash
+./scripts/sync-immich-to-s3.sh              # dry run -- shows what would happen
+./scripts/sync-immich-to-s3.sh --execute    # actually copies files
 ```
 
 This uploads your local originals to S3 so they're still accessible after the switch.
@@ -323,7 +304,7 @@ New-NetFirewallRule -DisplayName "Immich" -Direction Inbound -LocalPort 2283 -Pr
 ### Startup order (every time)
 
 1. Start Docker Desktop
-2. Start the S3 mount: `.\scripts\mount-s3.ps1 -Background`
+2. Start the S3 mount: `./scripts/mount-s3.sh --background`
 3. Start Immich: `docker compose -f docker-compose.immich.yml up -d`
 
 > **Important:** The mount must be running **before** Immich starts. If Immich starts without the mount, it will write to an empty local folder and won't see existing files.
@@ -332,7 +313,7 @@ New-NetFirewallRule -DisplayName "Immich" -Direction Inbound -LocalPort 2283 -Pr
 
 ```bash
 docker compose -f docker-compose.immich.yml down
-.\scripts\mount-s3.ps1 -Unmount
+./scripts/mount-s3.sh --unmount
 ```
 
 ## Security Notes
@@ -366,16 +347,5 @@ If you are also running Immich:
 
 ```bash
 docker compose -f docker-compose.immich.yml down
-```
-
-Then unmount S3 (if mounted):
-
-Windows:
-```powershell
-.\scripts\mount-s3.ps1 -Unmount
-```
-
-Linux:
-```bash
 ./scripts/mount-s3.sh --unmount
 ```

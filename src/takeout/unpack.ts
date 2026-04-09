@@ -452,20 +452,6 @@ export function detectArchiveParts(archivePaths: string[]): { partNumbers: numbe
   };
 }
 
-async function getTotalArchiveSize(archivePaths: string[]): Promise<number> {
-  let total = 0;
-  for (const p of archivePaths) {
-    try {
-      const stat = await fs.stat(p);
-      total += stat.size;
-    } catch (err) {
-      console.debug('[unpack] Failed to stat archive for size calculation', { archivePath: p, err });
-      // skip if inaccessible
-    }
-  }
-  return total;
-}
-
 function buildMetadataOnlyError(archives: string[], inputDir: string): string {
   const { partNumbers, isMultiPart } = detectArchiveParts(archives);
   const lines: string[] = [];

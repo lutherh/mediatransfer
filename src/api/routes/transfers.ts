@@ -448,10 +448,6 @@ function getCompletedMediaItemIds(logs: Array<{ message: string; meta?: unknown 
   return parseItemLogs(logs).completedKeys;
 }
 
-function getLatestItemStatuses(logs: Array<{ meta?: unknown }>): Map<string, string> {
-  // Cast is safe: the function only reads .meta which both types share
-  return parseItemLogs(logs as Array<{ message: string; meta?: unknown }>).latestStatusByItem;
-}
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }

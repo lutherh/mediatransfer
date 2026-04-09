@@ -22,7 +22,6 @@ import {
   type ArchiveExtractor,
 } from './unpack.js';
 import {
-  collectDatePrefixes,
   loadUploadState,
   objectExistsCached,
   preloadDestinationIndex,
@@ -38,7 +37,6 @@ import {
 import {
   loadArchiveState,
   persistArchiveState,
-  type ArchiveState,
 } from './incremental.js';
 
 export const DEFAULT_MANIFEST_FILE = 'manifest.jsonl';

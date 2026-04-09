@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { spawn, execSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
@@ -301,11 +301,30 @@ async function ensureDependencies() {
   await runCommand(npmCmd, ['install'], frontendDir);
 }
 
+function readEnvValue(envPath, key) {
+  if (!existsSync(envPath)) return '';
+  const content = readFileSync(envPath, 'utf8');
+  for (const line of content.split(/\r?\n/)) {
+    const match = line.match(new RegExp(`^\\s*${key}\\s*=\\s*(.*?)\\s*$`));
+    if (match) {
+      return (match[1] ?? '').replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1');
+    }
+  }
+  return '';
+}
+
 async function runSetup() {
   const envPath = path.join(rootDir, '.env');
+  const envExamplePath = path.join(rootDir, '.env.example');
+
   if (!existsSync(envPath)) {
-    console.error('Missing .env file. Create it from .env.example and set credentials before starting.');
-    process.exit(1);
+    if (existsSync(envExamplePath)) {
+      copyFileSync(envExamplePath, envPath);
+      console.log('Created .env from .env.example — edit it to add your Scaleway credentials.');
+    } else {
+      console.error('Missing .env file and no .env.example found.');
+      process.exit(1);
+    }
   }
 
   ensureEncryptionSecret(envPath);
@@ -323,6 +342,24 @@ async function runSetup() {
   console.log('Generating Prisma client...');
   validatePrismaSchema();
   await runCommand(npmCmd, ['run', 'prisma:generate'], rootDir);
+
+  console.log('Pushing database schema...');
+  await runCommand(npmCmd, ['run', 'db:push'], rootDir);
+
+  // Run S3 connectivity check if credentials are configured
+  const accessKey = readEnvValue(envPath, 'SCW_ACCESS_KEY');
+  const bucket = readEnvValue(envPath, 'SCW_BUCKET');
+  if (accessKey && bucket) {
+    console.log('Verifying S3 connectivity...');
+    try {
+      const npxCmd = isWindows ? 'npx.cmd' : 'npx';
+      await runCommand(npxCmd, ['tsx', 'scripts/test-s3-quick.ts'], rootDir);
+    } catch {
+      console.warn('S3 connectivity check failed. Double-check your Scaleway credentials in .env.');
+    }
+  } else {
+    console.log('Skipping S3 check — SCW_ACCESS_KEY or SCW_BUCKET not set in .env yet.');
+  }
 }
 
 async function ensureLocalServicesRunning() {
