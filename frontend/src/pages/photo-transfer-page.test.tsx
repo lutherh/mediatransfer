@@ -24,6 +24,7 @@ vi.mock('@/lib/api', () => ({
   fetchPickedItems: (...args: unknown[]) => mockFetchPickedItems(...args),
   deletePickerSession: vi.fn(),
   createTransfer: (...args: unknown[]) => mockCreateTransfer(...args),
+  checkTransferDuplicates: vi.fn(async () => ({ items: [], duplicateCount: 0, totalChecked: 0 })),
   fetchTransferDetail: (...args: unknown[]) => mockFetchTransferDetail(...args),
   pauseTransfer: (...args: unknown[]) => mockPauseTransfer(...args),
   resumeTransfer: (...args: unknown[]) => mockResumeTransfer(...args),
@@ -136,12 +137,13 @@ describe('PhotoTransferPage', () => {
     expect(screen.getByText('Google Photos')).toBeInTheDocument();
     expect(screen.getAllByText('2').length).toBeGreaterThanOrEqual(1);
 
-    // Start transfer
+    // Start transfer — wait for duplicate check to finish first
     mockCreateTransfer.mockResolvedValue({
       job: { id: 'job-full-flow', status: 'PENDING', progress: 0 },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /start transfer/i }));
+    const startBtn = await screen.findByRole('button', { name: /start transfer/i });
+    fireEvent.click(startBtn);
 
     // Step 4: Transfer progress
     mockFetchTransferDetail.mockResolvedValue({

@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: mediatransfer-app
+    user: "0:0"   # Root needed to delete root-owned Immich library files during cleanup
     restart: unless-stopped
     depends_on:
       postgres:
@@ -12,18 +13,45 @@ services:
         condition: service_healthy
     ports:
       - "${PORT:-3000}:3000"
-    command: sh -c "npm run db:push && npm run start"
+    volumes:
+      - ./data:/app/data
+      - ./scripts:/app/scripts:ro
+      - ./.env:/app/.env:ro
+      - ./.env.immich:/app/.env.immich:ro
+    command: ["sh", "-c", "npx prisma db push && exec node dist/index.js"]
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 3000
       API_AUTH_TOKEN: ${API_AUTH_TOKEN}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://192.168.112.*:3000,http://192.168.112.*:5173}
       DATABASE_URL: postgresql://${POSTGRES_USER:-mediatransfer}:${POSTGRES_PASSWORD:-mediatransfer}@postgres:5432/${POSTGRES_DB:-mediatransfer}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_URL: redis://redis:6379
-      ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:-change-me-to-a-random-secret}
+      ENCRYPTION_SECRET: ${ENCRYPTION_SECRET}
+      SCW_ACCESS_KEY: ${SCW_ACCESS_KEY:-}
+      SCW_SECRET_KEY: ${SCW_SECRET_KEY:-}
+      SCW_REGION: ${SCW_REGION:-fr-par}
+      SCW_BUCKET: ${SCW_BUCKET:-}
+      SCW_STORAGE_CLASS: ${SCW_STORAGE_CLASS:-}
+      SCW_PREFIX: ${SCW_PREFIX:-}
+      SCW_S3_REQUEST_TIMEOUT_MS: ${SCW_S3_REQUEST_TIMEOUT_MS:-300000}
+      SCW_S3_LIST_MAX_RETRIES: ${SCW_S3_LIST_MAX_RETRIES:-5}
+      THUMB_CACHE_DIR: ${THUMB_CACHE_DIR:-./data/thumbs}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:5173/auth/google/callback}
+      GOOGLE_REFRESH_TOKEN: ${GOOGLE_REFRESH_TOKEN:-}
+      GOOGLE_ACCESS_TOKEN: ${GOOGLE_ACCESS_TOKEN:-}
+      GOOGLE_TOKEN_EXPIRY_DATE: ${GOOGLE_TOKEN_EXPIRY_DATE:-}
+      GOOGLE_BATCH_STATE_PATH: ${GOOGLE_BATCH_STATE_PATH:-./data/takeout/google-api-state.json}
+      GOOGLE_BATCH_TEMP_DIR: ${GOOGLE_BATCH_TEMP_DIR:-./data/takeout/work/google-api-batches}
+      TAKEOUT_INPUT_DIR: ${TAKEOUT_INPUT_DIR:-./data/takeout/input}
+      TAKEOUT_WORK_DIR: ${TAKEOUT_WORK_DIR:-./data/takeout/work}
+      TRANSFER_STATE_PATH: ${TRANSFER_STATE_PATH:-./data/takeout/state.json}
+      UPLOAD_CONCURRENCY: ${UPLOAD_CONCURRENCY:-4}
+      UPLOAD_RETRY_COUNT: ${UPLOAD_RETRY_COUNT:-5}
     healthcheck:
       test:
         [

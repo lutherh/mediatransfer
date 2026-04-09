@@ -51,6 +51,7 @@ import { registerTakeoutRoutes } from './routes/takeout.js';
 import { registerGoogleAuthRoutes } from './routes/google-auth.js';
 import { registerCloudUsageRoutes } from './routes/cloud-usage.js';
 import { registerUploadRoutes } from './routes/uploads.js';
+import { registerPipelineRoutes } from './routes/pipeline.js';
 import { getStoredTokens, setStoredTokens } from './routes/google-token-store.js';
 import type { ApiServices } from './types.js';
 import { loadEnv, type Env } from '../config/env.js';
@@ -200,6 +201,7 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	await registerUploadRoutes(app, runtime.services.uploads);
 	await registerTakeoutRoutes(app, env);
 	await registerGoogleAuthRoutes(app, env);
+	await registerPipelineRoutes(app);
 
 	app.addHook('onClose', async () => {
 		await runtime.dispose?.();
