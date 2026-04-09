@@ -761,6 +761,7 @@ function createProgressTrackedStream(
   });
 
   source.on('error', (error) => tracker.destroy(error));
+  tracker.on('error', () => source.destroy());
   source.pipe(tracker);
   return tracker;
 }

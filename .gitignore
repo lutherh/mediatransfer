@@ -1,11 +1,18 @@
 node_modules/
 dist/
-.env
 *.log
 coverage/
 .DS_Store
 Thumbs.db
 src/generated/
+
+# ── Secrets & env files (never commit) ──
+.env
+.env.*
+!.env.example
+!.env.immich.example
+*.pem
+*.key
 
 /src/generated/prisma
 data/takeout/google-api-state.json
@@ -33,10 +40,8 @@ data/thumbs/*
 
 # Immich
 data/immich/
-.env.immich
-.env.immich.local
-.env.immich.*.local
 data/immich-s3-mount/
+data/immich-s3/
 data/immich-thumbs/
 data/immich-encoded-video/
 data/immich-profile/

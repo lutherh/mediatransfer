@@ -29,7 +29,7 @@ If you want the short version: this is a practical migration tool for getting ou
 
 Install these first:
 
-1. Node.js 20.19+ or 22.12+
+1. Node.js 20.19+, 22.12+, or 24.0+
 2. Docker Desktop
 3. Git
 
@@ -41,57 +41,77 @@ docker --version
 git --version
 ```
 
-## Quick Start
+## Quick Start — Step by Step
 
-Clone the repo:
+Follow these steps in order. Each step depends on the one before it.
+
+### Step 1: Clone the repo
 
 ```bash
 git clone https://github.com/lutherh/mediatransfer.git
 cd mediatransfer
 ```
 
-Create your local config file:
+### Step 2: Create your config file
 
+Windows (PowerShell):
 ```powershell
 Copy-Item .env.example .env
 ```
 
-On macOS or Linux:
-
+macOS / Linux:
 ```bash
 cp .env.example .env
 ```
 
-Fill in these values in `.env`:
+### Step 3: Fill in your `.env`
 
-- `SCW_ACCESS_KEY`
-- `SCW_SECRET_KEY`
-- `SCW_BUCKET`
-- `SCW_REGION` if you are not using the default
-- `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
-- `GOOGLE_REDIRECT_URI` should stay `http://localhost:5173/auth/google/callback` unless you intentionally change the frontend port
+Open `.env` in any text editor. You need to fill in **at minimum** these values:
 
-Then run setup:
+| Variable | Where to get it | Example |
+|---|---|---|
+| `SCW_ACCESS_KEY` | [Scaleway IAM → API Keys](https://console.scaleway.com/iam/api-keys) | `SCWXXXXXXXXXX` |
+| `SCW_SECRET_KEY` | Same page as above | `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` |
+| `SCW_REGION` | Your bucket's region | `nl-ams` |
+| `SCW_BUCKET` | Name of your Scaleway bucket | `my-photos` |
+
+Leave everything else as-is for now. The defaults work.
+
+> **Tip:** `SCW_STORAGE_CLASS` defaults to `ONEZONE_IA` which is cheaper for backup data. You don't need to change it.
+
+### Step 4: Run setup
 
 ```bash
 npm run app:setup
 ```
 
-That command:
+This does everything for you:
+- Installs Node.js dependencies
+- Starts PostgreSQL and Redis via Docker
+- Creates the database tables
+- Generates a random `ENCRYPTION_SECRET` (if yours still says `change-me-to-a-random-secret`)
 
-- installs dependencies
-- starts PostgreSQL and Redis with Docker
-- prepares the database
-- generates `ENCRYPTION_SECRET` if it is still a placeholder
+### Step 5: Verify S3 connectivity
 
-Start the app:
+```bash
+npx tsx scripts/test-s3-quick.ts
+```
+
+You should see `4 passed, 0 failed`. If it fails, double-check your Scaleway keys.
+
+### Step 6: Start the app
 
 ```bash
 npm run app:dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173).
+Open [http://localhost:5173](http://localhost:5173). You're running.
+
+### What next?
+
+- **Transfer selected photos:** Use the browser picker at [localhost:5173](http://localhost:5173)
+- **Migrate your full library:** See [Full Library Import](#2-full-library-import-with-google-takeout) below
+- **Add phone auto-backup:** See [Optional: Immich](#optional-immich) below
 
 ## Google Cloud Setup
 
@@ -202,27 +222,83 @@ After upload, use the local catalog UI:
 | `npm run takeout:verify` | Verify uploaded media |
 | `npm run takeout:resume` | Resume interrupted Takeout upload |
 | `npm run takeout:watch` | Watch downloads and process incrementally |
+| `npm run takeout:process` | Scan + upload in one step |
+| `npm run takeout:cleanup` | Clean up processed Takeout files |
+| `npm run takeout:repair-dates` | Repair dates from sidecar metadata |
+| `npm run takeout:repair-dates-s3` | Repair dates for `unknown-date` prefix in S3 |
+| `npm run lint` | Type-check without emitting |
 
 ## Optional: Immich
 
-If you want phone auto-backup in addition to object storage, you can run Immich locally alongside this project.
+Immich gives you phone auto-backup and a local photo browsing UI — like Google Photos, but on your own machine. It runs alongside MediaTransfer and stores originals on your S3 bucket.
 
-Immich does not have a native S3 storage backend. The supported approach is:
-- mount your bucket on the host (for example via `rclone mount`)
-- set `UPLOAD_LOCATION` to that mounted path (originals)
-- keep `THUMB_LOCATION` and `ENCODED_VIDEO_LOCATION` local for performance
+> **How it works:** Immich only knows about local folders. We use rclone to mount your S3 bucket as a local folder. Immich writes to it, rclone syncs to S3 in the background. Thumbnails and transcodes stay on your local disk for speed.
 
-Create the Immich env file:
+### Step 1: Install prerequisites
 
+**Windows:**
+```powershell
+winget install Rclone.Rclone
+winget install WinFsp.WinFsp
+```
+> You may need to **restart your terminal** after installing WinFsp.
+
+**Linux:**
+```bash
+sudo apt install rclone fuse3
+```
+
+### Step 2: Create the Immich config
+
+Windows:
 ```powershell
 Copy-Item .env.immich.example .env.immich
 ```
 
-Edit `.env.immich` and set:
-- `UPLOAD_LOCATION` -> your S3 mount path
-- `THUMB_LOCATION`, `ENCODED_VIDEO_LOCATION`, `PROFILE_LOCATION`, `BACKUP_LOCATION` -> local disk paths
+Linux / macOS:
+```bash
+cp .env.immich.example .env.immich
+```
 
-Start Immich:
+Open `.env.immich` and set your bucket name:
+```env
+RCLONE_BUCKET=my-photos
+```
+
+That's it. S3 credentials are read from your main `.env` automatically — no need to paste them again.
+
+### Step 3: Start the S3 mount
+
+```powershell
+.\scripts\mount-s3.ps1
+```
+
+Or on Linux:
+```bash
+./scripts/mount-s3.sh
+```
+
+You should see:
+```
+Mounting :s3:my-photos/immich -> C:\dev\...\data\immich-s3
+```
+
+**Leave this terminal open.** The mount must stay running while Immich is up.
+
+> **Tip:** Use `-Background` (Windows) or `--background` (Linux) to run it as a daemon so you don't need to keep the terminal open. Use `-Unmount` / `--unmount` to stop it later.
+
+### Step 4: Migrate existing Immich data to S3 (skip if fresh install)
+
+If you already have photos in `data/immich/library/`, sync them to S3 first:
+
+```powershell
+.\scripts\sync-immich-to-s3.ps1           # dry run — shows what would happen
+.\scripts\sync-immich-to-s3.ps1 -Execute  # actually copies files
+```
+
+This uploads your local originals to S3 so they're still accessible after the switch.
+
+### Step 5: Start Immich
 
 ```bash
 docker compose -f docker-compose.immich.yml up -d
@@ -230,19 +306,38 @@ docker compose -f docker-compose.immich.yml up -d
 
 Open [http://localhost:2283](http://localhost:2283) and create the admin account.
 
-To connect a phone, point the Immich mobile app at:
+### Step 6: Connect your phone
 
-```text
+Install the **Immich** app ([iOS](https://apps.apple.com/app/immich/id1613945686) / [Android](https://play.google.com/store/apps/details?id=app.alextran.immich)).
+
+In the app, set the server URL to:
+```
 http://<your-pc-ip>:2283
 ```
 
-On Windows you may need a firewall rule for port `2283`.
+On Windows you may need a firewall rule:
+```powershell
+New-NetFirewallRule -DisplayName "Immich" -Direction Inbound -LocalPort 2283 -Protocol TCP -Action Allow
+```
 
-If you already uploaded media into Scaleway, the repo includes PowerShell helpers to import that media into Immich with `rclone` and `immich-go`.
+### Startup order (every time)
+
+1. Start Docker Desktop
+2. Start the S3 mount: `.\scripts\mount-s3.ps1 -Background`
+3. Start Immich: `docker compose -f docker-compose.immich.yml up -d`
+
+> **Important:** The mount must be running **before** Immich starts. If Immich starts without the mount, it will write to an empty local folder and won't see existing files.
+
+### Stopping Immich
+
+```bash
+docker compose -f docker-compose.immich.yml down
+.\scripts\mount-s3.ps1 -Unmount
+```
 
 ## Security Notes
 
-- `.env` is gitignored and should stay local
+- `.env` and all `.env.*` files (except the `.example` templates) are gitignored
 - The app validates config at startup and fails fast on bad env values
 - `ENCRYPTION_SECRET` is used to encrypt stored cloud credentials
 - In local development, services are intended to stay on your machine unless you explicitly expose them
@@ -261,7 +356,7 @@ If you already uploaded media into Scaleway, the repo includes PowerShell helper
 
 Stop the dev app with `Ctrl+C`.
 
-Stop the Docker services with:
+Stop the Docker services:
 
 ```bash
 docker compose down
@@ -271,4 +366,16 @@ If you are also running Immich:
 
 ```bash
 docker compose -f docker-compose.immich.yml down
+```
+
+Then unmount S3 (if mounted):
+
+Windows:
+```powershell
+.\scripts\mount-s3.ps1 -Unmount
+```
+
+Linux:
+```bash
+./scripts/mount-s3.sh --unmount
 ```
