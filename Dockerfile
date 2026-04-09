@@ -31,5 +31,8 @@ COPY --from=build /app/src/generated ./dist/generated
 COPY prisma ./prisma
 COPY prisma.config.ts ./prisma.config.ts
 
+# Run as non-root user
+USER node
+
 EXPOSE 3000
 CMD ["npm", "run", "start"]
