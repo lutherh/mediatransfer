@@ -94,12 +94,22 @@ function ScheduleRow({
   task,
   onToggle,
   onChangeCron,
+  onRunNow,
 }: {
   task: ScheduleTask;
   onToggle: () => void;
   onChangeCron: (cron: string) => void;
+  onRunNow: () => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [running, setRunning] = useState(false);
+
+  const handleRunNow = () => {
+    setRunning(true);
+    onRunNow();
+    // TODO: replace with actual job status polling when backend is ready
+    setTimeout(() => setRunning(false), 3000);
+  };
 
   return (
     <div
@@ -121,7 +131,7 @@ function ScheduleRow({
         </div>
       </div>
 
-      {/* Schedule selector */}
+      {/* Schedule selector + Run Now */}
       <div className="flex items-center gap-2 flex-shrink-0">
         {editing ? (
           <select
@@ -147,6 +157,30 @@ function ScheduleRow({
             🕐 {cronToHuman(task.cronExpression)}
           </button>
         )}
+
+        {/* Run Now */}
+        <button
+          type="button"
+          onClick={handleRunNow}
+          disabled={running}
+          className={`
+            rounded-md px-2.5 py-1 text-xs font-medium transition-all duration-200
+            ${running
+              ? 'bg-sky-700/50 text-sky-300 cursor-wait'
+              : 'bg-sky-600/20 text-sky-400 hover:bg-sky-600/40 hover:text-sky-300'
+            }
+          `}
+          title="Run this job immediately"
+        >
+          {running ? (
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-sky-400 border-t-transparent" />
+              Running…
+            </span>
+          ) : (
+            '▶ Run'
+          )}
+        </button>
 
         {/* Toggle switch */}
         <button
@@ -199,6 +233,11 @@ export function ScheduleConfig() {
     return () => clearTimeout(timer);
   }, []);
 
+  const handleRunNow = useCallback((id: string) => {
+    // TODO: POST to /api/schedules/:id/run when backend is ready
+    console.log(`[schedule] Manual trigger: ${id}`);
+  }, []);
+
   const enabledCount = schedules.filter((s) => s.enabled).length;
 
   return (
@@ -231,6 +270,7 @@ export function ScheduleConfig() {
             task={task}
             onToggle={() => handleToggle(task.id)}
             onChangeCron={(cron) => handleChangeCron(task.id, cron)}
+            onRunNow={() => handleRunNow(task.id)}
           />
         ))}
       </div>
