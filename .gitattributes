@@ -1,2 +1,5 @@
-# Force LF line endings for bash scripts (prevents CRLF breakage on Windows)
+# Force LF line endings for files that run inside Linux containers
 *.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

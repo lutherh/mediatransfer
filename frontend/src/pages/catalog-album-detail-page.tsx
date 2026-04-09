@@ -254,7 +254,7 @@ export function CatalogAlbumDetailPage() {
   // ── Data ──
   const albumsQuery = useQuery({
     queryKey: ['albums'],
-    queryFn: () => fetchAlbums(apiToken),
+    queryFn: () => fetchAlbums(),
     staleTime: 30_000,
   });
 
@@ -265,7 +265,7 @@ export function CatalogAlbumDetailPage() {
   const [nameInput, setNameInput] = useState('');
 
   const renameMutation = useMutation({
-    mutationFn: (name: string) => updateAlbum(albumId!, { name }, apiToken),
+    mutationFn: (name: string) => updateAlbum(albumId!, { name }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['albums'] });
       setEditing(false);
@@ -291,7 +291,7 @@ export function CatalogAlbumDetailPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const deleteAlbumMutation = useMutation({
-    mutationFn: () => deleteAlbum(albumId!, apiToken),
+    mutationFn: () => deleteAlbum(albumId!),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['albums'] });
       navigate('/catalog/albums');
@@ -326,7 +326,7 @@ export function CatalogAlbumDetailPage() {
   const removeMutation = useMutation({
     mutationFn: (indices: Set<number>) => {
       const keys = album!.keys.filter((_, i) => indices.has(i));
-      return updateAlbum(albumId!, { removeKeys: keys }, apiToken);
+      return updateAlbum(albumId!, { removeKeys: keys });
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['albums'] });
