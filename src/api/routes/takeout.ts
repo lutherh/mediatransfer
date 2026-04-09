@@ -2,7 +2,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import os from 'node:os';
-import { createReadStream } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import type { Env } from '../../config/env.js';
 import type { UploadSkipReason, UploadState, UploadStateItem } from '../../takeout/uploader.js';
@@ -107,7 +106,6 @@ type ArchiveHistoryEntry = {
 
 const MAX_OUTPUT_LINES = 300;
 const ACTION_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours — scan of many large archives can take >30 min
-const MANIFEST_COUNT_TIMEOUT_MS = 5000;
 
 // --- Transfer job tracking ---
 // When an upload or resume action runs, we create a TransferJob so
@@ -211,11 +209,6 @@ async function persistAutoUpload(env: Env): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, JSON.stringify({ enabled: autoUploadEnabled }, null, 2), 'utf8');
 }
-const manifestCountCache = new Map<string, {
-  mtimeMs: number;
-  size: number;
-  count: number;
-}>();
 // Cache for manifest destination keys (invalidated when manifest file changes)
 const manifestKeysCache = new Map<string, {
   mtimeMs: number;
@@ -1376,78 +1369,6 @@ async function readManifestKeys(manifestPath: string): Promise<Set<string>> {
     const cached = manifestKeysCache.get(manifestPath);
     return cached?.keys ?? new Set();
   }
-}
-
-async function readManifestCount(manifestPath: string, fallbackCount: number): Promise<number> {
-  try {
-    const stat = await fs.stat(manifestPath);
-    const cached = manifestCountCache.get(manifestPath);
-    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-      return cached.count;
-    }
-
-    const count = await countManifestLinesStream(manifestPath, MANIFEST_COUNT_TIMEOUT_MS);
-    manifestCountCache.set(manifestPath, {
-      mtimeMs: stat.mtimeMs,
-      size: stat.size,
-      count,
-    });
-    return count;
-  } catch (err) {
-    console.debug('[takeout] Falling back to cached manifest count', err);
-    const cached = manifestCountCache.get(manifestPath);
-    return cached?.count ?? fallbackCount;
-  }
-}
-
-async function countManifestLinesStream(manifestPath: string, timeoutMs: number): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const stream = createReadStream(manifestPath, { encoding: 'utf8' });
-
-    let count = 0;
-    let remainder = '';
-    let settled = false;
-
-    const finish = (handler: () => void): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      handler();
-    };
-
-    const timeout = setTimeout(() => {
-      stream.destroy(new Error('Manifest count timed out'));
-    }, timeoutMs);
-
-    stream.on('data', (chunk: string) => {
-      const text = remainder + chunk;
-      const lines = text.split(/\r?\n/);
-      remainder = lines.pop() ?? '';
-
-      for (const line of lines) {
-        if (line.trim().length > 0) {
-          count += 1;
-        }
-      }
-    });
-
-    stream.on('end', () => {
-      finish(() => {
-        if (remainder.trim().length > 0) {
-          count += 1;
-        }
-        resolve(count);
-      });
-    });
-
-    stream.on('error', (error) => {
-      finish(() => {
-        reject(error);
-      });
-    });
-  });
 }
 
 
