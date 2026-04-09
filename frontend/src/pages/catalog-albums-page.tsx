@@ -87,17 +87,15 @@ function AlbumCard({
 function NewAlbumDialog({
   onClose,
   onCreated,
-  apiToken,
 }: {
   onClose: () => void;
   onCreated: (id: string) => void;
-  apiToken: string | undefined;
 }) {
   const [name, setName] = useState('');
   const queryClient = useQueryClient();
 
   const createMutation = useMutation({
-    mutationFn: (albumName: string) => createAlbum(albumName, apiToken),
+    mutationFn: (albumName: string) => createAlbum(albumName),
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: ['albums'] });
       onCreated(result.id);
@@ -169,12 +167,12 @@ export function CatalogAlbumsPage() {
 
   const albumsQuery = useQuery({
     queryKey: ['albums'],
-    queryFn: () => fetchAlbums(apiToken),
+    queryFn: () => fetchAlbums(),
     staleTime: 30_000,
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (albumId: string) => deleteAlbum(albumId, apiToken),
+    mutationFn: (albumId: string) => deleteAlbum(albumId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['albums'] });
     },
@@ -271,7 +269,6 @@ export function CatalogAlbumsPage() {
       {/* ── New album dialog ─────────────────────────────────────────── */}
       {showNewAlbum && (
         <NewAlbumDialog
-          apiToken={apiToken}
           onClose={() => setShowNewAlbum(false)}
           onCreated={(id) => {
             setShowNewAlbum(false);

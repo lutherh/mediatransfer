@@ -284,7 +284,7 @@ export function CatalogUndatedPage() {
 
   const undatedQuery = useQuery({
     queryKey: ['catalog-undated'],
-    queryFn: () => fetchUndatedItems(apiToken),
+    queryFn: () => fetchUndatedItems(),
     staleTime: 60_000,
   });
 
@@ -331,7 +331,7 @@ export function CatalogUndatedPage() {
       const results = { moved: [] as { from: string; to: string }[], failed: [] as { key: string; error: string }[] };
       for (let i = 0; i < moves.length; i += 100) {
         const batch = moves.slice(i, i + 100);
-        const res = await bulkMoveCatalogItems(batch, apiToken);
+        const res = await bulkMoveCatalogItems(batch);
         results.moved.push(...res.moved);
         results.failed.push(...res.failed);
       }
@@ -351,7 +351,7 @@ export function CatalogUndatedPage() {
   const deleteMutation = useMutation({
     mutationFn: async (encodedKeys: string[]) => {
       for (let i = 0; i < encodedKeys.length; i += 200) {
-        await deleteCatalogItems(encodedKeys.slice(i, i + 200), apiToken);
+        await deleteCatalogItems(encodedKeys.slice(i, i + 200));
       }
     },
     onSuccess: () => {
