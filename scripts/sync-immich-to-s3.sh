@@ -307,9 +307,9 @@ if $CLEANUP; then
     # Build sorted list of local relative paths
     local_list=$(mktemp)
     TMPFILES+=("$local_list")
-    find "$source_dir" -type f -print0 | \
-      xargs -0 -I{} bash -c 'echo "${1#'"$LOCAL_IMMICH"'/}"' _ {} | \
-      sort > "$local_list"
+    # Strip the LOCAL_IMMICH prefix to get relative paths like "library/admin/2018/..."
+    local_prefix="$LOCAL_IMMICH/"
+    find "$source_dir" -type f | sed "s|^${local_prefix}||" | sort > "$local_list"
 
     local_actual=$(wc -l < "$local_list")
     if [ "$local_actual" -ne "$local_count" ]; then
