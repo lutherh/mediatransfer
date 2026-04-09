@@ -9,8 +9,9 @@ WORKDIR /app
 
 COPY tsconfig.json ./
 COPY prisma ./prisma
+COPY prisma.config.ts ./
 COPY src ./src
-RUN npm run build
+RUN npx prisma generate && npm run build
 
 FROM node:22-bookworm-slim AS production
 WORKDIR /app
@@ -26,6 +27,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/src/generated ./dist/generated
 COPY prisma ./prisma
 COPY prisma.config.ts ./prisma.config.ts
 
