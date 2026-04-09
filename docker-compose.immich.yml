@@ -4,7 +4,8 @@
 # Stop:   docker compose -f docker-compose.immich.yml down
 #
 # Then open http://localhost:2283 to create your admin account.
-# Configure S3 storage in: Administration → Settings → Storage Backend
+# Immich has no native S3 backend. Use a host-level S3 mount (rclone/s3fs)
+# and point UPLOAD_LOCATION to that mount path.
 # On each iPhone, install the Immich app and point it to http://<your-pc-ip>:2283
 
 services:
@@ -14,6 +15,10 @@ services:
     restart: "no"
     volumes:
       - ${UPLOAD_LOCATION:-./data/immich}:/upload
+      - ${THUMB_LOCATION:-./data/immich/thumbs}:/upload/thumbs
+      - ${ENCODED_VIDEO_LOCATION:-./data/immich/encoded-video}:/upload/encoded-video
+      - ${PROFILE_LOCATION:-./data/immich/profile}:/upload/profile
+      - ${BACKUP_LOCATION:-./data/immich/backups}:/upload/backups
     entrypoint: /bin/sh
     command: >
       -c "for d in encoded-video thumbs upload library profile backups; do
@@ -28,6 +33,10 @@ services:
       - "2283:2283"
     volumes:
       - ${UPLOAD_LOCATION:-./data/immich}:/usr/src/app/upload
+      - ${THUMB_LOCATION:-./data/immich/thumbs}:/usr/src/app/upload/thumbs
+      - ${ENCODED_VIDEO_LOCATION:-./data/immich/encoded-video}:/usr/src/app/upload/encoded-video
+      - ${PROFILE_LOCATION:-./data/immich/profile}:/usr/src/app/upload/profile
+      - ${BACKUP_LOCATION:-./data/immich/backups}:/usr/src/app/upload/backups
     env_file:
       - .env.immich
     depends_on:

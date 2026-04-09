@@ -43,3 +43,7 @@ data/immich-profile/
 data/immich-backups/
 migration-done-years.txt
 scripts/immich-update-log.txt
+
+# Personal utility scripts (hardcoded filenames / local paths)
+check-s3-size.ts
+delete-safe-downloads.ts

@@ -207,11 +207,20 @@ After upload, use the local catalog UI:
 
 If you want phone auto-backup in addition to object storage, you can run Immich locally alongside this project.
 
+Immich does not have a native S3 storage backend. The supported approach is:
+- mount your bucket on the host (for example via `rclone mount`)
+- set `UPLOAD_LOCATION` to that mounted path (originals)
+- keep `THUMB_LOCATION` and `ENCODED_VIDEO_LOCATION` local for performance
+
 Create the Immich env file:
 
 ```powershell
 Copy-Item .env.immich.example .env.immich
 ```
+
+Edit `.env.immich` and set:
+- `UPLOAD_LOCATION` -> your S3 mount path
+- `THUMB_LOCATION`, `ENCODED_VIDEO_LOCATION`, `PROFILE_LOCATION`, `BACKUP_LOCATION` -> local disk paths
 
 Start Immich:
 

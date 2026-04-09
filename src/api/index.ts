@@ -686,6 +686,7 @@ function getScalewayConfigFromEnv(env: Env) {
 		accessKey: env.SCW_ACCESS_KEY,
 		secretKey: env.SCW_SECRET_KEY,
 		prefix: env.SCW_PREFIX,
+		storageClass: env.SCW_STORAGE_CLASS,
 	});
 }
 

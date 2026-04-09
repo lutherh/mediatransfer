@@ -5,6 +5,7 @@ import {
   DeleteObjectCommand,
   type ListObjectsV2CommandInput,
   type ListObjectsV2CommandOutput,
+  type StorageClass,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { Readable } from 'node:stream';
@@ -87,6 +88,8 @@ export type ScalewayConfig = ProviderConfig & {
   secretKey: string;
   /** Optional key prefix to scope operations */
   prefix?: string;
+  /** S3 storage class for new uploads (e.g. STANDARD, ONEZONE_IA, GLACIER) */
+  storageClass?: string;
 };
 
 /**
@@ -108,6 +111,7 @@ export function validateScalewayConfig(config: ProviderConfig): ScalewayConfig {
     throw new Error('Scaleway config: "secretKey" is required');
   }
 
+  const { storageClass } = config as Record<string, unknown>;
   return {
     provider: 'scaleway',
     region: region as string,
@@ -115,6 +119,7 @@ export function validateScalewayConfig(config: ProviderConfig): ScalewayConfig {
     accessKey: accessKey as string,
     secretKey: secretKey as string,
     prefix: typeof prefix === 'string' ? prefix : undefined,
+    storageClass: typeof storageClass === 'string' ? storageClass : undefined,
   };
 }
 
@@ -128,10 +133,12 @@ export class ScalewayProvider implements CloudProvider {
   private readonly prefix: string;
   private readonly multipartPartSizeBytes = 16 * 1024 * 1024;
   private readonly multipartQueueSize = 4;
+  private readonly storageClass: StorageClass | undefined;
 
   constructor(config: ScalewayConfig, client?: S3Client) {
     this.bucket = config.bucket;
     this.prefix = config.prefix ?? '';
+    this.storageClass = config.storageClass as StorageClass | undefined;
 
     this.client =
       client ??
@@ -246,7 +253,7 @@ export class ScalewayProvider implements CloudProvider {
         Key: this.fullKey(key),
         Body: stream,
         ContentType: contentType,
-        StorageClass: 'ONEZONE_IA',
+        ...(this.storageClass ? { StorageClass: this.storageClass } : {}),
         ...(metadata && Object.keys(metadata).length > 0 ? { Metadata: metadata } : {}),
       },
     });
