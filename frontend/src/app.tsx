@@ -16,6 +16,7 @@ import { CatalogAlbumDetailPage } from '@/pages/catalog-album-detail-page';
 import { CatalogUndatedPage } from '@/pages/catalog-undated-page';
 import { UploadPage } from '@/pages/upload-page';
 import { SequenceAnalysisPage } from '@/pages/sequence-analysis-page';
+import { PipelinePage } from '@/pages/pipeline-page';
 
 const queryClient = new QueryClient();
 
@@ -38,6 +39,7 @@ export function App() {
             <Route element={<CatalogAlbumDetailPage />} path="catalog/albums/:albumId" />
             <Route element={<CatalogUndatedPage />} path="catalog/undated" />
             <Route element={<CostsPage />} path="costs" />
+            <Route element={<PipelinePage />} path="pipeline" />
             <Route element={<SequenceAnalysisPage />} path="takeout/sequences" />
             <Route element={<NewTransferPage />} path="transfers/new" />
             <Route element={<TransferDetailPage />} path="transfers/:id" />
