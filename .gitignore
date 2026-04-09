@@ -52,3 +52,27 @@ scripts/immich-update-log.txt
 # Personal utility scripts (hardcoded filenames / local paths)
 check-s3-size.ts
 delete-safe-downloads.ts
+
+# One-off root-level test scripts
+test-ffmpeg-resolve.ts
+test-s3-lifecycle.ts
+test-s3-multipart.ts
+test-s3-speed.ts
+test-s3-throughput.ts
+test-s3-upload.ts
+test-s3-verify.ts
+test-sidecar-fix.ts
+
+# One-off debug/repair/test scripts in scripts/
+scripts/debug-*.ts
+scripts/test-moov-*.ts
+scripts/test-google-*.ts
+scripts/reset-upload-state.ts
+scripts/run-repair-wrapper.ts
+scripts/repair-from-tgz-sidecars.ts
+scripts/repair-s3-dates-standalone.ts
+scripts/_test-*
+
+# Obsolete PowerShell/cmd scripts (replaced by .sh)
+scripts/*.ps1
+scripts/immich-update.cmd
