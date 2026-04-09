@@ -21,7 +21,10 @@ ENV NODE_ENV=production
 # libheif + libvips for HEIC/HEIF thumbnail generation, ffmpeg for video frames, rclone for S3 sync
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libvips-dev libheif-dev ffmpeg curl unzip \
-    && curl -fsSL https://rclone.org/install.sh | bash \
+    && curl -fsSL -o /tmp/rclone.zip https://downloads.rclone.org/current/rclone-current-linux-amd64.zip \
+    && unzip -j /tmp/rclone.zip '*/rclone' -d /usr/local/bin/ \
+    && chmod +x /usr/local/bin/rclone \
+    && rm /tmp/rclone.zip \
     && apt-get purge -y curl unzip && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
