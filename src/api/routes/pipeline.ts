@@ -1,5 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { Client } from 'pg';
 
 /**
  * Known pipeline tasks and the scripts/commands they execute.
@@ -33,6 +36,78 @@ type RunningJob = {
 /** In-memory store of recent job runs (kept small — last 20). */
 const recentJobs: RunningJob[] = [];
 const MAX_RECENT = 20;
+
+/**
+ * Parse a simple KEY=VALUE .env file into a Record. Handles quoting and \r.
+ */
+function parseEnvFile(content: string): Record<string, string> {
+	const env: Record<string, string> = {};
+	for (const line of content.split('\n')) {
+		const trimmed = line.replace(/\r$/, '').trim();
+		if (!trimmed || trimmed.startsWith('#')) continue;
+		const eqIdx = trimmed.indexOf('=');
+		if (eqIdx < 1) continue;
+		const key = trimmed.slice(0, eqIdx).trim();
+		let val = trimmed.slice(eqIdx + 1).trim();
+		// Strip surrounding quotes
+		if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+			val = val.slice(1, -1);
+		}
+		env[key] = val;
+	}
+	return env;
+}
+
+/**
+ * Generate a manifest of all active Immich asset paths by querying the
+ * Immich PostgreSQL database directly. The cleanup script reads this file
+ * to know which local files are safe to delete.
+ *
+ * Reads Immich DB credentials from .env.immich (DB_PASSWORD, DB_USERNAME, etc.)
+ * with sensible defaults matching Immich's own docker-compose.
+ */
+async function generateImmichManifest(rootDir: string): Promise<{ count: number }> {
+	// Read credentials from .env.immich (same vars Immich's docker-compose uses)
+	let immichEnv: Record<string, string> = {};
+	try {
+		const raw = await readFile(join(rootDir, '.env.immich'), 'utf-8');
+		immichEnv = parseEnvFile(raw);
+	} catch {
+		// Fall back to defaults if .env.immich isn't readable
+	}
+
+	const client = new Client({
+		host: immichEnv.DB_HOSTNAME || 'immich_postgres',
+		port: Number(immichEnv.DB_PORT) || 5432,
+		user: immichEnv.DB_USERNAME || 'immich',
+		password: immichEnv.DB_PASSWORD || 'immich',
+		database: immichEnv.DB_DATABASE_NAME || 'immich',
+		connectionTimeoutMillis: 5000,
+		statement_timeout: 30000, // 30s query timeout
+	});
+
+	try {
+		await client.connect();
+		const result = await client.query(
+			`SELECT "originalPath" FROM asset WHERE "deletedAt" IS NULL AND status = 'active'`
+		);
+		const paths = result.rows
+			.map((r: { originalPath: string }) => r.originalPath)
+			.filter((p: string) => p && p.length > 0);
+
+		if (paths.length < 100) {
+			throw new Error(
+				`Immich returned only ${paths.length} assets — expected thousands. Aborting to prevent accidental data loss.`
+			);
+		}
+
+		const manifestPath = join(rootDir, 'data', 'immich-asset-paths.txt');
+		await writeFile(manifestPath, paths.join('\n') + '\n', 'utf-8');
+		return { count: paths.length };
+	} finally {
+		await client.end();
+	}
+}
 
 function addJob(job: RunningJob): void {
 	recentJobs.unshift(job);
@@ -100,6 +175,21 @@ export async function registerPipelineRoutes(app: FastifyInstance): Promise<void
 			process: null,
 		};
 		addJob(job);
+
+		// For cleanup tasks, generate the Immich asset manifest first
+		if (taskId === 'local-cleanup') {
+			try {
+				job.output.push('Generating Immich asset manifest from database...');
+				const { count } = await generateImmichManifest(rootDir);
+				job.output.push(`Manifest generated — ${count} active assets. Starting cleanup script.`);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				job.output.push(`[error] Failed to generate Immich manifest: ${msg}`);
+				job.status = 'failed';
+				job.completedAt = new Date().toISOString();
+				return reply.code(202).send({ jobId, taskId, status: 'failed' });
+			}
+		}
 
 		// Spawn the process
 		const child = spawn(taskDef.cmd, taskDef.args, {
