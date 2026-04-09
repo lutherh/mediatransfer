@@ -12,7 +12,7 @@
 param(
     [string]$ImmichUrl   = "http://localhost:2283",
     [string]$ApiKey      = $env:IMMICH_API_KEY,
-    [string]$S3Remote    = "scaleway:photosync/transfers",
+    [string]$S3Remote    = "scaleway:$($env:SCW_BUCKET ?? 'your-bucket')/transfers",
     [string]$TempDir     = "$env:TEMP\immich-migration",
     [string]$ImmichGo    = "$env:LOCALAPPDATA\immich-go\immich-go.exe",
     [string]$DoneFile    = "$PSScriptRoot\migration-done-years.txt"
