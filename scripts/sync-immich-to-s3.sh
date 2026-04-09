@@ -343,15 +343,22 @@ if $CLEANUP; then
 
     # Delete matched files (read from file, not pipe, to avoid subshell counter issues)
     deleted_now=0
+    failed_now=0
     while IFS= read -r rel_path; do
       [ -z "$rel_path" ] && continue
       target="$LOCAL_IMMICH/$rel_path"
       if [ -f "$target" ]; then
-        rm -f "$target"
-        deleted_now=$((deleted_now + 1))
+        if rm -f "$target" 2>/dev/null; then
+          deleted_now=$((deleted_now + 1))
+        else
+          failed_now=$((failed_now + 1))
+          if [ "$failed_now" -le 5 ]; then
+            echo "  ERROR: Cannot delete $rel_path (permission denied?)" >&2
+          fi
+        fi
         # Progress every 1000 files
-        if [ $((deleted_now % 1000)) -eq 0 ]; then
-          echo "  [$d] Deleted $deleted_now / $del_count files..."
+        if [ $(( (deleted_now + failed_now) % 1000)) -eq 0 ]; then
+          echo "  [$d] Progress: $deleted_now deleted, $failed_now failed / $del_count ..."
         fi
       fi
     done < "$delete_list"
@@ -359,7 +366,11 @@ if $CLEANUP; then
     cleanup_deleted=$((cleanup_deleted + deleted_now))
     cleanup_skipped=$((cleanup_skipped + skip_count))
 
-    if [ "$deleted_now" -ne "$del_count" ]; then
+    if [ "$failed_now" -gt 0 ]; then
+      echo "  WARNING: $failed_now files could not be deleted (permission denied)" >&2
+      total_errors=$((total_errors + failed_now))
+    fi
+    if [ "$deleted_now" -ne "$del_count" ] && [ "$failed_now" -eq 0 ]; then
       echo "  WARNING: Expected to delete $del_count but actually deleted $deleted_now" >&2
     fi
 
