@@ -145,85 +145,87 @@ if command -v docker &>/dev/null && docker ps --filter "name=immich_server" --fo
   fi
 fi
 
-# -- Sync each directory --
+# -- Sync each directory (skip when --cleanup — sync is not needed) --
 total_errors=0
 
-for d in "${DIRS_TO_SYNC[@]}"; do
-  source_dir="$LOCAL_IMMICH/$d"
-  if [ ! -d "$source_dir" ]; then
-    echo "[$d] Skipping -- directory does not exist."
-    continue
-  fi
-
-  dest="$DESTINATION/$d"
-  echo ""
-  echo "[$d] Syncing $source_dir -> $dest"
-
-  rclone_args=(
-    sync "$source_dir" "$dest"
-    "${S3_FLAGS[@]}"
-    --progress
-    --transfers 8
-    --checkers 16
-    --s3-chunk-size 16M
-    --s3-upload-concurrency 4
-    --fast-list
-    --log-level INFO
-    --stats 10s
-    --stats-one-line
-  )
-
-  if ! $EXECUTE; then
-    rclone_args+=(--dry-run)
-    echo "[$d] DRY RUN -- no files will be copied."
-  fi
-
-  if rclone "${rclone_args[@]}"; then
-    echo "[$d] Sync completed."
-  else
-    echo "[$d] rclone exited with error." >&2
-    total_errors=$((total_errors + 1))
-  fi
-done
-
-# -- Verification --
-if $VERIFY && $EXECUTE; then
-  echo ""
-  echo "======================================================="
-  echo "  Verification: comparing checksums"
-  echo "======================================================="
-
+if ! $CLEANUP; then
   for d in "${DIRS_TO_SYNC[@]}"; do
     source_dir="$LOCAL_IMMICH/$d"
-    [ ! -d "$source_dir" ] && continue
+    if [ ! -d "$source_dir" ]; then
+      echo "[$d] Skipping -- directory does not exist."
+      continue
+    fi
 
     dest="$DESTINATION/$d"
     echo ""
-    echo "[$d] Checking $source_dir <-> $dest"
+    echo "[$d] Syncing $source_dir -> $dest"
 
-    if rclone check "$source_dir" "$dest" \
-        "${S3_FLAGS[@]}" \
-        --one-way --fast-list --log-level INFO; then
-      echo "[$d] Verification PASSED."
+    rclone_args=(
+      sync "$source_dir" "$dest"
+      "${S3_FLAGS[@]}"
+      --progress
+      --transfers 8
+      --checkers 16
+      --s3-chunk-size 16M
+      --s3-upload-concurrency 4
+      --fast-list
+      --log-level INFO
+      --stats 10s
+      --stats-one-line
+    )
+
+    if ! $EXECUTE; then
+      rclone_args+=(--dry-run)
+      echo "[$d] DRY RUN -- no files will be copied."
+    fi
+
+    if rclone "${rclone_args[@]}"; then
+      echo "[$d] Sync completed."
     else
-      echo "[$d] Verification FAILED -- some files differ." >&2
+      echo "[$d] rclone exited with error." >&2
       total_errors=$((total_errors + 1))
     fi
   done
-fi
 
-# -- Summary --
-echo ""
-echo "======================================================="
-if [ "$total_errors" -gt 0 ]; then
-  echo "  COMPLETED with $total_errors error(s). Review the log above."
-elif ! $EXECUTE && ! $CLEANUP; then
-  echo "  DRY RUN complete -- no changes made."
-  echo "  Run with --execute to sync, or --execute --verify to sync + verify."
-else
-  echo "  SYNC COMPLETE -- all files uploaded to S3."
-fi
-echo "======================================================="
+  # -- Verification --
+  if $VERIFY && $EXECUTE; then
+    echo ""
+    echo "======================================================="
+    echo "  Verification: comparing checksums"
+    echo "======================================================="
+
+    for d in "${DIRS_TO_SYNC[@]}"; do
+      source_dir="$LOCAL_IMMICH/$d"
+      [ ! -d "$source_dir" ] && continue
+
+      dest="$DESTINATION/$d"
+      echo ""
+      echo "[$d] Checking $source_dir <-> $dest"
+
+      if rclone check "$source_dir" "$dest" \
+          "${S3_FLAGS[@]}" \
+          --one-way --fast-list --log-level INFO; then
+        echo "[$d] Verification PASSED."
+      else
+        echo "[$d] Verification FAILED -- some files differ." >&2
+        total_errors=$((total_errors + 1))
+      fi
+    done
+  fi
+
+  # -- Summary --
+  echo ""
+  echo "======================================================="
+  if [ "$total_errors" -gt 0 ]; then
+    echo "  COMPLETED with $total_errors error(s). Review the log above."
+  elif ! $EXECUTE; then
+    echo "  DRY RUN complete -- no changes made."
+    echo "  Run with --execute to sync, or --execute --verify to sync + verify."
+  else
+    echo "  SYNC COMPLETE -- all files uploaded to S3."
+  fi
+  echo "======================================================="
+fi  # end of sync/verify block
 
 # -- Cleanup: delete local files that Immich has already indexed --
 # Instead of querying S3 (slow), we use Immich's own database as the source of
@@ -322,13 +324,18 @@ if $CLEANUP; then
     comm -12 "$local_list" "$manifest_local" > "$delete_list"
 
     del_count=$(grep -c . "$delete_list" || true)
-    skip_count=$(comm -23 "$local_list" "$manifest_local" | grep -c . || true)
+
+    # Build skip list to a file (avoids SIGPIPE from head closing pipe early under set -e)
+    skip_list=$(mktemp)
+    TMPFILES+=("$skip_list")
+    comm -23 "$local_list" "$manifest_local" > "$skip_list"
+    skip_count=$(grep -c . "$skip_list" || true)
 
     echo "[$d] $del_count matched in Immich DB, $skip_count not found"
 
     if [ "$skip_count" -gt 0 ]; then
       echo "[$d] Skipped files (not in Immich DB):"
-      comm -23 "$local_list" "$manifest_local" | head -20 | sed 's/^/  SKIP: /' >&2
+      head -20 "$skip_list" | sed 's/^/  SKIP: /' >&2
       if [ "$skip_count" -gt 20 ]; then
         echo "  ... and $((skip_count - 20)) more" >&2
       fi
