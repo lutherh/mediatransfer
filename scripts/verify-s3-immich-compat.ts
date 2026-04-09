@@ -35,7 +35,6 @@ if (fs.existsSync(envImmich)) {
 
 const region = process.env.SCW_REGION!;
 const bucket = process.env.SCW_BUCKET!;
-const rcloneRemote = immichVars.RCLONE_REMOTE || 'scaleway';
 const rcloneBucket = immichVars.RCLONE_BUCKET || bucket;
 const rclonePrefix = process.argv.includes('--fix-prefix')
   ? process.argv[process.argv.indexOf('--fix-prefix') + 1]
@@ -82,7 +81,6 @@ log('INFO', '══════════════════════�
 log('INFO', '');
 log('INFO', `Bucket:         ${rcloneBucket}`);
 log('INFO', `Immich prefix:  ${rclonePrefix}/`);
-log('INFO', `rclone remote:  ${rcloneRemote}:`);
 log('INFO', `Mount path:     ${uploadLocation}`);
 log('INFO', '');
 
@@ -97,17 +95,12 @@ try {
   errors++;
 }
 
-// ── Check 2: rclone remote exists ───────────────────────────────
+// ── Check 2: rclone installed ───────────────────────────────────
 
-log('INFO', '── Check 2: rclone remote configured ──');
+log('INFO', '── Check 2: rclone installed ──');
 try {
-  const remotes = execSync('rclone listremotes', { encoding: 'utf-8' });
-  if (remotes.includes(`${rcloneRemote}:`)) {
-    log('OK', `rclone remote "${rcloneRemote}:" found.`);
-  } else {
-    log('ERROR', `rclone remote "${rcloneRemote}:" not found. Available: ${remotes.trim()}`);
-    errors++;
-  }
+  execSync('rclone version', { encoding: 'utf-8' });
+  log('OK', 'rclone is installed.');
 } catch {
   log('ERROR', 'rclone is not installed or not in PATH.');
   errors++;
