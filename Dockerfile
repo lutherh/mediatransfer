@@ -39,5 +39,8 @@ COPY prisma.config.ts ./prisma.config.ts
 # Run as non-root user
 USER node
 
+# Ensure SIGTERM reaches the Node process
+STOPSIGNAL SIGTERM
+
 EXPOSE 3000
 CMD ["npm", "run", "start"]

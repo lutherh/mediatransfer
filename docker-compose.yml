@@ -17,7 +17,7 @@ services:
       - ./scripts:/app/scripts:ro
       - ./.env:/app/.env:ro
       - ./.env.immich:/app/.env.immich:ro
-    command: sh -c "npm run db:push && npm run start"
+    command: ["sh", "-c", "npx prisma db push && exec node dist/index.js"]
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
