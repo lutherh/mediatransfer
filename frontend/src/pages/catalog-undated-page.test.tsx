@@ -50,24 +50,27 @@ const MOCK_UNDATED_ITEMS = [
 ];
 
 const mockFetchUndatedItems = vi.fn(async () => ({ items: MOCK_UNDATED_ITEMS }));
-const mockBulkMoveCatalogItems = vi.fn(async () => ({ moved: [{ from: 'a', to: 'b' }], failed: [] }));
-const mockDeleteCatalogItems = vi.fn(async () => {});
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockBulkMoveCatalogItems = vi.fn<any>(async () => ({ moved: [{ from: 'a', to: 'b' }], failed: [] }));
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockDeleteCatalogItems = vi.fn<any>(async () => {});
 const mockFetchTakeoutActionStatus = vi.fn(async () => ({
   running: false,
   action: undefined,
   output: [],
 }));
-const mockRunTakeoutAction = vi.fn(async () => ({
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockRunTakeoutAction = vi.fn<any>(async () => ({
   message: 'started',
   status: { running: true, action: 'repair-dates-s3', output: [] },
 }));
 
 vi.mock('@/lib/api', () => ({
-  fetchUndatedItems: (...args: unknown[]) => mockFetchUndatedItems(...args),
-  bulkMoveCatalogItems: (...args: unknown[]) => mockBulkMoveCatalogItems(...args),
-  deleteCatalogItems: (...args: unknown[]) => mockDeleteCatalogItems(...args),
-  fetchTakeoutActionStatus: (...args: unknown[]) => mockFetchTakeoutActionStatus(...args),
-  runTakeoutAction: (...args: unknown[]) => mockRunTakeoutAction(...args),
+  fetchUndatedItems: () => mockFetchUndatedItems(),
+  bulkMoveCatalogItems: (moves: unknown) => mockBulkMoveCatalogItems(moves),
+  deleteCatalogItems: (keys: unknown) => mockDeleteCatalogItems(keys),
+  fetchTakeoutActionStatus: () => mockFetchTakeoutActionStatus(),
+  runTakeoutAction: (action: unknown) => mockRunTakeoutAction(action),
   catalogThumbnailUrl: (encodedKey: string, size: string) => `/catalog/thumb/${size}/${encodedKey}`,
 }));
 
