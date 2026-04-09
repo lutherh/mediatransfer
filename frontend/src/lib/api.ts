@@ -2,14 +2,17 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? `http://${windo
 const API_TOKEN: string | undefined = import.meta.env.VITE_API_TOKEN ?? undefined;
 const TAKEOUT_FETCH_TIMEOUT_MS = 10_000;
 
-/** Wrapper around fetch() that injects the Authorization header when VITE_API_TOKEN is set. */
+const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
+
+/** Wrapper around fetch() that injects the Authorization header when VITE_API_TOKEN is set.
+ *  Also applies a default 30s timeout via AbortSignal unless one is already provided. */
 export function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  if (!API_TOKEN) return fetch(input, init);
   const headers = new Headers(init?.headers);
-  if (!headers.has('Authorization')) {
+  if (API_TOKEN && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${API_TOKEN}`);
   }
-  return fetch(input, { ...init, headers });
+  const signal = init?.signal ?? AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT_MS);
+  return fetch(input, { ...init, headers, signal });
 }
 
 export type TransferJob = {

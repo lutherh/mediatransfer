@@ -22,19 +22,33 @@ export async function main(): Promise<void> {
     corsAllowedOrigins,
   });
 
-  const shutdown = async (): Promise<void> => {
+  let shuttingDown = false;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[shutdown] ${signal} received — closing gracefully…`);
+
+    // Hard deadline: force-exit after 15s to avoid hanging
+    const forceTimer = setTimeout(() => {
+      console.error('[shutdown] Timeout — forcing exit');
+      process.exit(1);
+    }, 15_000);
+    forceTimer.unref();
+
     try {
       await app.close();
       await disconnectPrisma();
     } catch (err) {
-      console.error('Shutdown error', err);
-      process.exit(1);
+      console.error('[shutdown] Error during cleanup', err);
     }
     process.exit(0);
   };
 
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('unhandledRejection', (reason) => {
+    console.error('[unhandledRejection]', reason);
+  });
 
   await app.listen({ port: env.PORT, host: env.HOST });
 }
