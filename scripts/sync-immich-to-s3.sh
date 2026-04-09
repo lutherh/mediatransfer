@@ -35,7 +35,7 @@ done
 read_env_val() {
   local file="$1" key="$2" default="${3:-}"
   local val
-  val=$(grep -E "^\s*${key}\s*=" "$file" 2>/dev/null | head -1 | sed "s/^[^=]*=\s*//" | sed "s/^[\"']//;s/[\"']\s*$//")
+  val=$(grep -E "^\s*${key}\s*=" "$file" 2>/dev/null | head -1 | sed "s/^[^=]*=\s*//" | sed "s/^[\"']//;s/[\"']\s*$//" | tr -d '\r')
   echo "${val:-$default}"
 }
 
@@ -96,6 +96,10 @@ if $EXECUTE; then
   echo "  Source:       $LOCAL_IMMICH"
   echo "  Destination:  $DESTINATION"
   echo "  Mode:         EXECUTE"
+elif $CLEANUP; then
+  echo "  Source:       $LOCAL_IMMICH"
+  echo "  Destination:  $DESTINATION"
+  echo "  Mode:         CLEANUP (verify + delete local)"
 else
   echo "  Source:       $LOCAL_IMMICH"
   echo "  Destination:  $DESTINATION"
