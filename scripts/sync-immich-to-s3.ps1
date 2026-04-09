@@ -56,7 +56,18 @@ if (-not $accessKey -or -not $secretKey) {
     exit 1
 }
 
-if ($region -match '^https?://') { $endpoint = $region } else { $endpoint = "https://s3.$region.scw.cloud" }
+if ($region -match '^https?://') {
+    $endpoint = $region
+    if ($region -match 's3\.([a-z0-9-]+)\.scw\.cloud') {
+        $signingRegion = $Matches[1]
+    } else {
+        Write-Error "Cannot derive signing region from endpoint URL: $region"
+        exit 1
+    }
+} else {
+    $endpoint = "https://s3.$region.scw.cloud"
+    $signingRegion = $region
+}
 
 $bucket = if ($immichEnv['RCLONE_BUCKET']) { $immichEnv['RCLONE_BUCKET'] } else { $mainEnv['SCW_BUCKET'] }
 $prefix = if ($immichEnv['RCLONE_PREFIX']) { $immichEnv['RCLONE_PREFIX'] } else { 'immich' }
@@ -69,7 +80,7 @@ $s3Flags = @(
     '--s3-access-key-id', $accessKey
     '--s3-secret-access-key', $secretKey
     '--s3-endpoint', $endpoint
-    '--s3-region', 'nl-ams'
+    '--s3-region', $signingRegion
     $(if ($storageClass) { '--s3-storage-class'; $storageClass })
 )
 

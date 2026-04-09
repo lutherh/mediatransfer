@@ -59,11 +59,18 @@ if (-not $accessKey -or -not $secretKey) {
     exit 1
 }
 
-# Resolve endpoint from region (region code or full URL)
+# Resolve endpoint and signing region from SCW_REGION (accepts code or full URL)
 if ($region -match '^https?://') {
     $endpoint = $region
+    if ($region -match 's3\.([a-z0-9-]+)\.scw\.cloud') {
+        $signingRegion = $Matches[1]
+    } else {
+        Write-Error "Cannot derive signing region from endpoint URL: $region"
+        exit 1
+    }
 } else {
     $endpoint = "https://s3.$region.scw.cloud"
+    $signingRegion = $region
 }
 
 # Mount config from .env.immich
@@ -131,7 +138,7 @@ $rcloneArgs = @(
     '--s3-access-key-id', $accessKey
     '--s3-secret-access-key', $secretKey
     '--s3-endpoint', $endpoint
-    '--s3-region', 'nl-ams'
+    '--s3-region', $signingRegion
     $(if ($storageClass) { '--s3-storage-class'; $storageClass })
     '--vfs-cache-mode', 'writes'       # cache writes locally, read-through for reads
     '--vfs-write-back', '5s'           # flush writes to S3 after 5s
