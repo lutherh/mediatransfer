@@ -130,12 +130,23 @@ export async function registerPipelineRoutes(app: FastifyInstance): Promise<void
 			if (job.status !== 'running') return; // already handled by 'error'
 			job.exitCode = code;
 			job.status = code === 0 ? 'completed' : 'failed';
+			// Translate common platform errors into user-friendly messages
+			if (job.status === 'failed') {
+				const combined = job.output.join('\n');
+				if (combined.includes('execvpe') || combined.includes('No such file or directory')) {
+					job.output.push('bash not found — these scripts require a Linux environment (run on your server, not Windows dev)');
+				}
+			}
 			job.completedAt = new Date().toISOString();
 			job.process = null;
 		});
 
 		child.on('error', (err) => {
-			job.output.push(`[error] ${err.message}`);
+			const friendly =
+				err.message.includes('ENOENT') || err.message.includes('No such file')
+					? 'bash not found — these scripts require a Linux environment (run on your server, not Windows dev)'
+					: err.message;
+			job.output.push(`[error] ${friendly}`);
 			job.status = 'failed';
 			job.completedAt = new Date().toISOString();
 			job.process = null;

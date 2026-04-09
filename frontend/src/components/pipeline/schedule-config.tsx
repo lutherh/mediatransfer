@@ -158,7 +158,11 @@ function ScheduleRow({
         if (data.status === 'completed' || data.status === 'failed') {
           if (pollRef.current) clearInterval(pollRef.current);
           pollRef.current = null;
-          if (data.status === 'failed') setError('Job failed — check logs');
+          if (data.status === 'failed') {
+            const output = (data.output as string[]) ?? [];
+            const lastLines = output.slice(-3).join(' ').replace(/\[stderr\]\s*/g, '').trim();
+            setError(lastLines || 'Job failed (no output)');
+          }
           setRunning(false);
           setCleanupPhase(0);
         }
@@ -220,7 +224,9 @@ function ScheduleRow({
             ) : running ? (
               <p className="text-xs text-sky-400 truncate animate-pulse">Running…</p>
             ) : error ? (
-              <p className="text-xs text-red-400 truncate">{error}</p>
+              <p className="text-xs text-red-400" title={error}>
+                {error.length > 120 ? `${error.slice(0, 120)}…` : error}
+              </p>
             ) : (
               <p className="text-xs text-slate-400 truncate">{task.description}</p>
             )}
