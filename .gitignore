@@ -34,5 +34,12 @@ data/thumbs/*
 # Immich
 data/immich/
 .env.immich
+.env.immich.local
+.env.immich.*.local
+data/immich-s3-mount/
+data/immich-thumbs/
+data/immich-encoded-video/
+data/immich-profile/
+data/immich-backups/
 migration-done-years.txt
 scripts/immich-update-log.txt
