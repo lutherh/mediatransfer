@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: mediatransfer-app
+    user: "0:0"   # Root needed to delete root-owned Immich library files during cleanup
     restart: unless-stopped
     depends_on:
       postgres:
