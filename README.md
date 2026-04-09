@@ -234,7 +234,7 @@ The defaults point `UPLOAD_LOCATION` at `./data/immich-s3` (the mount point) and
 
 ### Mount your bucket
 
-The repo includes mount scripts that read config from `.env.immich`:
+The mount scripts read S3 credentials from `.env` and mount config from `.env.immich` — no separate rclone remote or `rclone.conf` is needed:
 
 ```powershell
 # Windows (requires WinFsp + rclone)

@@ -8,9 +8,9 @@
 #   .\scripts\sync-immich-to-s3.ps1 -Execute          # actually sync
 #   .\scripts\sync-immich-to-s3.ps1 -Execute -Verify  # sync + verify checksums
 #
-# Prerequisites:
-#   - rclone configured with "scaleway:" remote
-#   - Immich should be STOPPED during sync to avoid writes to local path
+# S3 credentials are read from .env (same as mount scripts).
+# No rclone remote or rclone.conf is needed.
+# Immich should be STOPPED during sync to avoid writes to local path.
 
 param(
     [switch]$Execute,
@@ -19,27 +19,59 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# ── Helper: parse a .env file into a hashtable ──
+function Read-EnvFile([string]$Path) {
+    $result = @{}
+    if (Test-Path $Path) {
+        Get-Content $Path | ForEach-Object {
+            if ($_ -match '^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)') {
+                $result[$Matches[1]] = $Matches[2].Trim('"', "'", ' ')
+            }
+        }
+    }
+    return $result
+}
+
 # ── Load config ──────────────────────────────────────────────────
 
-$envFile = Join-Path $PSScriptRoot '..\.env.immich'
-if (-not (Test-Path $envFile)) {
+$rootDir = Split-Path $PSScriptRoot
+
+$mainEnv = Read-EnvFile (Join-Path $rootDir '.env')
+
+$immichEnvFile = Join-Path $rootDir '.env.immich'
+if (-not (Test-Path $immichEnvFile)) {
     Write-Host "ERROR: .env.immich not found" -ForegroundColor Red
     exit 1
 }
+$immichEnv = Read-EnvFile $immichEnvFile
 
-$config = @{}
-Get-Content $envFile | ForEach-Object {
-    if ($_ -match '^\s*([A-Z_]+)\s*=\s*(.*)') {
-        $config[$Matches[1]] = $Matches[2].Trim('"', "'", ' ')
-    }
+# S3 credentials from .env
+$accessKey = $mainEnv['SCW_ACCESS_KEY']
+$secretKey = $mainEnv['SCW_SECRET_KEY']
+$region    = $mainEnv['SCW_REGION']
+$storageClass = $mainEnv['SCW_STORAGE_CLASS']
+
+if (-not $accessKey -or -not $secretKey) {
+    Write-Error "SCW_ACCESS_KEY and SCW_SECRET_KEY must be set in .env"
+    exit 1
 }
 
-$remote = if ($config['RCLONE_REMOTE']) { $config['RCLONE_REMOTE'] } else { 'scaleway' }
-$bucket = if ($config['RCLONE_BUCKET']) { $config['RCLONE_BUCKET'] } else { 'photosync' }
-$prefix = if ($config['RCLONE_PREFIX']) { $config['RCLONE_PREFIX'] } else { 'immich' }
-$localImmich = Join-Path (Split-Path $PSScriptRoot) 'data\immich'
+if ($region -match '^https?://') { $endpoint = $region } else { $endpoint = "https://s3.$region.scw.cloud" }
 
-$destination = "${remote}:${bucket}/${prefix}"
+$bucket = if ($immichEnv['RCLONE_BUCKET']) { $immichEnv['RCLONE_BUCKET'] } else { $mainEnv['SCW_BUCKET'] }
+$prefix = if ($immichEnv['RCLONE_PREFIX']) { $immichEnv['RCLONE_PREFIX'] } else { 'immich' }
+$localImmich = Join-Path $rootDir 'data\immich'
+
+# Use :s3: backend with inline credentials
+$destination = ":s3:${bucket}/${prefix}"
+$s3Flags = @(
+    '--s3-provider', 'Scaleway'
+    '--s3-access-key-id', $accessKey
+    '--s3-secret-access-key', $secretKey
+    '--s3-endpoint', $endpoint
+    '--s3-region', 'nl-ams'
+    $(if ($storageClass) { '--s3-storage-class'; $storageClass })
+)
 
 # ── Pre-flight ───────────────────────────────────────────────────
 
@@ -114,6 +146,7 @@ foreach ($d in $dirsToSync) {
         'sync'
         $source
         $dest
+        ) + $s3Flags + @(
         '--progress'
         '--transfers', '8'
         '--checkers', '16'
@@ -170,6 +203,7 @@ if ($Verify -and $Execute) {
             'check'
             $source
             $dest
+            ) + $s3Flags + @(
             '--one-way'
             '--fast-list'
             '--log-level', 'INFO'

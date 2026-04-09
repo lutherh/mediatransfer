@@ -6,11 +6,15 @@
 #   .\scripts\mount-s3.ps1 -Background  # mount as background process
 #   .\scripts\mount-s3.ps1 -Unmount     # unmount
 #
-# The mount point and rclone remote are read from .env.immich:
-#   RCLONE_REMOTE  = rclone remote name (default: scaleway)
-#   RCLONE_BUCKET  = bucket name (default: photosync)
+# S3 credentials are read from .env (single source of truth):
+#   SCW_ACCESS_KEY, SCW_SECRET_KEY, SCW_REGION
+#
+# Mount config is read from .env.immich:
+#   RCLONE_BUCKET  = bucket name
 #   RCLONE_PREFIX  = bucket subfolder for Immich (default: immich)
 #   UPLOAD_LOCATION = local mount path
+#
+# No rclone remote or rclone.conf is needed — credentials are passed inline.
 
 param(
     [switch]$Background,
@@ -19,32 +23,64 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# ── Load config from .env.immich ──
-$envFile = Join-Path $PSScriptRoot '..\.env.immich'
-if (-not (Test-Path $envFile)) {
-    Write-Error ".env.immich not found at $envFile — copy from .env.immich.example first."
+# ── Helper: parse a .env file into a hashtable ──
+function Read-EnvFile([string]$Path) {
+    $result = @{}
+    if (Test-Path $Path) {
+        Get-Content $Path | ForEach-Object {
+            if ($_ -match '^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)') {
+                $result[$Matches[1]] = $Matches[2].Trim('"', "'", ' ')
+            }
+        }
+    }
+    return $result
+}
+
+# ── Load config ──
+$rootDir = Split-Path $PSScriptRoot
+
+$mainEnv = Read-EnvFile (Join-Path $rootDir '.env')
+
+$immichEnvFile = Join-Path $rootDir '.env.immich'
+if (-not (Test-Path $immichEnvFile)) {
+    Write-Error ".env.immich not found at $immichEnvFile — copy from .env.immich.example first."
+    exit 1
+}
+$immichEnv = Read-EnvFile $immichEnvFile
+
+# S3 credentials from .env
+$accessKey = $mainEnv['SCW_ACCESS_KEY']
+$secretKey = $mainEnv['SCW_SECRET_KEY']
+$region    = $mainEnv['SCW_REGION']
+$storageClass = $mainEnv['SCW_STORAGE_CLASS']
+
+if (-not $accessKey -or -not $secretKey) {
+    Write-Error "SCW_ACCESS_KEY and SCW_SECRET_KEY must be set in .env"
     exit 1
 }
 
-$config = @{}
-Get-Content $envFile | ForEach-Object {
-    if ($_ -match '^\s*([A-Z_]+)\s*=\s*(.*)') {
-        $config[$Matches[1]] = $Matches[2].Trim('"', "'", ' ')
-    }
+# Resolve endpoint from region (region code or full URL)
+if ($region -match '^https?://') {
+    $endpoint = $region
+} else {
+    $endpoint = "https://s3.$region.scw.cloud"
 }
 
-$remote     = if ($config['RCLONE_REMOTE']) { $config['RCLONE_REMOTE'] } else { 'scaleway' }
-$bucket     = if ($config['RCLONE_BUCKET']) { $config['RCLONE_BUCKET'] } else { 'photosync' }
-$prefix     = if ($config['RCLONE_PREFIX']) { $config['RCLONE_PREFIX'] } else { 'immich' }
-$mountPoint = if ($config['UPLOAD_LOCATION']) { $config['UPLOAD_LOCATION'] } else { './data/immich-s3' }
+# Mount config from .env.immich
+$bucket     = if ($immichEnv['RCLONE_BUCKET']) { $immichEnv['RCLONE_BUCKET'] } else { $mainEnv['SCW_BUCKET'] }
+$prefix     = if ($immichEnv['RCLONE_PREFIX']) { $immichEnv['RCLONE_PREFIX'] } else { 'immich' }
+$mountPoint = if ($immichEnv['UPLOAD_LOCATION']) { $immichEnv['UPLOAD_LOCATION'] } else { './data/immich-s3' }
+
+if (-not $bucket) {
+    Write-Error "No bucket configured. Set RCLONE_BUCKET in .env.immich or SCW_BUCKET in .env"
+    exit 1
+}
 
 # Resolve relative path from mediatransfer root
 if (-not [System.IO.Path]::IsPathRooted($mountPoint)) {
     $mountPoint = Join-Path (Split-Path $PSScriptRoot) $mountPoint
 }
 $mountPoint = [System.IO.Path]::GetFullPath($mountPoint)
-
-$source = "${remote}:${bucket}/${prefix}"
 
 # ── Pre-flight checks ──
 if (-not (Get-Command rclone -ErrorAction SilentlyContinue)) {
@@ -78,16 +114,25 @@ if (-not (Test-Path $mountPoint)) {
     New-Item -ItemType Directory -Path $mountPoint -Force | Out-Null
 }
 
+# Use rclone's :s3: backend with inline credentials — no rclone.conf needed
+$source = ":s3:${bucket}/${prefix}"
+
 Write-Host "Mounting $source -> $mountPoint" -ForegroundColor Cyan
-Write-Host "  Remote:  $remote" -ForegroundColor Gray
-Write-Host "  Bucket:  $bucket" -ForegroundColor Gray
-Write-Host "  Prefix:  $prefix" -ForegroundColor Gray
+Write-Host "  Endpoint: $endpoint" -ForegroundColor Gray
+Write-Host "  Bucket:   $bucket" -ForegroundColor Gray
+Write-Host "  Prefix:   $prefix" -ForegroundColor Gray
 Write-Host ""
 
 $rcloneArgs = @(
     'mount'
     $source
     $mountPoint
+    '--s3-provider', 'Scaleway'
+    '--s3-access-key-id', $accessKey
+    '--s3-secret-access-key', $secretKey
+    '--s3-endpoint', $endpoint
+    '--s3-region', 'nl-ams'
+    $(if ($storageClass) { '--s3-storage-class'; $storageClass })
     '--vfs-cache-mode', 'writes'       # cache writes locally, read-through for reads
     '--vfs-write-back', '5s'           # flush writes to S3 after 5s
     '--vfs-cache-max-age', '1h'        # evict cached files after 1h

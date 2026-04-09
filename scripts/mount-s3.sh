@@ -7,48 +7,74 @@
 #   ./scripts/mount-s3.sh --background # mount as daemon
 #   ./scripts/mount-s3.sh --unmount    # unmount
 #
-# Config is read from .env.immich (RCLONE_REMOTE, RCLONE_BUCKET, RCLONE_PREFIX, UPLOAD_LOCATION)
+# S3 credentials are read from .env (single source of truth):
+#   SCW_ACCESS_KEY, SCW_SECRET_KEY, SCW_REGION
+#
+# Mount config is read from .env.immich:
+#   RCLONE_BUCKET, RCLONE_PREFIX, UPLOAD_LOCATION
+#
+# No rclone remote or rclone.conf is needed — credentials are passed inline.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-ENV_FILE="$ROOT_DIR/.env.immich"
 
-if [ ! -f "$ENV_FILE" ]; then
-  echo "ERROR: .env.immich not found at $ENV_FILE" >&2
+# ── Helper: read a key from a .env file ──
+read_env_val() {
+  local file="$1" key="$2" default="${3:-}"
+  local val
+  val=$(grep -E "^\s*${key}\s*=" "$file" 2>/dev/null | head -1 | sed "s/^[^=]*=\s*//" | sed "s/^[\"']//;s/[\"']\s*$//")
+  echo "${val:-$default}"
+}
+
+# ── Load config ──
+MAIN_ENV="$ROOT_DIR/.env"
+IMMICH_ENV="$ROOT_DIR/.env.immich"
+
+if [ ! -f "$MAIN_ENV" ]; then
+  echo "ERROR: .env not found at $MAIN_ENV" >&2
+  exit 1
+fi
+if [ ! -f "$IMMICH_ENV" ]; then
+  echo "ERROR: .env.immich not found at $IMMICH_ENV — copy from .env.immich.example first." >&2
   exit 1
 fi
 
-# Parse .env.immich
-load_env() {
-  local key val
-  while IFS='=' read -r key val; do
-    key=$(echo "$key" | xargs)
-    [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
-    val=$(echo "$val" | sed "s/^[\"']//;s/[\"']$//")
-    case "$key" in
-      RCLONE_REMOTE)     RCLONE_REMOTE="$val" ;;
-      RCLONE_BUCKET)     RCLONE_BUCKET="$val" ;;
-      RCLONE_PREFIX)     RCLONE_PREFIX="$val" ;;
-      UPLOAD_LOCATION)   UPLOAD_LOCATION="$val" ;;
-    esac
-  done < "$ENV_FILE"
-}
+# S3 credentials from .env
+ACCESS_KEY=$(read_env_val "$MAIN_ENV" SCW_ACCESS_KEY)
+SECRET_KEY=$(read_env_val "$MAIN_ENV" SCW_SECRET_KEY)
+REGION=$(read_env_val "$MAIN_ENV" SCW_REGION "fr-par")
+STORAGE_CLASS=$(read_env_val "$MAIN_ENV" SCW_STORAGE_CLASS)
 
-load_env
+if [ -z "$ACCESS_KEY" ] || [ -z "$SECRET_KEY" ]; then
+  echo "ERROR: SCW_ACCESS_KEY and SCW_SECRET_KEY must be set in .env" >&2
+  exit 1
+fi
 
-REMOTE="${RCLONE_REMOTE:-scaleway}"
-BUCKET="${RCLONE_BUCKET:-photosync}"
-PREFIX="${RCLONE_PREFIX:-immich}"
-MOUNT_POINT="${UPLOAD_LOCATION:-./data/immich-s3}"
+# Resolve endpoint from region (region code or full URL)
+if [[ "$REGION" =~ ^https?:// ]]; then
+  ENDPOINT="$REGION"
+else
+  ENDPOINT="https://s3.${REGION}.scw.cloud"
+fi
+
+# Mount config from .env.immich (falls back to .env for bucket)
+BUCKET=$(read_env_val "$IMMICH_ENV" RCLONE_BUCKET "$(read_env_val "$MAIN_ENV" SCW_BUCKET)")
+PREFIX=$(read_env_val "$IMMICH_ENV" RCLONE_PREFIX "immich")
+MOUNT_POINT=$(read_env_val "$IMMICH_ENV" UPLOAD_LOCATION "./data/immich-s3")
+
+if [ -z "$BUCKET" ]; then
+  echo "ERROR: No bucket configured. Set RCLONE_BUCKET in .env.immich or SCW_BUCKET in .env" >&2
+  exit 1
+fi
 
 # Resolve relative paths from repo root
 if [[ "$MOUNT_POINT" != /* ]]; then
   MOUNT_POINT="$ROOT_DIR/$MOUNT_POINT"
 fi
 
-SOURCE="${REMOTE}:${BUCKET}/${PREFIX}"
+SOURCE=":s3:${BUCKET}/${PREFIX}"
 
 # Pre-flight
 if ! command -v rclone &>/dev/null; then
@@ -72,13 +98,19 @@ fi
 mkdir -p "$MOUNT_POINT"
 
 echo "Mounting $SOURCE -> $MOUNT_POINT"
-echo "  Remote:  $REMOTE"
-echo "  Bucket:  $BUCKET"
-echo "  Prefix:  $PREFIX"
+echo "  Endpoint: $ENDPOINT"
+echo "  Bucket:   $BUCKET"
+echo "  Prefix:   $PREFIX"
 echo ""
 
 RCLONE_ARGS=(
   mount "$SOURCE" "$MOUNT_POINT"
+  --s3-provider Scaleway
+  --s3-access-key-id "$ACCESS_KEY"
+  --s3-secret-access-key "$SECRET_KEY"
+  --s3-endpoint "$ENDPOINT"
+  --s3-region nl-ams
+  ${STORAGE_CLASS:+--s3-storage-class "$STORAGE_CLASS"}
   --vfs-cache-mode writes
   --vfs-write-back 5s
   --vfs-cache-max-age 1h
