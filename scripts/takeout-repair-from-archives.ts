@@ -48,7 +48,12 @@ const archiveDirArg = readStringArg(args, '--archive-dir');
 
 const pathOverrides = parseTakeoutPathArgs(args);
 const config = loadTakeoutConfig(undefined, pathOverrides);
-const archiveDir = archiveDirArg ?? 'D:\\archive-already-uploaded';
+const archiveDir = archiveDirArg;
+if (!archiveDir) {
+  console.error('❌ --archive-dir is required.');
+  console.error('   Example: npx tsx scripts/takeout-repair-from-archives.ts --archive-dir "/path/to/archives"');
+  process.exit(1);
+}
 
 const { s3, bucket, fullKey } = createS3Helpers();
 
