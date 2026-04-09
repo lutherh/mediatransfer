@@ -872,10 +872,8 @@ export function catalogThumbnailUrl(
   return url.toString();
 }
 
-export async function fetchCatalogStats(apiToken?: string): Promise<CatalogStats> {
-  const url = new URL('/catalog/api/stats', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await apiFetch(url.toString());
+export async function fetchCatalogStats(): Promise<CatalogStats> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/stats`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch catalog stats');
@@ -893,10 +891,8 @@ export type DateDistribution = {
   totalItems: number;
 };
 
-export async function fetchDateDistribution(apiToken?: string): Promise<DateDistribution> {
-  const url = new URL('/catalog/api/date-distribution', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await apiFetch(url.toString());
+export async function fetchDateDistribution(): Promise<DateDistribution> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/date-distribution`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch date distribution');
@@ -909,14 +905,12 @@ export async function fetchCatalogItems(opts: {
   prefix?: string;
   max?: number;
   sort?: 'asc' | 'desc';
-  apiToken?: string;
 }): Promise<CatalogPage> {
   const url = new URL('/catalog/api/items', API_BASE_URL);
   if (opts.token) url.searchParams.set('token', opts.token);
   if (opts.prefix) url.searchParams.set('prefix', opts.prefix);
   if (opts.max !== undefined) url.searchParams.set('max', String(opts.max));
   if (opts.sort) url.searchParams.set('sort', opts.sort);
-  if (opts.apiToken) url.searchParams.set('apiToken', opts.apiToken);
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), TAKEOUT_FETCH_TIMEOUT_MS);
   try {
@@ -931,10 +925,8 @@ export async function fetchCatalogItems(opts: {
   }
 }
 
-export async function deleteCatalogItems(encodedKeys: string[], apiToken?: string): Promise<void> {
-  const url = new URL('/catalog/api/items', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await apiFetch(url.toString(), {
+export async function deleteCatalogItems(encodedKeys: string[]): Promise<void> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/items`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ encodedKeys }),
@@ -948,11 +940,8 @@ export async function deleteCatalogItems(encodedKeys: string[], apiToken?: strin
 export async function moveCatalogItem(
   encodedKey: string,
   newDatePrefix: string,
-  apiToken?: string,
 ): Promise<{ from: string; to: string }> {
-  const url = new URL('/catalog/api/items/move', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await apiFetch(url.toString(), {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/items/move`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ encodedKey, newDatePrefix }),
@@ -966,11 +955,8 @@ export async function moveCatalogItem(
 
 export async function bulkMoveCatalogItems(
   moves: { encodedKey: string; newDatePrefix: string }[],
-  apiToken?: string,
 ): Promise<{ moved: { from: string; to: string }[]; failed: { key: string; error: string }[] }> {
-  const url = new URL('/catalog/api/items/bulk-move', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await apiFetch(url.toString(), {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/items/bulk-move`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ moves }),
@@ -982,10 +968,8 @@ export async function bulkMoveCatalogItems(
   return response.json();
 }
 
-export async function fetchUndatedItems(apiToken?: string): Promise<{ items: CatalogItem[] }> {
-  const url = new URL('/catalog/api/undated', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await apiFetch(url.toString());
+export async function fetchUndatedItems(): Promise<{ items: CatalogItem[] }> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/undated`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch undated items');
@@ -1004,10 +988,8 @@ export type ExifData = {
   raw: Record<string, unknown> | null;
 };
 
-export async function fetchCatalogExif(encodedKey: string, apiToken?: string): Promise<ExifData> {
-  const url = new URL(`/catalog/api/exif/${encodedKey}`, API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await apiFetch(url.toString());
+export async function fetchCatalogExif(encodedKey: string): Promise<ExifData> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/exif/${encodedKey}`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch EXIF');
@@ -1026,10 +1008,8 @@ export type Album = {
 
 export type AlbumsManifest = { albums: Album[] };
 
-export async function fetchAlbums(apiToken?: string): Promise<AlbumsManifest> {
-  const url = new URL('/catalog/api/albums', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await apiFetch(url.toString());
+export async function fetchAlbums(): Promise<AlbumsManifest> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/albums`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch albums');
@@ -1039,11 +1019,8 @@ export async function fetchAlbums(apiToken?: string): Promise<AlbumsManifest> {
 
 export async function createAlbum(
   name: string,
-  apiToken?: string,
 ): Promise<{ id: string; name: string }> {
-  const url = new URL('/catalog/api/albums', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await apiFetch(url.toString(), {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/albums`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
@@ -1058,11 +1035,8 @@ export async function createAlbum(
 export async function updateAlbum(
   albumId: string,
   updates: { name?: string; addKeys?: string[]; removeKeys?: string[]; coverKey?: string },
-  apiToken?: string,
 ): Promise<Album> {
-  const url = new URL(`/catalog/api/albums/${albumId}`, API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await apiFetch(url.toString(), {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/albums/${albumId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updates),
@@ -1074,10 +1048,8 @@ export async function updateAlbum(
   return response.json();
 }
 
-export async function deleteAlbum(albumId: string, apiToken?: string): Promise<void> {
-  const url = new URL(`/catalog/api/albums/${albumId}`, API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await apiFetch(url.toString(), { method: 'DELETE' });
+export async function deleteAlbum(albumId: string): Promise<void> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/albums/${albumId}`, { method: 'DELETE' });
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to delete album');
@@ -1116,10 +1088,8 @@ export function encodeS3Key(key: string): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-export async function fetchDuplicates(apiToken?: string): Promise<DuplicatesResult> {
-  const url = new URL('/catalog/api/duplicates', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await apiFetch(url.toString());
+export async function fetchDuplicates(): Promise<DuplicatesResult> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/duplicates`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch duplicates');
@@ -1136,10 +1106,8 @@ export type DedupScanStatus =
   | { status: 'error'; message: string; completedAt: number };
 
 /** Poll the server for the current dedup scan state (cached results or progress). */
-export async function fetchDedupScanStatus(apiToken?: string): Promise<DedupScanStatus> {
-  const url = new URL('/catalog/api/duplicates/scan/status', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await apiFetch(url.toString());
+export async function fetchDedupScanStatus(): Promise<DedupScanStatus> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/duplicates/scan/status`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch scan status');
@@ -1164,16 +1132,14 @@ export type DupScanProgress =
  */
 export function scanDuplicatesStream(
   onProgress: (event: DupScanProgress) => void,
-  apiToken?: string,
   signal?: AbortSignal,
 ): Promise<DuplicatesResult> {
   return new Promise((resolve, reject) => {
-    const url = new URL('/catalog/api/duplicates/scan', API_BASE_URL);
-    if (apiToken) url.searchParams.set('apiToken', apiToken);
+    const url = `${API_BASE_URL}/catalog/api/duplicates/scan`;
 
     let settled = false;
 
-    apiFetch(url.toString(), { signal })
+    apiFetch(url, { signal })
       .then(async (response) => {
         if (!response.ok || !response.body) {
           const raw = await response.text();
