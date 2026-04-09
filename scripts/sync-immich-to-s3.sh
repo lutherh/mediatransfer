@@ -253,7 +253,6 @@ if $CLEANUP; then
 
     # Build a manifest of all S3 files in one call (much faster than per-file lsl)
     s3_manifest=$(mktemp)
-    trap 'rm -f "$s3_manifest"' EXIT
     if ! rclone lsl "$dest" "${S3_FLAGS[@]}" --fast-list > "$s3_manifest" 2>/dev/null; then
       echo "[$d] ERROR: Failed to list S3 contents — skipping cleanup for this directory." >&2
       rm -f "$s3_manifest"
@@ -312,7 +311,6 @@ if $CLEANUP; then
   echo "    Skipped:  $cleanup_skipped files (not in S3 or size mismatch)"
   echo "    Errors:   $cleanup_errors directories skipped entirely"
 
-  freed_mb=0
   for d in "${DIRS_TO_SYNC[@]}"; do
     dir_path="$LOCAL_IMMICH/$d"
     if [ -d "$dir_path" ]; then
