@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { to: '/transfers', label: 'Transfers' },
   { to: '/catalog', label: 'Catalog' },
   { to: '/costs', label: 'Costs' },
+  { to: '/pipeline', label: 'Pipeline' },
 ] as const;
 
 export function Layout() {

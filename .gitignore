@@ -76,3 +76,4 @@ scripts/_test-*
 # Obsolete PowerShell/cmd scripts (replaced by .sh)
 scripts/*.ps1
 scripts/immich-update.cmd
+data/immich-asset-paths.txt

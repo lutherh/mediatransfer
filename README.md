@@ -197,6 +197,7 @@ After upload, use the local catalog UI:
 | `http://localhost:5173/transfers` | Transfer jobs |
 | `http://localhost:5173/catalog` | Uploaded media catalog |
 | `http://localhost:5173/costs` | Storage cost view |
+| `http://localhost:5173/pipeline` | Visual pipeline overview and schedule config |
 
 ## Useful Commands
 

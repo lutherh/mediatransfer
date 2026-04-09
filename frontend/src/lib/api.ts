@@ -1,5 +1,19 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? `http://${window.location.hostname}:3000`;
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? `http://${window.location.hostname}:3000`;
+const API_TOKEN: string | undefined = import.meta.env.VITE_API_TOKEN ?? undefined;
 const TAKEOUT_FETCH_TIMEOUT_MS = 10_000;
+
+const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
+
+/** Wrapper around fetch() that injects the Authorization header when VITE_API_TOKEN is set.
+ *  Also applies a default 30s timeout via AbortSignal unless one is already provided. */
+export function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  if (API_TOKEN && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${API_TOKEN}`);
+  }
+  const signal = init?.signal ?? AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT_MS);
+  return fetch(input, { ...init, headers, signal });
+}
 
 export type TransferJob = {
   id: string;
@@ -248,7 +262,7 @@ export type SequenceAnalysis = {
 };
 
 export async function fetchTransfers(): Promise<TransferJob[]> {
-  const response = await fetch(`${API_BASE_URL}/transfers`);
+  const response = await apiFetch(`${API_BASE_URL}/transfers`);
   if (!response.ok) {
     throw new Error('Failed to fetch transfers');
   }
@@ -256,7 +270,7 @@ export async function fetchTransfers(): Promise<TransferJob[]> {
 }
 
 export async function fetchTransferDetail(id: string): Promise<{ job: TransferJob; logs: TransferLog[] }> {
-  const response = await fetch(`${API_BASE_URL}/transfers/${id}`);
+  const response = await apiFetch(`${API_BASE_URL}/transfers/${id}`);
   if (!response.ok) {
     throw new Error('Failed to fetch transfer detail');
   }
@@ -279,7 +293,7 @@ export async function fetchCloudUsage(
     if (assumptions.vatRate !== undefined) params.set('vatRate', String(assumptions.vatRate));
   }
 
-  const response = await fetch(`${API_BASE_URL}/usage/cloud?${params.toString()}`);
+  const response = await apiFetch(`${API_BASE_URL}/usage/cloud?${params.toString()}`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch cloud usage');
@@ -288,7 +302,7 @@ export async function fetchCloudUsage(
 }
 
 export async function pauseTransfer(id: string): Promise<{ message: string }> {
-  const response = await fetch(`${API_BASE_URL}/transfers/${id}/pause`, {
+  const response = await apiFetch(`${API_BASE_URL}/transfers/${id}/pause`, {
     method: 'POST',
   });
 
@@ -301,7 +315,7 @@ export async function pauseTransfer(id: string): Promise<{ message: string }> {
 }
 
 export async function resumeTransfer(id: string): Promise<{ message: string }> {
-  const response = await fetch(`${API_BASE_URL}/transfers/${id}/resume`, {
+  const response = await apiFetch(`${API_BASE_URL}/transfers/${id}/resume`, {
     method: 'POST',
   });
 
@@ -314,7 +328,7 @@ export async function resumeTransfer(id: string): Promise<{ message: string }> {
 }
 
 export async function retryTransferItem(id: string, mediaItemId: string): Promise<{ message: string }> {
-  const response = await fetch(`${API_BASE_URL}/transfers/${id}/retry-item`, {
+  const response = await apiFetch(`${API_BASE_URL}/transfers/${id}/retry-item`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mediaItemId }),
@@ -329,7 +343,7 @@ export async function retryTransferItem(id: string, mediaItemId: string): Promis
 }
 
 export async function queueAllTransferItems(id: string): Promise<{ message: string }> {
-  const response = await fetch(`${API_BASE_URL}/transfers/${id}/retry-all-items`, {
+  const response = await apiFetch(`${API_BASE_URL}/transfers/${id}/retry-all-items`, {
     method: 'POST',
   });
 
@@ -348,7 +362,7 @@ export async function createTransfer(payload: {
   sourceConfig?: Record<string, unknown>;
   destConfig?: Record<string, unknown>;
 }): Promise<{ job: TransferJob }> {
-  const response = await fetch(`${API_BASE_URL}/transfers`, {
+  const response = await apiFetch(`${API_BASE_URL}/transfers`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -377,7 +391,7 @@ export type DuplicateCheckResult = {
 export async function checkTransferDuplicates(
   items: { id: string; filename?: string; createTime?: string }[],
 ): Promise<DuplicateCheckResult> {
-  const response = await fetch(`${API_BASE_URL}/transfers/check-duplicates`, {
+  const response = await apiFetch(`${API_BASE_URL}/transfers/check-duplicates`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ items }),
@@ -578,7 +592,7 @@ async function fetchWithTimeout(
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetch(input, {
+    return await apiFetch(input, {
       ...init,
       signal: controller.signal,
     });
@@ -603,7 +617,7 @@ export type GoogleAuthStatus = {
 };
 
 export async function fetchGoogleAuthStatus(): Promise<GoogleAuthStatus> {
-  const response = await fetch(`${API_BASE_URL}/auth/google/status`);
+  const response = await apiFetch(`${API_BASE_URL}/auth/google/status`);
   if (!response.ok) {
     throw new Error('Failed to fetch Google auth status');
   }
@@ -611,7 +625,7 @@ export async function fetchGoogleAuthStatus(): Promise<GoogleAuthStatus> {
 }
 
 export async function fetchGoogleAuthUrl(): Promise<{ url: string }> {
-  const response = await fetch(`${API_BASE_URL}/auth/google/url`);
+  const response = await apiFetch(`${API_BASE_URL}/auth/google/url`);
   if (!response.ok) {
     throw new Error('Failed to get Google auth URL');
   }
@@ -619,7 +633,7 @@ export async function fetchGoogleAuthUrl(): Promise<{ url: string }> {
 }
 
 export async function submitGoogleAuthCode(code: string): Promise<{ connected: boolean }> {
-  const response = await fetch(`${API_BASE_URL}/auth/google/callback`, {
+  const response = await apiFetch(`${API_BASE_URL}/auth/google/callback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ code }),
@@ -632,7 +646,7 @@ export async function submitGoogleAuthCode(code: string): Promise<{ connected: b
 }
 
 export async function disconnectGoogle(): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/auth/google/disconnect`, { method: 'POST' });
+  const response = await apiFetch(`${API_BASE_URL}/auth/google/disconnect`, { method: 'POST' });
   if (!response.ok) {
     throw new Error('Failed to disconnect Google account');
   }
@@ -655,7 +669,7 @@ export type PickedMediaItem = {
 };
 
 export async function createPickerSession(): Promise<PickerSession> {
-  const response = await fetch(`${API_BASE_URL}/picker/session`, { method: 'POST' });
+  const response = await apiFetch(`${API_BASE_URL}/picker/session`, { method: 'POST' });
   if (!response.ok) {
     const raw = await response.text();
     const { code, message } = parseApiError(raw);
@@ -668,7 +682,7 @@ export async function createPickerSession(): Promise<PickerSession> {
 }
 
 export async function pollPickerSession(sessionId: string): Promise<PickerSession> {
-  const response = await fetch(`${API_BASE_URL}/picker/session/${sessionId}`);
+  const response = await apiFetch(`${API_BASE_URL}/picker/session/${sessionId}`);
   if (!response.ok) {
     throw new Error('Failed to poll picker session');
   }
@@ -681,7 +695,7 @@ export async function fetchPickedItems(
 ): Promise<{ mediaItems: PickedMediaItem[]; nextPageToken?: string }> {
   const params = new URLSearchParams();
   if (pageToken) params.set('pageToken', pageToken);
-  const response = await fetch(`${API_BASE_URL}/picker/session/${sessionId}/items?${params.toString()}`);
+  const response = await apiFetch(`${API_BASE_URL}/picker/session/${sessionId}/items?${params.toString()}`);
   if (!response.ok) {
     throw new Error('Failed to fetch picked items');
   }
@@ -689,7 +703,7 @@ export async function fetchPickedItems(
 }
 
 export async function deletePickerSession(sessionId: string): Promise<void> {
-  await fetch(`${API_BASE_URL}/picker/session/${sessionId}`, { method: 'DELETE' });
+  await apiFetch(`${API_BASE_URL}/picker/session/${sessionId}`, { method: 'DELETE' });
 }
 
 // ── Uploads ────────────────────────────────────────────────────
@@ -755,6 +769,7 @@ export function uploadFiles(
   const xhr = new XMLHttpRequest();
   const promise = new Promise<UploadResponse>((resolve, reject) => {
     xhr.open('POST', `${API_BASE_URL}/uploads`);
+    if (API_TOKEN) xhr.setRequestHeader('Authorization', `Bearer ${API_TOKEN}`);
 
     xhr.upload.addEventListener('progress', (e) => {
       if (e.lengthComputable && onProgress) {
@@ -796,7 +811,7 @@ export function uploadFiles(
 
 export async function fetchUploadList(limit = 50, offset = 0): Promise<UploadListResponse> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  const response = await fetch(`${API_BASE_URL}/uploads?${params.toString()}`);
+  const response = await apiFetch(`${API_BASE_URL}/uploads?${params.toString()}`);
   if (!response.ok) {
     throw new Error('Failed to fetch uploads');
   }
@@ -804,7 +819,7 @@ export async function fetchUploadList(limit = 50, offset = 0): Promise<UploadLis
 }
 
 export async function fetchUploadStats(): Promise<UploadStats> {
-  const response = await fetch(`${API_BASE_URL}/uploads/stats`);
+  const response = await apiFetch(`${API_BASE_URL}/uploads/stats`);
   if (!response.ok) {
     throw new Error('Failed to fetch upload stats');
   }
@@ -860,10 +875,8 @@ export function catalogThumbnailUrl(
   return url.toString();
 }
 
-export async function fetchCatalogStats(apiToken?: string): Promise<CatalogStats> {
-  const url = new URL('/catalog/api/stats', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await fetch(url.toString());
+export async function fetchCatalogStats(): Promise<CatalogStats> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/stats`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch catalog stats');
@@ -881,10 +894,8 @@ export type DateDistribution = {
   totalItems: number;
 };
 
-export async function fetchDateDistribution(apiToken?: string): Promise<DateDistribution> {
-  const url = new URL('/catalog/api/date-distribution', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await fetch(url.toString());
+export async function fetchDateDistribution(): Promise<DateDistribution> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/date-distribution`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch date distribution');
@@ -897,18 +908,16 @@ export async function fetchCatalogItems(opts: {
   prefix?: string;
   max?: number;
   sort?: 'asc' | 'desc';
-  apiToken?: string;
 }): Promise<CatalogPage> {
   const url = new URL('/catalog/api/items', API_BASE_URL);
   if (opts.token) url.searchParams.set('token', opts.token);
   if (opts.prefix) url.searchParams.set('prefix', opts.prefix);
   if (opts.max !== undefined) url.searchParams.set('max', String(opts.max));
   if (opts.sort) url.searchParams.set('sort', opts.sort);
-  if (opts.apiToken) url.searchParams.set('apiToken', opts.apiToken);
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), TAKEOUT_FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(url.toString(), { signal: controller.signal });
+    const response = await apiFetch(url.toString(), { signal: controller.signal });
     if (!response.ok) {
       const raw = await response.text();
       throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch catalog items');
@@ -919,10 +928,8 @@ export async function fetchCatalogItems(opts: {
   }
 }
 
-export async function deleteCatalogItems(encodedKeys: string[], apiToken?: string): Promise<void> {
-  const url = new URL('/catalog/api/items', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await fetch(url.toString(), {
+export async function deleteCatalogItems(encodedKeys: string[]): Promise<void> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/items`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ encodedKeys }),
@@ -936,11 +943,8 @@ export async function deleteCatalogItems(encodedKeys: string[], apiToken?: strin
 export async function moveCatalogItem(
   encodedKey: string,
   newDatePrefix: string,
-  apiToken?: string,
 ): Promise<{ from: string; to: string }> {
-  const url = new URL('/catalog/api/items/move', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await fetch(url.toString(), {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/items/move`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ encodedKey, newDatePrefix }),
@@ -954,11 +958,8 @@ export async function moveCatalogItem(
 
 export async function bulkMoveCatalogItems(
   moves: { encodedKey: string; newDatePrefix: string }[],
-  apiToken?: string,
 ): Promise<{ moved: { from: string; to: string }[]; failed: { key: string; error: string }[] }> {
-  const url = new URL('/catalog/api/items/bulk-move', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await fetch(url.toString(), {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/items/bulk-move`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ moves }),
@@ -970,10 +971,8 @@ export async function bulkMoveCatalogItems(
   return response.json();
 }
 
-export async function fetchUndatedItems(apiToken?: string): Promise<{ items: CatalogItem[] }> {
-  const url = new URL('/catalog/api/undated', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await fetch(url.toString());
+export async function fetchUndatedItems(): Promise<{ items: CatalogItem[] }> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/undated`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch undated items');
@@ -992,10 +991,8 @@ export type ExifData = {
   raw: Record<string, unknown> | null;
 };
 
-export async function fetchCatalogExif(encodedKey: string, apiToken?: string): Promise<ExifData> {
-  const url = new URL(`/catalog/api/exif/${encodedKey}`, API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await fetch(url.toString());
+export async function fetchCatalogExif(encodedKey: string): Promise<ExifData> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/exif/${encodedKey}`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch EXIF');
@@ -1014,10 +1011,8 @@ export type Album = {
 
 export type AlbumsManifest = { albums: Album[] };
 
-export async function fetchAlbums(apiToken?: string): Promise<AlbumsManifest> {
-  const url = new URL('/catalog/api/albums', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await fetch(url.toString());
+export async function fetchAlbums(): Promise<AlbumsManifest> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/albums`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch albums');
@@ -1027,11 +1022,8 @@ export async function fetchAlbums(apiToken?: string): Promise<AlbumsManifest> {
 
 export async function createAlbum(
   name: string,
-  apiToken?: string,
 ): Promise<{ id: string; name: string }> {
-  const url = new URL('/catalog/api/albums', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await fetch(url.toString(), {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/albums`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
@@ -1046,11 +1038,8 @@ export async function createAlbum(
 export async function updateAlbum(
   albumId: string,
   updates: { name?: string; addKeys?: string[]; removeKeys?: string[]; coverKey?: string },
-  apiToken?: string,
 ): Promise<Album> {
-  const url = new URL(`/catalog/api/albums/${albumId}`, API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await fetch(url.toString(), {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/albums/${albumId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updates),
@@ -1062,10 +1051,8 @@ export async function updateAlbum(
   return response.json();
 }
 
-export async function deleteAlbum(albumId: string, apiToken?: string): Promise<void> {
-  const url = new URL(`/catalog/api/albums/${albumId}`, API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await fetch(url.toString(), { method: 'DELETE' });
+export async function deleteAlbum(albumId: string): Promise<void> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/albums/${albumId}`, { method: 'DELETE' });
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to delete album');
@@ -1104,10 +1091,8 @@ export function encodeS3Key(key: string): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-export async function fetchDuplicates(apiToken?: string): Promise<DuplicatesResult> {
-  const url = new URL('/catalog/api/duplicates', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await fetch(url.toString());
+export async function fetchDuplicates(): Promise<DuplicatesResult> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/duplicates`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch duplicates');
@@ -1124,10 +1109,8 @@ export type DedupScanStatus =
   | { status: 'error'; message: string; completedAt: number };
 
 /** Poll the server for the current dedup scan state (cached results or progress). */
-export async function fetchDedupScanStatus(apiToken?: string): Promise<DedupScanStatus> {
-  const url = new URL('/catalog/api/duplicates/scan/status', API_BASE_URL);
-  if (apiToken) url.searchParams.set('apiToken', apiToken);
-  const response = await fetch(url.toString());
+export async function fetchDedupScanStatus(): Promise<DedupScanStatus> {
+  const response = await apiFetch(`${API_BASE_URL}/catalog/api/duplicates/scan/status`);
   if (!response.ok) {
     const raw = await response.text();
     throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch scan status');
@@ -1152,16 +1135,14 @@ export type DupScanProgress =
  */
 export function scanDuplicatesStream(
   onProgress: (event: DupScanProgress) => void,
-  apiToken?: string,
   signal?: AbortSignal,
 ): Promise<DuplicatesResult> {
   return new Promise((resolve, reject) => {
-    const url = new URL('/catalog/api/duplicates/scan', API_BASE_URL);
-    if (apiToken) url.searchParams.set('apiToken', apiToken);
+    const url = `${API_BASE_URL}/catalog/api/duplicates/scan`;
 
     let settled = false;
 
-    fetch(url.toString(), { signal })
+    apiFetch(url, { signal })
       .then(async (response) => {
         if (!response.ok || !response.body) {
           const raw = await response.text();
