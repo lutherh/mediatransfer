@@ -18,9 +18,11 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-# libheif + libvips for HEIC/HEIF thumbnail generation, ffmpeg for video frames
+# libheif + libvips for HEIC/HEIF thumbnail generation, ffmpeg for video frames, rclone for S3 sync
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libvips-dev libheif-dev ffmpeg \
+    libvips-dev libheif-dev ffmpeg curl unzip \
+    && curl -fsSL https://rclone.org/install.sh | bash \
+    && apt-get purge -y curl unzip && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
