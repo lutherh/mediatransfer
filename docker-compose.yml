@@ -24,6 +24,13 @@ services:
       REDIS_PORT: 6379
       REDIS_URL: redis://redis:6379
       ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:-change-me-to-a-random-secret}
+      SCW_ACCESS_KEY: ${SCW_ACCESS_KEY:-}
+      SCW_SECRET_KEY: ${SCW_SECRET_KEY:-}
+      SCW_REGION: ${SCW_REGION:-fr-par}
+      SCW_BUCKET: ${SCW_BUCKET:-}
+      SCW_STORAGE_CLASS: ${SCW_STORAGE_CLASS:-}
+      SCW_PREFIX: ${SCW_PREFIX:-}
+      SCW_S3_REQUEST_TIMEOUT_MS: ${SCW_S3_REQUEST_TIMEOUT_MS:-300000}
     healthcheck:
       test:
         [
