@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { Card } from '@/components/ui/card';
 import { PipelineFlow } from '@/components/pipeline/pipeline-flow';
 import { PipelineStageDetail } from '@/components/pipeline/pipeline-stage-detail';
 import { ScheduleConfig } from '@/components/pipeline/schedule-config';
