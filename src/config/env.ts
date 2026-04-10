@@ -74,6 +74,7 @@ const envSchema = z.object({
   TRANSFER_STATE_PATH: z.string().min(1).default('./data/takeout/state.json'),
   UPLOAD_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   UPLOAD_RETRY_COUNT: z.coerce.number().int().min(0).max(20).default(5),
+  WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(2),
 });
 
 export type Env = z.infer<typeof envSchema>;

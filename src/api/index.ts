@@ -48,6 +48,7 @@ import { registerProviderRoutes } from './routes/providers.js';
 import { registerCatalogRoutes } from './routes/catalog.js';
 import { registerCatalogAlbumRoutes } from './routes/catalog-albums.js';
 import { registerTakeoutRoutes } from './routes/takeout.js';
+import { registerWatcherRoutes } from './routes/watcher.js';
 import { registerGoogleAuthRoutes } from './routes/google-auth.js';
 import { registerCloudUsageRoutes } from './routes/cloud-usage.js';
 import { registerUploadRoutes } from './routes/uploads.js';
@@ -200,6 +201,7 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	await registerCloudUsageRoutes(app, runtime.services.cloudUsage);
 	await registerUploadRoutes(app, runtime.services.uploads);
 	await registerTakeoutRoutes(app, env);
+	await registerWatcherRoutes(app, env);
 	await registerGoogleAuthRoutes(app, env);
 	await registerPipelineRoutes(app);
 

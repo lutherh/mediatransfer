@@ -1,4 +1,14 @@
 import { Queue, Worker, type JobsOptions, type QueueOptions, type WorkerOptions } from 'bullmq';
+import { loadEnv } from '../config/env.js';
+
+/** Read WORKER_CONCURRENCY from env, falling back to 2 if env is not configured (e.g. in tests). */
+function getWorkerConcurrency(): number {
+  try {
+    return loadEnv().WORKER_CONCURRENCY;
+  } catch {
+    return 2;
+  }
+}
 
 export const TRANSFER_QUEUE_NAME = 'transfer-jobs';
 export const TRANSFER_DLQ_NAME = 'transfer-jobs-dlq';
@@ -62,7 +72,7 @@ export function createTransferWorker(
     },
     {
       connection: connection as any,
-      concurrency: 2,
+      concurrency: getWorkerConcurrency(),
       ...(workerOptions ?? {}),
     },
   );
