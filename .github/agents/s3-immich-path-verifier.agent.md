@@ -91,7 +91,7 @@ Before running `scripts/sync-immich-to-s3.sh --execute`:
 - [ ] `npx tsx scripts/verify-s3-immich-compat.ts` exits 0
 - [ ] `RCLONE_PREFIX` does not start with `transfers` or `_thumbs`
 - [ ] `SCW_PREFIX` (if set) does not start with `RCLONE_PREFIX`
-- [ ] `RCLONE_PREFIX` (if set) does not start with `SCW_PREFIX/transfers` or `SCW_PREFIX/_thumbs`
+- [ ] `RCLONE_PREFIX` (if `SCW_PREFIX` is set) does not equal `SCW_PREFIX` and does not start with `SCW_PREFIX/`
 - [ ] Immich server is stopped: `docker compose -f docker-compose.immich.yml down`
 - [ ] Dry run passes: `./scripts/sync-immich-to-s3.sh` (without `--execute`)
 
