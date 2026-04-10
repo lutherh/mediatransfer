@@ -37,6 +37,7 @@ services:
       - ${ENCODED_VIDEO_LOCATION:-./data/immich/encoded-video}:/usr/src/app/upload/encoded-video
       - ${PROFILE_LOCATION:-./data/immich/profile}:/usr/src/app/upload/profile
       - ${BACKUP_LOCATION:-./data/immich/backups}:/usr/src/app/upload/backups
+      - s3-photosync:/usr/src/app/upload/s3transfers:ro
     env_file:
       - .env.immich
     depends_on:
@@ -86,3 +87,5 @@ services:
 volumes:
   immich-pgdata:
   immich-model-cache:
+  s3-photosync:
+    external: true
