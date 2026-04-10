@@ -13,52 +13,67 @@ import { validateScalewayConfig, ScalewayProvider } from '../../providers/scalew
 let watcherHandle: WatcherHandle | null = null;
 let latestWatcherState: WatcherState | null = null;
 let watcherStartedAt: string | null = null;
+/** Prevents concurrent /start requests from spawning multiple watchers. */
+let watcherStarting = false;
 
 // ─── Route registration ────────────────────────────────────────────────────
 
 export async function registerWatcherRoutes(app: FastifyInstance, env: Env): Promise<void> {
   /** POST /takeout/api/watcher/start — start the download watcher if not already running */
   app.post('/takeout/api/watcher/start', async (_req, reply) => {
-    if (watcherHandle !== null) {
+    if (watcherHandle !== null || watcherStarting) {
       return reply.code(200).send({ already_running: true });
     }
 
-    const config = loadTakeoutConfig(env);
-    const scalewayConfig = validateScalewayConfig({
-      provider: 'scaleway',
-      region: env.SCW_REGION,
-      bucket: env.SCW_BUCKET,
-      accessKey: env.SCW_ACCESS_KEY,
-      secretKey: env.SCW_SECRET_KEY,
-      prefix: env.SCW_PREFIX,
-    });
-    const provider = new ScalewayProvider(scalewayConfig);
+    watcherStarting = true;
+    try {
+      const config = loadTakeoutConfig(env);
+      const scalewayConfig = validateScalewayConfig({
+        provider: 'scaleway',
+        region: env.SCW_REGION,
+        bucket: env.SCW_BUCKET,
+        accessKey: env.SCW_ACCESS_KEY,
+        secretKey: env.SCW_SECRET_KEY,
+        prefix: env.SCW_PREFIX,
+      });
+      const provider = new ScalewayProvider(scalewayConfig);
 
-    watcherStartedAt = new Date().toISOString();
-    latestWatcherState = null;
+      watcherStartedAt = new Date().toISOString();
+      latestWatcherState = null;
 
-    watcherHandle = watchDownloadsFolder(
-      config,
-      provider,
-      {
-        uploadConcurrency: config.uploadConcurrency,
-      },
-      {
-        downloadsDir: config.inputDir,
-        onPollCycle(state) {
-          latestWatcherState = state;
+      const handle = watchDownloadsFolder(
+        config,
+        provider,
+        {
+          uploadConcurrency: config.uploadConcurrency,
         },
-      },
-    );
+        {
+          downloadsDir: config.inputDir,
+          onPollCycle(state) {
+            latestWatcherState = state;
+          },
+        },
+      );
+      watcherHandle = handle;
 
-    // Clean up handle reference when watcher exits
-    watcherHandle.done.then(() => {
-      watcherHandle = null;
-      watcherStartedAt = null;
-    }).catch(() => {
-      watcherHandle = null;
-      watcherStartedAt = null;
-    });
+      // Clean up handle reference when watcher exits.
+      // Only clear if the handle is still the current one (guards against
+      // a stop + start race where a new watcher replaces this one before
+      // the done promise resolves).
+      handle.done.then(() => {
+        if (watcherHandle === handle) {
+          watcherHandle = null;
+          watcherStartedAt = null;
+        }
+      }).catch(() => {
+        if (watcherHandle === handle) {
+          watcherHandle = null;
+          watcherStartedAt = null;
+        }
+      });
+    } finally {
+      watcherStarting = false;
+    }
 
     return reply.code(200).send({ started: true });
   });
