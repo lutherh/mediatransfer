@@ -222,26 +222,41 @@ After upload, use the local catalog UI:
 
 Immich gives you phone auto-backup and a local photo browsing UI — like Google Photos, but on your own machine. It runs alongside MediaTransfer and stores originals on your S3 bucket.
 
-> **How it works:** Immich only knows about local folders. We use rclone to mount your S3 bucket as a local folder. Immich writes to it, rclone syncs to S3 in the background. Thumbnails and transcodes stay on your local disk for speed.
+> **How it works:** Immich only knows about local folders. We use the rclone Docker volume plugin to mount your S3 bucket as a read-only folder inside the Immich container. Thumbnails and transcodes stay on your local disk for speed; originals are served from S3.
 
-### Step 1: Install prerequisites
+### Step 1: Install the rclone Docker volume plugin
 
-All scripts are bash. On Windows, run them inside **WSL2** (which Docker Desktop already uses).
+Immich doesn't support S3 natively. We use the rclone Docker volume plugin to mount your S3 bucket as a read-only volume inside the Immich container.
 
-**Windows (inside WSL2):**
 ```bash
-sudo apt update && sudo apt install rclone fuse3
+docker plugin install rclone/docker-volume-rclone:latest --grant-all-permissions
 ```
 
-> Don't have WSL2? Run `wsl --install` in PowerShell, then reboot. Docker Desktop already requires it.
+### Step 2: Create the S3 Docker volume
 
-**Linux / macOS:**
+Create a Docker volume that maps to your S3 bucket's `transfers/` prefix:
+
 ```bash
-sudo apt install rclone fuse3   # Linux
-brew install rclone macfuse      # macOS
+docker volume create \
+  --driver rclone \
+  --opt type=s3 \
+  --opt s3-provider=Scaleway \
+  --opt s3-endpoint=s3.<region>.scw.cloud \
+  --opt s3-access-key-id=<your-access-key> \
+  --opt s3-secret-access-key=<your-secret-key> \
+  --opt s3-region=<region> \
+  --opt path=<bucket>/transfers \
+  --opt vfs-cache-mode=full \
+  --opt vfs-cache-max-size=10G \
+  --opt vfs-cache-max-age=72h \
+  --opt dir-cache-time=5m \
+  --opt vfs-read-chunk-size=16M \
+  s3-photosync
 ```
 
-### Step 2: Create the Immich config
+Replace `<region>`, `<your-access-key>`, `<your-secret-key>`, and `<bucket>` with your Scaleway values from `.env`.
+
+### Step 3: Create the Immich config
 
 ```bash
 cp .env.immich.example .env.immich
@@ -252,50 +267,30 @@ Open `.env.immich` and set your bucket name:
 RCLONE_BUCKET=my-photos
 ```
 
-That's it. S3 credentials are read from your main `.env` automatically — no need to paste them again.
+S3 credentials are read from your main `.env` automatically.
 
-### Step 3: Start the S3 mount
-
-```bash
-./scripts/mount-s3.sh
-```
-
-You should see:
-```
-Mounting :s3:my-photos/immich -> /path/to/data/immich-s3
-```
-
-**Leave this terminal open.** The mount must stay running while Immich is up.
-
-> **Tip:** Use `--background` to run as a daemon. Use `--unmount` to stop it later.
-
-### Step 4: Migrate existing Immich data to S3 (skip if fresh install)
-
-If you already have photos in `data/immich/library/`, sync them to S3 first:
-
-```bash
-./scripts/sync-immich-to-s3.sh              # dry run -- shows what would happen
-./scripts/sync-immich-to-s3.sh --execute    # actually copies files
-./scripts/sync-immich-to-s3.sh --execute --verify  # copies + verifies checksums
-```
-
-This uploads your local originals to S3 so they're still accessible after the switch.
-
-Once Immich is running on the S3 mount and everything looks good, free up local disk space:
-
-```bash
-./scripts/sync-immich-to-s3.sh --cleanup    # verifies each file in S3, then deletes local copy
-```
-
-This only deletes a local file if the S3 copy has a matching size. Files that are missing or differ are kept.
-
-### Step 5: Start Immich
+### Step 4: Start Immich
 
 ```bash
 docker compose -f docker-compose.immich.yml up -d
 ```
 
 Open [http://localhost:2283](http://localhost:2283) and create the admin account.
+
+The S3 volume is mounted read-only at `/usr/src/app/upload/s3transfers` inside the Immich container. Phone uploads and new imports go to local storage as usual.
+
+### Step 5: Remap existing assets to S3 (skip if fresh install)
+
+If you already have photos in `data/immich/library/` that also exist in S3, update Immich's database to point at the S3 mount instead of the local copies:
+
+```bash
+npx tsx scripts/remap-immich-to-s3.ts --dry-run      # preview changes
+npx tsx scripts/remap-immich-to-s3.ts --execute --backup  # backup paths + apply
+```
+
+The script matches Immich assets to S3 files by filename and date, then updates `originalPath` in the database. It creates a backup table (`asset_path_backup`) so you can revert if needed.
+
+Once everything looks good, you can free local disk space by removing the local originals that are now served from S3.
 
 ### Step 6: Connect your phone
 
@@ -313,17 +308,13 @@ New-NetFirewallRule -DisplayName "Immich" -Direction Inbound -LocalPort 2283 -Pr
 
 ### Startup order (every time)
 
-1. Start Docker Desktop
-2. Start the S3 mount: `./scripts/mount-s3.sh --background`
-3. Start Immich: `docker compose -f docker-compose.immich.yml up -d`
-
-> **Important:** The mount must be running **before** Immich starts. If Immich starts without the mount, it will write to an empty local folder and won't see existing files.
+1. Start Docker Desktop (the rclone volume plugin starts automatically with Docker)
+2. Start Immich: `docker compose -f docker-compose.immich.yml up -d`
 
 ### Stopping Immich
 
 ```bash
 docker compose -f docker-compose.immich.yml down
-./scripts/mount-s3.sh --unmount
 ```
 
 ## Security Notes
@@ -357,5 +348,4 @@ If you are also running Immich:
 
 ```bash
 docker compose -f docker-compose.immich.yml down
-./scripts/mount-s3.sh --unmount
 ```
