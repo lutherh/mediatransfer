@@ -26,7 +26,6 @@ import {
   objectExistsCached,
   preloadDestinationIndex,
   uploadManifest,
-  DEFAULT_UPLOAD_CONCURRENCY,
   type UploadProgressSnapshot,
   type UploadSummary,
 } from './uploader.js';
@@ -494,7 +493,7 @@ export function withDefaults(partial: Partial<TakeoutConfig>): TakeoutConfig {
     workDir: partial.workDir ?? './data/takeout/work',
     archiveDir: partial.archiveDir,
     statePath: partial.statePath ?? './data/takeout/state.json',
-    uploadConcurrency: partial.uploadConcurrency ?? DEFAULT_UPLOAD_CONCURRENCY,
+    uploadConcurrency: partial.uploadConcurrency ?? 4,
     uploadRetryCount: partial.uploadRetryCount ?? 5,
   };
  }
