@@ -64,11 +64,13 @@ export async function registerWatcherRoutes(app: FastifyInstance, env: Env): Pro
         if (watcherHandle === handle) {
           watcherHandle = null;
           watcherStartedAt = null;
+          latestWatcherState = null;
         }
       }).catch(() => {
         if (watcherHandle === handle) {
           watcherHandle = null;
           watcherStartedAt = null;
+          latestWatcherState = null;
         }
       });
     } finally {
@@ -90,6 +92,7 @@ export async function registerWatcherRoutes(app: FastifyInstance, env: Env): Pro
     watcherHandle.stop();
     watcherHandle = null;
     watcherStartedAt = null;
+    latestWatcherState = null;
 
     return reply.code(200).send({ stopped: true });
   });
