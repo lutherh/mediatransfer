@@ -84,6 +84,9 @@ export async function registerWatcherRoutes(app: FastifyInstance, env: Env): Pro
       return reply.code(200).send({ not_running: true });
     }
 
+    // stop() is synchronous; setting null here happens before any Promise
+    // callbacks in the done chain, so the identity check in those callbacks
+    // correctly sees watcherHandle !== handle and does nothing.
     watcherHandle.stop();
     watcherHandle = null;
     watcherStartedAt = null;
@@ -94,7 +97,7 @@ export async function registerWatcherRoutes(app: FastifyInstance, env: Env): Pro
   /** GET /takeout/api/watcher/status — return current watcher state */
   app.get('/takeout/api/watcher/status', async (_req, reply) => {
     const running = watcherHandle !== null;
-    const paused = running ? watcherHandle!.isPaused : false;
+    const paused = watcherHandle?.isPaused ?? false;
 
     return reply.code(200).send({
       running,
