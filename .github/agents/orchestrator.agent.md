@@ -2,7 +2,7 @@
 name: 'Orchestrator'
 description: 'Coordinates work across specialized agents. Use for tasks spanning multiple concerns like building a feature that needs frontend, backend, security review, and deployment.'
 tools: [read, edit, search, execute, agent]
-agents: [Debug Mode, Expert React Frontend Engineer, Security Reviewer, DevOps Expert, Architect, Arch Linux Expert]
+agents: [Debug Mode, Expert React Frontend Engineer, Security Reviewer, DevOps Expert, Architect, Arch Linux Expert, S3 Immich Path Verifier]
 ---
 
 # Orchestrator
@@ -26,6 +26,7 @@ You coordinate complex, multi-concern tasks by delegating to specialized subagen
 | Security Reviewer | Auth, encryption, credentials, OWASP, access control |
 | DevOps Expert | Docker, Compose, CI/CD, deployment, containers |
 | Arch Linux Expert | System admin, pacman, systemd, Linux configuration |
+| S3 Immich Path Verifier | Verifying S3/Immich prefix conflicts before rclone mount, syncing Immich data to S3 |
 
 ## Delegation Rules
 
