@@ -1,4 +1,4 @@
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? `http://${window.location.hostname}:3000`;
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || `http://${window.location.hostname}:3000`;
 const API_TOKEN: string | undefined = import.meta.env.VITE_API_TOKEN ?? undefined;
 const TAKEOUT_FETCH_TIMEOUT_MS = 10_000;
 
