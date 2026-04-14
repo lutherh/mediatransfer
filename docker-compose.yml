@@ -97,6 +97,24 @@ services:
       timeout: 5s
       retries: 5
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mediatransfer-frontend
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:5173/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
 volumes:
   postgres_data:
   redis_data:

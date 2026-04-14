@@ -35,41 +35,6 @@ ensure_rclone_plugin() {
   fi
 }
 
-FRONTEND_DIR="$ROOT_DIR/frontend"
-FRONTEND_PID_FILE="$ROOT_DIR/data/frontend.pid"
-FRONTEND_LOG="$ROOT_DIR/data/frontend.log"
-
-start_frontend() {
-  if [ -f "$FRONTEND_PID_FILE" ] && kill -0 "$(cat "$FRONTEND_PID_FILE")" 2>/dev/null; then
-    echo "Frontend already running (PID $(cat "$FRONTEND_PID_FILE"))."
-    return
-  fi
-
-  echo "Installing frontend dependencies..."
-  (cd "$FRONTEND_DIR" && npm ci --silent)
-
-  echo "Building frontend..."
-  (cd "$FRONTEND_DIR" && npm run build)
-
-  echo "Starting frontend (vite preview on port 5173)..."
-  (cd "$FRONTEND_DIR" && npx vite preview --port 5173 --host > "$FRONTEND_LOG" 2>&1 &
-    echo $! > "$FRONTEND_PID_FILE"
-  )
-  echo "Frontend started (PID $(cat "$FRONTEND_PID_FILE")), log: $FRONTEND_LOG"
-}
-
-stop_frontend() {
-  if [ -f "$FRONTEND_PID_FILE" ]; then
-    local pid
-    pid=$(cat "$FRONTEND_PID_FILE")
-    if kill -0 "$pid" 2>/dev/null; then
-      echo "Stopping frontend (PID $pid)..."
-      kill "$pid" 2>/dev/null || true
-    fi
-    rm -f "$FRONTEND_PID_FILE"
-  fi
-}
-
 ACTION="${1:-up}"
 
 wait_for_docker
@@ -83,8 +48,6 @@ case "$ACTION" in
     echo "Starting Immich stack..."
     docker compose -f docker-compose.immich.yml up -d
 
-    start_frontend
-
     echo ""
     echo "All services started."
     docker compose -f docker-compose.yml ps --format 'table {{.Name}}\t{{.Status}}'
@@ -92,8 +55,6 @@ case "$ACTION" in
     ;;
 
   down|stop)
-    stop_frontend
-
     echo "Stopping Immich stack..."
     docker compose -f docker-compose.immich.yml down
 
