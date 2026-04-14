@@ -6,6 +6,14 @@ REM Usage:
 REM   register-startup.cmd           - register the scheduled task
 REM   register-startup.cmd remove    - remove the scheduled task
 
+REM Require Administrator privileges
+net session >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: This script requires Administrator privileges.
+    echo Please right-click and "Run as Administrator".
+    exit /b 1
+)
+
 for %%I in ("%~dp0..") do set "ROOT_DIR=%%~fI"
 set "TASK_NAME=MediaTransfer-StartAll"
 set "START_CMD=%ROOT_DIR%\scripts\start-all.cmd"

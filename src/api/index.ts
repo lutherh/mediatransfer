@@ -94,6 +94,14 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 		},
 	});
 
+	// CORS must be registered BEFORE auth hooks so that CORS headers
+	// are set even on 401/403 error responses.
+	await app.register(cors, {
+		origin: buildCorsOriginHandler(options?.corsAllowedOrigins ?? []),
+		methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+		allowedHeaders: ['Content-Type', 'Authorization', 'X-Api-Key'],
+	});
+
 	const apiAuthToken = options?.apiAuthToken?.trim();
 
 	if (apiAuthToken) {
@@ -154,12 +162,6 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 			),
 			requestId: request.id,
 		});
-	});
-
-	await app.register(cors, {
-		origin: buildCorsOriginHandler(options?.corsAllowedOrigins ?? []),
-		methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-		allowedHeaders: ['Content-Type', 'Authorization', 'X-Api-Key'],
 	});
 
 	await app.register(rateLimit, {

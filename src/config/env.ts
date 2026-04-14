@@ -26,7 +26,7 @@ const envSchema = z.object({
       return trimmed && trimmed.length > 0 ? trimmed : undefined;
     })
     .pipe(z.string().min(16).optional()),
-  CORS_ALLOWED_ORIGINS: z.string().default('http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://localhost:5174'),
+  CORS_ALLOWED_ORIGINS: z.string().default('http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173'),
 
   // PostgreSQL
   DATABASE_URL: z.string().url({ message: 'DATABASE_URL must be a valid URL' }),
