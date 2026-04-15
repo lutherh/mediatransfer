@@ -1197,3 +1197,60 @@ export function scanDuplicatesStream(
   });
 }
 
+// ── Immich comparison types & API ──────────────────────────────────────
+
+export type MatchConfidence = 'exact-date' | 'fuzzy-date' | 'single-candidate' | 'ambiguous';
+
+export type OrphanMatch = {
+  assetId: string;
+  immichPath: string;
+  filename: string;
+  fileCreatedAt: string;
+  s3Path: string | null;
+  s3Candidates: string[];
+  confidence: MatchConfidence;
+  existsLocally: boolean;
+};
+
+export type OrphanScanResult = {
+  orphans: OrphanMatch[];
+  totalAssets: number;
+  totalOrphans: number;
+  matchedCount: number;
+  unmatchedCount: number;
+  localCount: number;
+};
+
+export type RemapResult = {
+  applied: number;
+  total: number;
+  backedUp: boolean;
+};
+
+export async function fetchImmichOrphans(): Promise<OrphanScanResult> {
+  const resp = await apiFetch('/catalog/api/immich/orphans');
+  return resp.json();
+}
+
+export async function remapImmichAssets(
+  remaps: { assetId: string; newPath: string }[],
+  backup = true,
+): Promise<RemapResult> {
+  const resp = await apiFetch('/catalog/api/immich/remap', {
+    method: 'POST',
+    body: JSON.stringify({ remaps, backup }),
+  });
+  return resp.json();
+}
+
+export async function resolveImmichAsset(
+  assetId: string,
+  s3Path: string,
+): Promise<{ updated: boolean; assetId: string; newPath: string }> {
+  const resp = await apiFetch('/catalog/api/immich/resolve', {
+    method: 'POST',
+    body: JSON.stringify({ assetId, s3Path }),
+  });
+  return resp.json();
+}
+
