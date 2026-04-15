@@ -19,12 +19,15 @@ services:
     devices:
       - /dev/fuse
     entrypoint: /bin/sh
+    stop_grace_period: 30s
     command:
       - -c
       - |
+        cleanup() { fusermount -uz /mnt/s3 2>/dev/null; exit 0; }
+        trap cleanup TERM INT
         mkdir -p /mnt/s3 &&
         fusermount -uz /mnt/s3 2>/dev/null || true &&
-        exec rclone mount ":s3:$${RCLONE_BUCKET}/$${RCLONE_PREFIX:-immich}" /mnt/s3 \
+        rclone mount ":s3:$${RCLONE_BUCKET}/$${RCLONE_PREFIX:-immich}" /mnt/s3 \
           --s3-provider Scaleway \
           --s3-access-key-id "$$SCW_ACCESS_KEY" \
           --s3-secret-access-key "$$SCW_SECRET_KEY" \
@@ -39,7 +42,8 @@ services:
           --transfers 8 \
           --allow-other \
           --allow-non-empty \
-          --log-level NOTICE
+          --log-level NOTICE &
+        wait $!
     env_file:
       - .env
       - .env.immich
@@ -50,7 +54,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 6
-      start_period: 15s
+      start_period: 45s
 
   immich-init:
     image: busybox:latest
@@ -72,8 +76,9 @@ services:
     image: ghcr.io/immich-app/immich-server:release
     container_name: immich_server
     restart: unless-stopped
+    stop_grace_period: 30s
     ports:
-      - "2283:2283"
+      - "127.0.0.1:2283:2283"
     volumes:
       - ${UPLOAD_LOCATION:-./data/immich}:/usr/src/app/upload
       - ${THUMB_LOCATION:-./data/immich/thumbs}:/usr/src/app/upload/thumbs
@@ -90,17 +95,32 @@ services:
         condition: service_healthy
       database:
         condition: service_healthy
-      redis:
+      immich-redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:2283/api/server/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   immich-machine-learning:
     image: ghcr.io/immich-app/immich-machine-learning:release
     container_name: immich_machine_learning
     restart: unless-stopped
+    depends_on:
+      immich-redis:
+        condition: service_healthy
     volumes:
       - immich-model-cache:/cache
     env_file:
       - .env.immich
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3003/ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
 
   database:
     image: ghcr.io/tensorchord/pgvecto-rs:pg16-v0.3.0
@@ -119,7 +139,7 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
+  immich-redis:
     image: redis:7-alpine
     container_name: immich_redis
     restart: unless-stopped
