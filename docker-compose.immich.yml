@@ -4,11 +4,54 @@
 # Stop:   docker compose -f docker-compose.immich.yml down
 #
 # Then open http://localhost:2283 to create your admin account.
-# Immich has no native S3 backend. Use a host-level S3 mount (rclone/s3fs)
-# and point UPLOAD_LOCATION to that mount path.
+# S3 originals are mounted via an rclone sidecar container into a shared volume.
 # On each iPhone, install the Immich app and point it to http://<your-pc-ip>:2283
 
 services:
+  rclone-s3:
+    image: rclone/rclone:latest
+    container_name: immich_rclone_s3
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    devices:
+      - /dev/fuse
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        mkdir -p /mnt/s3 &&
+        fusermount -uz /mnt/s3 2>/dev/null || true &&
+        exec rclone mount ":s3:$${RCLONE_BUCKET}/$${RCLONE_PREFIX:-immich}" /mnt/s3 \
+          --s3-provider Scaleway \
+          --s3-access-key-id "$$SCW_ACCESS_KEY" \
+          --s3-secret-access-key "$$SCW_SECRET_KEY" \
+          --s3-endpoint "https://s3.$${SCW_REGION:-nl-ams}.scw.cloud" \
+          --s3-region "$${SCW_REGION:-nl-ams}" \
+          --vfs-cache-mode full \
+          --vfs-cache-max-size 10G \
+          --vfs-cache-max-age 72h \
+          --vfs-read-chunk-size 16M \
+          --vfs-read-chunk-size-limit 64M \
+          --dir-cache-time 5m \
+          --transfers 8 \
+          --allow-other \
+          --allow-non-empty \
+          --log-level NOTICE
+    env_file:
+      - .env
+      - .env.immich
+    volumes:
+      - ./data/s3-mount:/mnt/s3:rshared
+    healthcheck:
+      test: ["CMD", "ls", "/mnt/s3"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
   immich-init:
     image: busybox:latest
     container_name: immich_init
@@ -37,12 +80,14 @@ services:
       - ${ENCODED_VIDEO_LOCATION:-./data/immich/encoded-video}:/usr/src/app/upload/encoded-video
       - ${PROFILE_LOCATION:-./data/immich/profile}:/usr/src/app/upload/profile
       - ${BACKUP_LOCATION:-./data/immich/backups}:/usr/src/app/upload/backups
-      - s3-photosync:/usr/src/app/upload/s3transfers:ro
+      - ./data/s3-mount:/usr/src/app/upload/s3transfers:ro,slave
     env_file:
       - .env.immich
     depends_on:
       immich-init:
         condition: service_completed_successfully
+      rclone-s3:
+        condition: service_healthy
       database:
         condition: service_healthy
       redis:
@@ -87,5 +132,3 @@ services:
 volumes:
   immich-pgdata:
   immich-model-cache:
-  s3-photosync:
-    external: true
