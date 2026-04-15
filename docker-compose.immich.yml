@@ -8,6 +8,30 @@
 # On each iPhone, install the Immich app and point it to http://<your-pc-ip>:2283
 
 services:
+  # Clean up stale FUSE mounts left by a crashed rclone-s3 container.
+  # Without this, Docker gets "transport endpoint is not connected" on the
+  # bind-mount path and refuses to start rclone-s3 after an unclean shutdown.
+  rclone-cleanup:
+    image: alpine:3.19
+    container_name: immich_rclone_cleanup
+    restart: "no"
+    privileged: true
+    pid: host
+    entrypoint: ["nsenter", "-t", "1", "-m", "--", "sh", "-c"]
+    command:
+      - |
+        # Find and lazy-unmount any stale rclone FUSE mounts
+        stale=$$(mount | grep 'fuse.rclone' | awk '{print $$3}')
+        if [ -n "$$stale" ]; then
+          echo "[rclone-cleanup] Cleaning stale FUSE mounts..."
+          echo "$$stale" | while read -r mp; do
+            echo "  umount -l $$mp"
+            umount -l "$$mp" 2>/dev/null || true
+          done
+        else
+          echo "[rclone-cleanup] No stale mounts found"
+        fi
+
   rclone-s3:
     image: rclone/rclone:latest
     container_name: immich_rclone_s3
@@ -49,6 +73,9 @@ services:
       - .env.immich
     volumes:
       - ./data/s3-mount:/mnt/s3:rshared
+    depends_on:
+      rclone-cleanup:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "ls", "/mnt/s3"]
       interval: 10s

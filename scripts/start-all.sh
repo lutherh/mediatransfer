@@ -35,6 +35,22 @@ ensure_rclone_plugin() {
   fi
 }
 
+# Clean stale FUSE mounts from a previous rclone crash.
+# On Docker Desktop (WSL2), a crashed rclone container leaves zombie FUSE
+# mount entries in the VM's mount table, causing "transport endpoint is not
+# connected" errors on the bind-mount path.
+clean_stale_fuse() {
+  echo "Checking for stale FUSE mounts..."
+  if command -v wsl.exe >/dev/null 2>&1; then
+    # Running inside WSL or Git Bash on Windows — clean via the docker-desktop distro
+    wsl.exe -d docker-desktop -u root -- sh -c \
+      'for mp in $(mount | grep fuse.rclone | awk "{print \$3}"); do
+        echo "  Cleaning stale mount: $mp"
+        umount -l "$mp" 2>/dev/null || true
+       done' 2>/dev/null || true
+  fi
+}
+
 ACTION="${1:-up}"
 
 wait_for_docker
@@ -42,24 +58,19 @@ ensure_rclone_plugin
 
 case "$ACTION" in
   up|start)
-    echo "Starting MediaTransfer stack..."
-    docker compose -f docker-compose.yml up -d
+    clean_stale_fuse
 
-    echo "Starting Immich stack..."
-    docker compose -f docker-compose.immich.yml up -d
+    echo "Starting all services..."
+    docker compose -f docker-compose.yml -f docker-compose.immich.yml up -d
 
     echo ""
     echo "All services started."
-    docker compose -f docker-compose.yml ps --format 'table {{.Name}}\t{{.Status}}'
-    docker compose -f docker-compose.immich.yml ps --format 'table {{.Name}}\t{{.Status}}'
+    docker compose -f docker-compose.yml -f docker-compose.immich.yml ps --format 'table {{.Name}}\t{{.Status}}'
     ;;
 
   down|stop)
-    echo "Stopping Immich stack..."
-    docker compose -f docker-compose.immich.yml down
-
-    echo "Stopping MediaTransfer stack..."
-    docker compose -f docker-compose.yml down
+    echo "Stopping all services..."
+    docker compose -f docker-compose.yml -f docker-compose.immich.yml down
     ;;
 
   restart)
