@@ -80,3 +80,6 @@ scripts/immich-update.cmd
 data/immich-asset-paths.txt
 data/library-admin-assets.csv
 data/s3-file-list.txt
+data/s3-filelist-rclone.txt
+data/library-admin-filenames.txt
+data/local-library-files.txt
