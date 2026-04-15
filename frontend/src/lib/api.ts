@@ -1228,7 +1228,7 @@ export type RemapResult = {
 };
 
 export async function fetchImmichOrphans(): Promise<OrphanScanResult> {
-  const resp = await apiFetch('/catalog/api/immich/orphans');
+  const resp = await apiFetch(`${API_BASE_URL}/catalog/api/immich/orphans`);
   return resp.json();
 }
 
@@ -1236,7 +1236,7 @@ export async function remapImmichAssets(
   remaps: { assetId: string; newPath: string }[],
   backup = true,
 ): Promise<RemapResult> {
-  const resp = await apiFetch('/catalog/api/immich/remap', {
+  const resp = await apiFetch(`${API_BASE_URL}/catalog/api/immich/remap`, {
     method: 'POST',
     body: JSON.stringify({ remaps, backup }),
   });
@@ -1247,7 +1247,7 @@ export async function resolveImmichAsset(
   assetId: string,
   s3Path: string,
 ): Promise<{ updated: boolean; assetId: string; newPath: string }> {
-  const resp = await apiFetch('/catalog/api/immich/resolve', {
+  const resp = await apiFetch(`${API_BASE_URL}/catalog/api/immich/resolve`, {
     method: 'POST',
     body: JSON.stringify({ assetId, s3Path }),
   });
