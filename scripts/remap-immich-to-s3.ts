@@ -27,6 +27,7 @@ const rootDir = join(__dirname, '..');
 
 const DRY_RUN = !process.argv.includes('--execute');
 const BACKUP = process.argv.includes('--backup');
+const FORCE_SINGLE = process.argv.includes('--force-single');
 
 // S3 mount path inside Immich container
 const S3_MOUNT = '/usr/src/app/upload/s3transfers';
@@ -198,10 +199,12 @@ function matchAssetToS3(asset: Asset, s3Index: Map<string, string[]>): string | 
 	// Only use cross-year single-candidate fallback if the filename is highly unique
 	// (contains enough entropy that a collision is extremely unlikely).
 	// Generic names like IMG_0512.HEIC appear across many years — never fall back for those.
+	// Unless --force-single is set: then allow single-candidate match for generics too
+	// (used to recover assets whose local files were deleted but exist in S3 under wrong dates).
 	if (candidates.length === 1) {
 		const fname = asset.originalFileName.toLowerCase();
 		const isGeneric = /^(img_|vid_|movie|dsc_|dscn|screenshot_|20\d{6}_)\d/i.test(fname);
-		if (!isGeneric) return candidates[0];
+		if (!isGeneric || FORCE_SINGLE) return candidates[0];
 	}
 
 	return null; // ambiguous or no match

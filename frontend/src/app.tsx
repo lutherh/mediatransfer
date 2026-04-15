@@ -17,6 +17,7 @@ import { CatalogUndatedPage } from '@/pages/catalog-undated-page';
 import { UploadPage } from '@/pages/upload-page';
 import { SequenceAnalysisPage } from '@/pages/sequence-analysis-page';
 import { PipelinePage } from '@/pages/pipeline-page';
+import { ImmichComparePage } from '@/pages/immich-compare-page';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -46,6 +47,7 @@ export function App() {
             <Route element={<TransfersListPage />} path="transfers" />
             <Route element={<CatalogPage />} path="catalog" />
             <Route element={<CatalogDedupPage />} path="catalog/dedup" />
+            <Route element={<ImmichComparePage />} path="catalog/immich-compare" />
             <Route element={<CatalogAlbumsPage />} path="catalog/albums" />
             <Route element={<CatalogAlbumDetailPage />} path="catalog/albums/:albumId" />
             <Route element={<CatalogUndatedPage />} path="catalog/undated" />
