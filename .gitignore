@@ -78,3 +78,5 @@ scripts/_test-*
 scripts/*.ps1
 scripts/immich-update.cmd
 data/immich-asset-paths.txt
+data/library-admin-assets.csv
+data/s3-file-list.txt
