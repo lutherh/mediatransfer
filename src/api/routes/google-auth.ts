@@ -87,7 +87,9 @@ export async function registerGoogleAuthRoutes(app: FastifyInstance, env: Env): 
    * Exchanges the authorization code for tokens.
    * Body: { code: string }
    */
-  app.post('/auth/google/callback', async (req, reply) => {
+  app.post('/auth/google/callback', {
+    config: { rateLimit: { max: 10, timeWindow: '15 minutes' } },
+  }, async (req, reply) => {
     const config = getGoogleConfig(env);
     if (!config) {
       return reply.code(500).send(apiError('GOOGLE_CONFIG_MISSING', 'Google OAuth2 credentials not configured'));
@@ -116,7 +118,9 @@ export async function registerGoogleAuthRoutes(app: FastifyInstance, env: Env): 
    * POST /auth/google/disconnect
    * Clears stored tokens.
    */
-  app.post('/auth/google/disconnect', async () => {
+  app.post('/auth/google/disconnect', {
+    config: { rateLimit: { max: 10, timeWindow: '15 minutes' } },
+  }, async () => {
     await clearStoredTokens();
     return { connected: false };
   });
