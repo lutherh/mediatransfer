@@ -123,6 +123,12 @@ vi.mock('@/lib/api', () => ({
   catalogMediaUrl: vi.fn((encodedKey: string) => `/catalog/media/${encodedKey}`),
   catalogThumbnailUrl: vi.fn((encodedKey: string, size: string) => `/catalog/thumb/${size}/${encodedKey}`),
   deleteCatalogItems: vi.fn(async () => {}),
+  fetchBootstrapStatus: vi.fn(async () => ({
+    needsSetup: false,
+    authTokenSet: true,
+    dbConnected: true,
+    configured: { scaleway: true, google: true, immich: true },
+  })),
 }));
 
 function renderRoute(path: string) {

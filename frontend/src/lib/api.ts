@@ -5,14 +5,52 @@ const TAKEOUT_FETCH_TIMEOUT_MS = 10_000;
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 
 /** Wrapper around fetch() that injects the Authorization header when VITE_API_TOKEN is set.
- *  Also applies a default 30s timeout via AbortSignal unless one is already provided. */
-export function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+ *  Also applies a default 30s timeout via AbortSignal unless one is already provided,
+ *  and translates AbortError (from our own timeout) into a human-readable "Request timed out"
+ *  error. User-provided signals pass through unchanged (AbortError re-thrown as-is). */
+export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   if (API_TOKEN && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${API_TOKEN}`);
   }
+  // Auto-set Content-Type for JSON string bodies when caller didn't set one.
+  // Skipped for FormData/Blob/ArrayBuffer/URLSearchParams (browser sets correct header).
+  if (
+    typeof init?.body === 'string' &&
+    !headers.has('Content-Type')
+  ) {
+    headers.set('Content-Type', 'application/json');
+  }
+  const userProvidedSignal = init?.signal != null;
   const signal = init?.signal ?? AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT_MS);
-  return fetch(input, { ...init, headers, signal });
+  try {
+    return await fetch(input, { ...init, headers, signal });
+  } catch (err) {
+    // Only translate timeouts from OUR internal AbortSignal.timeout().
+    // If the caller provided their own signal, surface the AbortError verbatim
+    // so they can distinguish user cancellation from a timeout.
+    if (!userProvidedSignal && err instanceof DOMException && err.name === 'TimeoutError') {
+      throw new Error(`Request timed out after ${DEFAULT_FETCH_TIMEOUT_MS}ms`);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Read a Response as JSON, throwing a normalized Error on non-2xx status.
+ * Use this in preference to `if (!response.ok) { ... } return response.json()`
+ * so error handling stays consistent across the codebase.
+ */
+export async function parseResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
+  if (!response.ok) {
+    const raw = await response.text().catch(() => '');
+    const { code, message } = parseApiError(raw);
+    if (code) {
+      throw new ApiError(code, message ?? fallbackMessage);
+    }
+    throw new Error(message ?? fallbackMessage);
+  }
+  return (await response.json()) as T;
 }
 
 export type TransferJob = {
@@ -1177,7 +1215,12 @@ export function scanDuplicatesStream(
                 settled = true;
                 reject(new Error(event.message));
               }
-            } catch { /* skip malformed */ }
+            } catch (parseErr) {
+              // Don't fail the stream on a single malformed frame, but do
+              // surface it so it's debuggable. A run of bad frames still
+              // eventually hits STREAM_ENDED_UNEXPECTEDLY.
+              console.warn('[scanDuplicatesStream] Skipped malformed SSE frame', parseErr);
+            }
           }
         }
 
@@ -1224,7 +1267,7 @@ export type RemapResult = {
 
 export async function fetchImmichOrphans(): Promise<OrphanScanResult> {
   const resp = await apiFetch(`${API_BASE_URL}/catalog/api/immich/orphans`);
-  return resp.json();
+  return parseResponse<OrphanScanResult>(resp, 'Failed to fetch Immich orphans');
 }
 
 export async function remapImmichAssets(
@@ -1233,9 +1276,10 @@ export async function remapImmichAssets(
 ): Promise<RemapResult> {
   const resp = await apiFetch(`${API_BASE_URL}/catalog/api/immich/remap`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ remaps, backup }),
   });
-  return resp.json();
+  return parseResponse<RemapResult>(resp, 'Failed to remap Immich assets');
 }
 
 export async function resolveImmichAsset(
@@ -1244,8 +1288,165 @@ export async function resolveImmichAsset(
 ): Promise<{ updated: boolean; assetId: string; newPath: string }> {
   const resp = await apiFetch(`${API_BASE_URL}/catalog/api/immich/resolve`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ assetId, s3Path }),
   });
-  return resp.json();
+  return parseResponse<{ updated: boolean; assetId: string; newPath: string }>(
+    resp,
+    'Failed to resolve Immich asset',
+  );
+}
+
+// ── Settings & Setup API ───────────────────────────────────────────────────
+
+export type BootstrapStatus = {
+  needsSetup: boolean;
+  authTokenSet: boolean;
+  dbConnected: boolean;
+  configured: { scaleway: boolean; google: boolean; immich: boolean };
+};
+
+export type SettingsStatus = {
+  scaleway: boolean;
+  google: boolean;
+  immich: boolean;
+  authTokenSet: boolean;
+};
+
+export type ScalewaySettingsResponse = {
+  configured: boolean;
+  region?: string;
+  bucket?: string;
+  prefix?: string;
+  storageClass?: string;
+  endpoint?: string;
+  forcePathStyle?: boolean;
+  accessKey?: string;
+  secretKey?: string;
+};
+
+export type GoogleSettingsResponse = {
+  configured: boolean;
+  clientId?: string;
+  clientSecret?: string;
+  redirectUri?: string;
+};
+
+export type ImmichSettingsResponse = {
+  configured: boolean;
+  url?: string;
+  apiKey?: string;
+};
+
+export type TestResult = { ok: boolean; error?: string; serverVersion?: string };
+
+export async function fetchBootstrapStatus(): Promise<BootstrapStatus> {
+  const res = await fetch(`${API_BASE_URL}/setup/bootstrap-status`, {
+    signal: AbortSignal.timeout(10_000),
+  });
+  return res.json();
+}
+
+export async function fetchSettingsStatus(): Promise<SettingsStatus> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/status`);
+  return res.json();
+}
+
+export async function fetchScalewaySettings(): Promise<ScalewaySettingsResponse> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/scaleway`);
+  return res.json();
+}
+
+export async function testScalewaySettings(body: {
+  accessKey?: string;
+  secretKey?: string;
+  region: string;
+  bucket: string;
+  endpoint?: string;
+  forcePathStyle?: boolean;
+}): Promise<TestResult> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/scaleway/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20_000),
+  });
+  return res.json();
+}
+
+export async function saveScalewaySettings(body: {
+  accessKey?: string;
+  secretKey?: string;
+  region: string;
+  bucket: string;
+  prefix?: string;
+  storageClass?: string;
+  endpoint?: string;
+  forcePathStyle?: boolean;
+}): Promise<void> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/scaleway`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `Save failed (${res.status})`);
+  }
+}
+
+export async function fetchGoogleSettings(): Promise<GoogleSettingsResponse> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/google`);
+  return res.json();
+}
+
+export async function saveGoogleSettings(body: {
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+}): Promise<void> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/google`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `Save failed (${res.status})`);
+  }
+}
+
+export async function fetchImmichSettings(): Promise<ImmichSettingsResponse> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/immich`);
+  return res.json();
+}
+
+export async function testImmichSettings(body: {
+  url: string;
+  apiKey: string;
+}): Promise<TestResult> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/immich/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15_000),
+  });
+  return res.json();
+}
+
+export async function saveImmichSettings(body: {
+  url: string;
+  apiKey?: string;
+}): Promise<void> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/immich`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `Save failed (${res.status})`);
+  }
 }
 

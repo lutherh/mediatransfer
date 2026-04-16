@@ -16,6 +16,16 @@ export async function main(): Promise<void> {
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
 
+  // Warn if any origin contains wildcards (matched as substrings / regex by @fastify/cors).
+  // These relax SOP protection and should be narrowed in production.
+  const wildcardOrigins = corsAllowedOrigins.filter((o) => /[*?]/.test(o));
+  if (wildcardOrigins.length > 0 && env.NODE_ENV === 'production') {
+    console.warn(
+      `[cors] WARNING: wildcard pattern(s) in CORS_ALLOWED_ORIGINS: ${wildcardOrigins.join(', ')}. ` +
+      `Narrow to explicit origins (e.g. https://your.domain) for production deployments.`,
+    );
+  }
+
   const app = await createApiServer({
     enableSwagger: env.NODE_ENV !== 'production',
     apiAuthToken: env.API_AUTH_TOKEN,

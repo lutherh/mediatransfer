@@ -74,10 +74,8 @@ describe('resolveScalewayEndpoint', () => {
     expect(resolveScalewayEndpoint(url)).toBe(url);
   });
 
-  it('should throw for an unknown region string', () => {
-    expect(() => resolveScalewayEndpoint('us-east-1')).toThrow(
-      /Unknown Scaleway region "us-east-1"/,
-    );
+  it('should return undefined for an unknown region string (lets AWS SDK resolve endpoint)', () => {
+    expect(resolveScalewayEndpoint('us-east-1')).toBeUndefined();
   });
 });
 
@@ -92,10 +90,8 @@ describe('resolveScalewaySigningRegion', () => {
     expect(resolveScalewaySigningRegion('https://s3.nl-ams.scw.cloud')).toBe('nl-ams');
   });
 
-  it('should throw for non-Scaleway endpoint URL', () => {
-    expect(() => resolveScalewaySigningRegion('https://example.com')).toThrow(
-      /Cannot derive Scaleway signing region/,
-    );
+  it('should fall back to hostname for non-Scaleway endpoint URL', () => {
+    expect(resolveScalewaySigningRegion('https://example.com')).toBe('example.com');
   });
 });
 

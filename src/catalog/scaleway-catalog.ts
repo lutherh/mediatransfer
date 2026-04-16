@@ -1124,16 +1124,30 @@ export class ScalewayCatalogService implements CatalogService {
       { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
     );
 
-    // Delete original
-    await this.client.send(
-      new DeleteObjectCommand({
-        Bucket: this.bucket,
-        Key: fullOldKey,
-      }),
-      { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
-    );
+    // Delete original. If delete fails, roll back by removing the copy we just created
+    // so we don't end up with the file in both locations.
+    try {
+      await this.client.send(
+        new DeleteObjectCommand({
+          Bucket: this.bucket,
+          Key: fullOldKey,
+        }),
+        { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
+      );
+    } catch (deleteErr) {
+      // Best-effort rollback — remove the copy
+      try {
+        await this.client.send(
+          new DeleteObjectCommand({ Bucket: this.bucket, Key: fullNewKey }),
+          { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
+        );
+      } catch {
+        // Rollback also failed — log and surface the original error
+      }
+      throw deleteErr;
+    }
 
-    // Invalidate caches
+    // Invalidate caches only after both S3 ops succeed
     this.statsCache = null;
     this.itemsIndexCache = null;
 
