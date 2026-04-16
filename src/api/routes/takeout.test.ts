@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { registerTakeoutRoutes } from './takeout.js';
+import { registerTakeoutRoutes, validateCustomPath } from './takeout.js';
 import type { Env } from '../../config/env.js';
 
 const spawnMock = vi.fn();
@@ -45,6 +45,12 @@ function baseEnv(overrides: Partial<Env> = {}): Env {
     SCW_REGION: 'fr-par',
     SCW_BUCKET: undefined,
     SCW_PREFIX: undefined,
+    SCW_STORAGE_CLASS: 'ONEZONE_IA',
+    SCW_ENDPOINT_URL: undefined,
+    SCW_FORCE_PATH_STYLE: 'true',
+    SCW_S3_REQUEST_TIMEOUT_MS: 300_000,
+    SCW_S3_LIST_MAX_RETRIES: 5,
+    THUMB_CACHE_DIR: path.join(tempDir, 'thumbs'),
     GOOGLE_CLIENT_ID: undefined,
     GOOGLE_CLIENT_SECRET: undefined,
     GOOGLE_REDIRECT_URI: 'http://localhost:5173/auth/google/callback',
@@ -59,6 +65,8 @@ function baseEnv(overrides: Partial<Env> = {}): Env {
     TRANSFER_STATE_PATH: path.join(tempDir, 'state.json'),
     UPLOAD_CONCURRENCY: 4,
     UPLOAD_RETRY_COUNT: 5,
+    WORKER_CONCURRENCY: 2,
+    TRANSFER_ITEM_CONCURRENCY: 4,
     ...overrides,
   };
 }
@@ -1319,3 +1327,38 @@ describe('takeout routes', () => {
   });
 });
 
+
+describe('validateCustomPath', () => {
+  it('accepts ordinary absolute and relative paths', () => {
+    expect(validateCustomPath('C:\\Users\\foo\\bar')).toBeNull();
+    expect(validateCustomPath('/var/lib/app/data')).toBeNull();
+    expect(validateCustomPath('./relative/dir')).toBeNull();
+    expect(validateCustomPath('path with spaces/ok')).toBeNull();
+  });
+
+  it('rejects shell metacharacters that could enable command injection', () => {
+    const bad = [
+      'C:\\a & calc.exe',
+      'a|b',
+      'a;rm',
+      'a\x60whoami\x60',
+      'a\x24(id)',
+      'a>b',
+      'a<b',
+      'a"b',
+      "a'b",
+      'a*b',
+      'a?b',
+      'a\nb',
+      'a\rb',
+      'a\tb',
+    ];
+    for (const value of bad) {
+      expect(validateCustomPath(value), value).not.toBeNull();
+    }
+  });
+
+  it('rejects paths containing a null byte', () => {
+    expect(validateCustomPath('a\u0000b')).not.toBeNull();
+  });
+});

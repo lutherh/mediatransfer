@@ -201,13 +201,30 @@ function useAutoDetect(onComplete: () => void) {
   // Poll while running
   useEffect(() => {
     if (status !== 'running') return;
+    const MAX_POLLS = 2400; // ~60 minutes at 1500ms intervals
+    let pollCount = 0;
     const poll = setInterval(async () => {
+      pollCount++;
+      if (pollCount > MAX_POLLS) {
+        setStatus('error');
+        setError('Auto-detect timed out after 60 minutes');
+        stopPolling();
+        onComplete();
+        return;
+      }
       try {
         const s = await fetchTakeoutActionStatus();
         setActionStatus(s);
-        if (!s.running && s.action === 'repair-dates-s3') {
-          setStatus(s.success ? 'done' : 'error');
-          if (!s.success) setError(`Exited with code ${s.exitCode ?? 'unknown'}`);
+        if (!s.running) {
+          // Stop whether the action matches or not — our process is done
+          if (s.action === 'repair-dates-s3') {
+            setStatus(s.success ? 'done' : 'error');
+            if (!s.success) setError(`Exited with code ${s.exitCode ?? 'unknown'}`);
+          } else {
+            // Died without a matching action report (crashed or server restarted)
+            setStatus('error');
+            setError('Process ended unexpectedly');
+          }
           stopPolling();
           onComplete();
         }

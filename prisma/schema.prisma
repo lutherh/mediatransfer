@@ -47,6 +47,8 @@ model TransferJob {
 
   logs TransferLog[]
 
+  @@index([status, createdAt])
+  @@index([createdAt])
   @@map("transfer_jobs")
 }
 
@@ -96,6 +98,7 @@ model MediaItem {
   @@index([capturedAt])
   @@index([sha256, source])
   @@index([source, capturedAt])
+  @@index([uploadedAt])
   @@map("media_items")
 }
 

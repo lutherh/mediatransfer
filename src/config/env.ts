@@ -44,13 +44,17 @@ const envSchema = z.object({
     { message: 'ENCRYPTION_SECRET is still set to the default placeholder. Generate a real secret.' },
   ),
 
-  // Scaleway Object Storage (optional — only needed when using Scaleway provider)
+  // S3-compatible Object Storage (Scaleway, AWS, Backblaze B2, Cloudflare R2, …)
   SCW_ACCESS_KEY: optionalString,
   SCW_SECRET_KEY: optionalString,
   SCW_REGION: z.string().min(1).default('fr-par'),
   SCW_BUCKET: optionalString,
   SCW_PREFIX: emptyToUndefined.pipe(z.string().optional()),
   SCW_STORAGE_CLASS: z.string().min(1).default('ONEZONE_IA'),
+  /** Explicit endpoint URL override — required for non-Scaleway providers (e.g. https://s3.amazonaws.com) */
+  SCW_ENDPOINT_URL: emptyToUndefined.pipe(z.string().url().optional()),
+  /** Set to "false" to use virtual-hosted-style requests (required for AWS S3). Defaults to "true". */
+  SCW_FORCE_PATH_STYLE: z.enum(['true', 'false']).default('true'),
   SCW_S3_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(900_000).default(300_000),
   SCW_S3_LIST_MAX_RETRIES: z.coerce.number().int().min(1).max(10).default(5),
 
@@ -75,6 +79,13 @@ const envSchema = z.object({
   UPLOAD_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   UPLOAD_RETRY_COUNT: z.coerce.number().int().min(0).max(20).default(5),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(2),
+  /**
+   * Per-job in-flight item concurrency inside a single transfer worker run.
+   * Controls how many picker-media-item downloads+uploads proceed in parallel
+   * within one transfer job. Independent of WORKER_CONCURRENCY (which controls
+   * how many jobs run concurrently).
+   */
+  TRANSFER_ITEM_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
 });
 
 export type Env = z.infer<typeof envSchema>;

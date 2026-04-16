@@ -2,6 +2,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
+import helmet from '@fastify/helmet';
+import compress from '@fastify/compress';
 import { timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { ZodError } from 'zod';
@@ -54,6 +56,8 @@ import { registerCloudUsageRoutes } from './routes/cloud-usage.js';
 import { registerUploadRoutes } from './routes/uploads.js';
 import { registerPipelineRoutes } from './routes/pipeline.js';
 import { registerImmichCompareRoutes } from './routes/immich-compare.js';
+import { registerSettingsRoutes } from './routes/settings.js';
+import { registerSetupRoutes } from './routes/setup.js';
 import { getStoredTokens, setStoredTokens } from './routes/google-token-store.js';
 import type { ApiServices } from './types.js';
 import { loadEnv, type Env } from '../config/env.js';
@@ -82,6 +86,22 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 					'req.headers.authorization',
 					'req.headers.x-api-key',
 					'req.query.apiToken',
+					// Flat-body secrets (settings / credentials routes)
+					'req.body.accessKey',
+					'req.body.secretKey',
+					'req.body.clientSecret',
+					'req.body.apiKey',
+					'req.body.refreshToken',
+					'req.body.password',
+					'req.body.token',
+					'body.accessKey',
+					'body.secretKey',
+					'body.clientSecret',
+					'body.apiKey',
+					'body.refreshToken',
+					'body.password',
+					'body.token',
+					// Nested `config` payloads (credentials routes)
 					'req.body.config',
 					'body.config',
 					'config.secretKey',
@@ -112,6 +132,10 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 			}
 
 			if (request.url.startsWith('/health')) {
+				return;
+			}
+
+			if (request.url.startsWith('/setup/bootstrap-status')) {
 				return;
 			}
 
@@ -165,6 +189,23 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 		});
 	});
 
+	// Security headers — applied to all responses.
+	// CSP is intentionally permissive here because the API is consumed by a
+	// separate SPA origin (configured via CORS). Tighten if serving HTML directly.
+	await app.register(helmet, {
+		contentSecurityPolicy: false,
+		crossOriginResourcePolicy: { policy: 'cross-origin' },
+		crossOriginEmbedderPolicy: false,
+		referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+	});
+
+	// Response compression for JSON/HTML above 1KB. Streamed S3 media is
+	// skipped automatically based on content-type.
+	await app.register(compress, {
+		threshold: 1024,
+		encodings: ['br', 'gzip'],
+	});
+
 	await app.register(rateLimit, {
 		max: 500,
 		timeWindow: '1 minute',
@@ -208,6 +249,8 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	await registerGoogleAuthRoutes(app, env);
 	await registerPipelineRoutes(app);
 	await registerImmichCompareRoutes(app, runtime.services.catalog);
+	await registerSettingsRoutes(app);
+	await registerSetupRoutes(app);
 
 	app.addHook('onClose', async () => {
 		await runtime.dispose?.();
@@ -374,7 +417,15 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 			return;
 		}
 
-		for (let index = 0; index < payload.keys.length; index += 1) {
+		// Process items in bounded-concurrency chunks. Each item still runs
+		// its own sequential retry loop; only the outer "start the next item"
+		// step is parallelised. Cancellation is checked between chunks so any
+		// in-flight item in a chunk is allowed to settle and avoid leaking
+		// half-uploaded objects to destination storage.
+		const itemConcurrency = Math.max(1, Math.min(16, loadEnv().TRANSFER_ITEM_CONCURRENCY));
+		let completed = 0;
+
+		for (let chunkStart = 0; chunkStart < payload.keys.length; chunkStart += itemConcurrency) {
 			if (await shouldStop()) {
 				await createTransferLog({
 					jobId: payload.transferJobId,
@@ -383,69 +434,76 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 				return;
 			}
 
-			const mediaItemId = payload.keys[index];
-			let result: { destinationKey: string; filename?: string; skipped: boolean } | null = null;
-			let successfulAttempt = 0;
+			const chunk = payload.keys.slice(chunkStart, chunkStart + itemConcurrency);
 
-			for (let attempt = 1; attempt <= ITEM_RETRY_MAX_ATTEMPTS; attempt += 1) {
-				await createTransferLog({
-					jobId: payload.transferJobId,
-					message: `Processing item ${mediaItemId} (${attempt}/${ITEM_RETRY_MAX_ATTEMPTS})`,
-					meta: {
-						mediaItemId,
-						attempt,
-						maxAttempts: ITEM_RETRY_MAX_ATTEMPTS,
-						status: 'IN_PROGRESS',
-					},
-				});
-				try {
-					result = await transferPickedMediaItemToScaleway(payload, mediaItemId);
-					successfulAttempt = attempt;
-					break;
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					const canRetry =
-						attempt < ITEM_RETRY_MAX_ATTEMPTS &&
-						isRetryableTransferItemError(error);
+			const chunkResults = await Promise.all(
+				chunk.map(async (mediaItemId) => {
+					let result: { destinationKey: string; filename?: string; skipped: boolean } | null = null;
+					let successfulAttempt = 0;
 
-					if (!canRetry) {
+					for (let attempt = 1; attempt <= ITEM_RETRY_MAX_ATTEMPTS; attempt += 1) {
 						await createTransferLog({
 							jobId: payload.transferJobId,
-							level: 'ERROR',
-							message: `Item failed ${mediaItemId}: ${message}`,
+							message: `Processing item ${mediaItemId} (${attempt}/${ITEM_RETRY_MAX_ATTEMPTS})`,
 							meta: {
 								mediaItemId,
 								attempt,
 								maxAttempts: ITEM_RETRY_MAX_ATTEMPTS,
-								status: 'FAILED',
-								error: message,
+								status: 'IN_PROGRESS',
 							},
 						});
-						throw error;
+						try {
+							result = await transferPickedMediaItemToScaleway(payload, mediaItemId);
+							successfulAttempt = attempt;
+							break;
+						} catch (error) {
+							const message = error instanceof Error ? error.message : String(error);
+							const canRetry =
+								attempt < ITEM_RETRY_MAX_ATTEMPTS &&
+								isRetryableTransferItemError(error);
+
+							if (!canRetry) {
+								await createTransferLog({
+									jobId: payload.transferJobId,
+									level: 'ERROR',
+									message: `Item failed ${mediaItemId}: ${message}`,
+									meta: {
+										mediaItemId,
+										attempt,
+										maxAttempts: ITEM_RETRY_MAX_ATTEMPTS,
+										status: 'FAILED',
+										error: message,
+									},
+								});
+								throw error;
+							}
+
+							const delayMs = computeItemRetryDelay(attempt);
+							await createTransferLog({
+								jobId: payload.transferJobId,
+								level: 'WARN',
+								message: `Retrying item ${mediaItemId} (attempt ${attempt + 1}/${ITEM_RETRY_MAX_ATTEMPTS})`,
+								meta: {
+									mediaItemId,
+									attempt,
+									maxAttempts: ITEM_RETRY_MAX_ATTEMPTS,
+									delayMs,
+									error: message,
+									status: 'RETRYING',
+								},
+							});
+
+							await delay(delayMs);
+						}
 					}
 
-					const delayMs = computeItemRetryDelay(attempt);
-					await createTransferLog({
-						jobId: payload.transferJobId,
-						level: 'WARN',
-						message: `Retrying item ${mediaItemId} (attempt ${attempt + 1}/${ITEM_RETRY_MAX_ATTEMPTS})`,
-						meta: {
-							mediaItemId,
-							attempt,
-							maxAttempts: ITEM_RETRY_MAX_ATTEMPTS,
-							delayMs,
-							error: message,
-							status: 'RETRYING',
-						},
-					});
+					if (!result) {
+						throw new Error(`Transfer item ${mediaItemId} did not produce a result`);
+					}
 
-					await delay(delayMs);
-				}
-			}
-
-			if (!result) {
-				throw new Error(`Transfer item ${mediaItemId} did not produce a result`);
-			}
+					return { mediaItemId, result, successfulAttempt };
+				}),
+			);
 
 			if (await shouldStop()) {
 				await createTransferLog({
@@ -455,31 +513,37 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 				return;
 			}
 
-			const progress = total === 0 ? 1 : (startIndex + index + 1) / total;
+			// Emit per-item completion logs in deterministic (submission) order.
+			for (const { mediaItemId, result, successfulAttempt } of chunkResults) {
+				completed += 1;
+				const progress = total === 0 ? 1 : (startIndex + completed) / total;
 
+				await createTransferLog({
+					jobId: payload.transferJobId,
+					message: result.skipped
+						? `Skipped existing ${result.filename ?? mediaItemId}`
+						: `Uploaded ${result.filename ?? mediaItemId}`,
+					meta: {
+						mediaItemId,
+						destinationKey: result.destinationKey,
+						skipped: result.skipped,
+						progress,
+						itemProgressPercent: 100,
+						completed: startIndex + completed,
+						total,
+						attempts: successfulAttempt,
+						status: result.skipped ? 'SKIPPED' : 'COMPLETED',
+					},
+				});
+			}
+
+			// Single progress write per chunk keeps DB load bounded.
+			const progress = total === 0 ? 1 : (startIndex + completed) / total;
 			await updateJob(payload.transferJobId, {
 				progress,
 				status: progress >= 1 ? TransferStatus.COMPLETED : TransferStatus.IN_PROGRESS,
 				completedAt: progress >= 1 ? new Date() : null,
 				errorMessage: null,
-			});
-
-			await createTransferLog({
-				jobId: payload.transferJobId,
-				message: result.skipped
-					? `Skipped existing ${result.filename ?? mediaItemId}`
-					: `Uploaded ${result.filename ?? mediaItemId}`,
-				meta: {
-					mediaItemId,
-					destinationKey: result.destinationKey,
-					skipped: result.skipped,
-					progress,
-					itemProgressPercent: 100,
-					completed: startIndex + index + 1,
-					total,
-					attempts: successfulAttempt,
-					status: result.skipped ? 'SKIPPED' : 'COMPLETED',
-				},
 			});
 		}
 	} catch (error) {
@@ -695,6 +759,8 @@ function getScalewayConfigFromEnv(env: Env) {
 		secretKey: env.SCW_SECRET_KEY,
 		prefix: env.SCW_PREFIX,
 		storageClass: env.SCW_STORAGE_CLASS,
+		endpoint: env.SCW_ENDPOINT_URL,
+		forcePathStyle: env.SCW_FORCE_PATH_STYLE !== 'false',
 	});
 }
 

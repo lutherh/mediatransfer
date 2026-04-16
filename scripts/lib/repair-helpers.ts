@@ -57,16 +57,18 @@ export function createS3Helpers(): S3Helpers {
     accessKey: process.env.SCW_ACCESS_KEY,
     secretKey: process.env.SCW_SECRET_KEY,
     prefix: process.env.SCW_PREFIX,
+    endpoint: process.env.SCW_ENDPOINT_URL || undefined,
+    forcePathStyle: process.env.SCW_FORCE_PATH_STYLE === 'false' ? false : true,
   });
 
   const s3 = new S3Client({
     region: resolveScalewaySigningRegion(scwConfig.region),
-    endpoint: resolveScalewayEndpoint(scwConfig.region),
+    ...(scwConfig.endpoint ? { endpoint: scwConfig.endpoint } : resolveScalewayEndpoint(scwConfig.region) ? { endpoint: resolveScalewayEndpoint(scwConfig.region) } : {}),
     credentials: {
       accessKeyId: scwConfig.accessKey,
       secretAccessKey: scwConfig.secretKey,
     },
-    forcePathStyle: true,
+    forcePathStyle: scwConfig.forcePathStyle ?? true,
   });
 
   const bucket = scwConfig.bucket;

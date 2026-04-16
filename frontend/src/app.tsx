@@ -18,6 +18,8 @@ import { UploadPage } from '@/pages/upload-page';
 import { SequenceAnalysisPage } from '@/pages/sequence-analysis-page';
 import { PipelinePage } from '@/pages/pipeline-page';
 import { ImmichComparePage } from '@/pages/immich-compare-page';
+import { SetupPage } from '@/pages/setup-page';
+import { SettingsPage } from '@/pages/settings-page';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -40,6 +42,8 @@ export function App() {
         <Routes>
           {/* OAuth callback renders outside the main layout */}
           <Route element={<OAuthCallbackPage />} path="auth/google/callback" />
+          {/* Setup wizard renders outside the main layout (full-screen) */}
+          <Route element={<SetupPage />} path="setup" />
           <Route element={<Layout />} path="/">
             <Route element={<PhotoTransferPage />} index />
             <Route element={<UploadPage />} path="upload" />
@@ -56,6 +60,7 @@ export function App() {
             <Route element={<SequenceAnalysisPage />} path="takeout/sequences" />
             <Route element={<NewTransferPage />} path="transfers/new" />
             <Route element={<TransferDetailPage />} path="transfers/:id" />
+            <Route element={<SettingsPage />} path="settings" />
           </Route>
           <Route element={<Navigate replace to="/" />} path="*" />
         </Routes>

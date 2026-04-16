@@ -156,6 +156,21 @@ const AUTO_UPLOAD_DELAY_MS = 5_000;
 // enabled and the system is idle (no action running, nothing queued).
 const AUTO_UPLOAD_POLL_INTERVAL_MS = 30_000;
 
+// Shell metacharacters that could enable command injection when paths flow
+// into spawn() with shell:true (used on Windows for `npm run` to resolve npm.cmd).
+// Reject at input time so persisted / later-loaded overrides stay safe.
+// eslint-disable-next-line no-control-regex
+const SHELL_METACHAR_RE = /[`$&|;<>"'*?\r\n\t\u0000-\u001f]/;
+
+/** Validate a user-supplied filesystem path is safe to pass to a child process.
+ *  Returns `null` if safe, or an error message if the path contains unsafe chars. */
+export function validateCustomPath(value: string): string | null {
+  if (SHELL_METACHAR_RE.test(value)) {
+    return 'Path contains unsafe characters (shell metacharacters are not allowed)';
+  }
+  return null;
+}
+
 // Track pending auto-upload timeouts so we can cancel them and prevent stacking.
 let autoUploadTimeout: NodeJS.Timeout | null = null;
 let autoUploadPollInterval: NodeJS.Timeout | null = null;
@@ -174,6 +189,14 @@ async function loadCustomPaths(env: Env): Promise<void> {
     const parsed = JSON.parse(raw) as Record<string, string>;
     for (const [key, value] of Object.entries(parsed)) {
       if (typeof value === 'string' && value.length > 0) {
+        // Skip any persisted path with unsafe characters — defense-in-depth
+        // in case the file was hand-edited or pre-dated input validation.
+        if (validateCustomPath(value) !== null) {
+          console.warn(
+            `[takeout] Skipping persisted custom path '${key}' — contains unsafe characters`,
+          );
+          continue;
+        }
         customPaths.set(key, value);
       }
     }
@@ -293,6 +316,10 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     if (!value || value.length === 0) {
       return reply.code(400).send(apiError('INVALID_INPUT', 'value is required'));
     }
+    const pathError = validateCustomPath(value);
+    if (pathError) {
+      return reply.code(400).send(apiError('INVALID_INPUT', pathError));
+    }
     const resolved = path.resolve(value);
     customPaths.set(name, resolved);
     try {
@@ -373,6 +400,10 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     if (!dir || dir.length === 0) {
       return reply.code(400).send(apiError('INVALID_INPUT', 'inputDir is required'));
     }
+    const pathError = validateCustomPath(dir);
+    if (pathError) {
+      return reply.code(400).send(apiError('INVALID_INPUT', pathError));
+    }
     customPaths.set('inputDir', path.resolve(dir));
     try {
       await persistCustomPaths(env);
@@ -398,6 +429,10 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     const dir = body?.workDir?.trim();
     if (!dir || dir.length === 0) {
       return reply.code(400).send(apiError('INVALID_INPUT', 'workDir is required'));
+    }
+    const pathError = validateCustomPath(dir);
+    if (pathError) {
+      return reply.code(400).send(apiError('INVALID_INPUT', pathError));
     }
     customPaths.set('workDir', path.resolve(dir));
     try {
@@ -1110,7 +1145,11 @@ function resolveActionCommands(action: TakeoutAction): ActionCommand[] {
     verify: 'takeout:verify',
     resume: 'takeout:resume',
     'repair-dates': 'takeout:repair-dates -- --apply',
-    'repair-dates-s3': 'takeout:repair-dates-s3 -- --apply --video --metadata-dir data/takeout/work/metadata',
+    'repair-dates-s3': (() => {
+      const workDir = customPaths.get('workDir') ?? (resolvedEnv ? path.resolve(resolvedEnv.TAKEOUT_WORK_DIR) : 'data/takeout/work');
+      const metadataDir = path.join(workDir, 'metadata');
+      return `takeout:repair-dates-s3 -- --apply --video --metadata-dir ${metadataDir}`;
+    })(),
     'cleanup-move': 'takeout:cleanup -- --apply --move-archives --include-unscanned',
     'cleanup-delete': 'takeout:cleanup -- --apply --delete-archives --include-unscanned',
     'cleanup-force-move': 'takeout:cleanup -- --apply --move-archives --force --include-unscanned',
