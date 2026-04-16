@@ -375,7 +375,7 @@ Provide a web catalog page to visually verify transferred media in Scaleway Obje
 
 ### Step 30: Backend — `app_settings` runtime config layer
 
-`[ ]`
+`[x]`
 
 **New file:** `src/api/routes/settings.ts`
 
@@ -449,7 +449,7 @@ New helper: `src/config/runtime-settings.ts`
 
 ### Step 31: Backend — `/setup/bootstrap-status` (no auth required)
 
-`[ ]`
+`[x]`
 
 **New file:** `src/api/routes/setup.ts`
 
@@ -474,7 +474,7 @@ in `src/api/index.ts` alongside `/health`.
 
 ### Step 32: Frontend — Setup wizard page
 
-`[ ]`
+`[x]`
 
 **New file:** `frontend/src/pages/setup-page.tsx`
 
@@ -499,7 +499,7 @@ wrapper (full-screen, no nav bar).
 
 ### Step 33: Frontend — Scaleway S3 configuration step
 
-`[ ]`
+`[x]`
 
 Component: `frontend/src/pages/setup/scaleway-step.tsx`
 
@@ -521,7 +521,7 @@ Behaviour:
 
 ### Step 34: Frontend — Google OAuth configuration step
 
-`[ ]`
+`[x]`
 
 Component: `frontend/src/pages/setup/google-step.tsx`
 
@@ -538,7 +538,7 @@ OAuth flow via `GET /auth/google/url`.
 
 ### Step 35: Frontend — Immich configuration step
 
-`[ ]`
+`[x]`
 
 Component: `frontend/src/pages/setup/immich-step.tsx`
 
@@ -553,7 +553,7 @@ server version from the ping response.
 
 ### Step 36: Frontend — Settings page (ongoing config)
 
-`[ ]`
+`[x]`
 
 **New file:** `frontend/src/pages/settings-page.tsx`
 
@@ -566,7 +566,7 @@ The red badge from Step 32 appears here when setup is incomplete.
 
 ### Step 37: Tests
 
-`[ ]`
+`[x]`
 
 Backend (`src/api/routes/settings.test.ts`):
 - All CRUD routes for each integration (status, get, test, put)
