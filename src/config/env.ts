@@ -79,6 +79,13 @@ const envSchema = z.object({
   UPLOAD_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   UPLOAD_RETRY_COUNT: z.coerce.number().int().min(0).max(20).default(5),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(2),
+  /**
+   * Per-job in-flight item concurrency inside a single transfer worker run.
+   * Controls how many picker-media-item downloads+uploads proceed in parallel
+   * within one transfer job. Independent of WORKER_CONCURRENCY (which controls
+   * how many jobs run concurrently).
+   */
+  TRANSFER_ITEM_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
 });
 
 export type Env = z.infer<typeof envSchema>;
