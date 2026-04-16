@@ -54,6 +54,8 @@ import { registerCloudUsageRoutes } from './routes/cloud-usage.js';
 import { registerUploadRoutes } from './routes/uploads.js';
 import { registerPipelineRoutes } from './routes/pipeline.js';
 import { registerImmichCompareRoutes } from './routes/immich-compare.js';
+import { registerSettingsRoutes } from './routes/settings.js';
+import { registerSetupRoutes } from './routes/setup.js';
 import { getStoredTokens, setStoredTokens } from './routes/google-token-store.js';
 import type { ApiServices } from './types.js';
 import { loadEnv, type Env } from '../config/env.js';
@@ -112,6 +114,10 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 			}
 
 			if (request.url.startsWith('/health')) {
+				return;
+			}
+
+			if (request.url.startsWith('/setup/bootstrap-status')) {
 				return;
 			}
 
@@ -208,6 +214,8 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 	await registerGoogleAuthRoutes(app, env);
 	await registerPipelineRoutes(app);
 	await registerImmichCompareRoutes(app, runtime.services.catalog);
+	await registerSettingsRoutes(app);
+	await registerSetupRoutes(app);
 
 	app.addHook('onClose', async () => {
 		await runtime.dispose?.();

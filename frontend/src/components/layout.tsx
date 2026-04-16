@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { fetchBootstrapStatus } from '@/lib/api';
 
 const NAV_ITEMS = [
   { to: '/', label: 'Photo Transfer', end: true },
@@ -9,11 +11,20 @@ const NAV_ITEMS = [
   { to: '/catalog', label: 'Catalog' },
   { to: '/costs', label: 'Costs' },
   { to: '/pipeline', label: 'Pipeline' },
+  { to: '/settings', label: 'Settings' },
 ] as const;
 
 export function Layout() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const location = useLocation();
+
+  const { data: bootstrapStatus } = useQuery({
+    queryKey: ['bootstrap-status'],
+    queryFn: fetchBootstrapStatus,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+  const needsSetup = bootstrapStatus?.needsSetup ?? false;
 
   // Catalog page uses wider layout to maximize grid real estate (Google Photos-style edge-to-edge grid)
   const isCatalog = location.pathname.startsWith('/catalog');
@@ -46,7 +57,15 @@ export function Layout() {
                   isActive ? 'font-semibold text-slate-900' : 'text-slate-600'
                 }
               >
-                {item.label}
+                <span className="relative">
+                  {item.label}
+                  {item.to === '/settings' && needsSetup && (
+                    <span
+                      className="absolute -right-2 -top-1 h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse"
+                      title="Setup required — some integrations are not configured"
+                    />
+                  )}
+                </span>
               </NavLink>
             ))}
           </nav>
@@ -91,7 +110,12 @@ export function Layout() {
                     }`
                   }
                 >
-                  {item.label}
+                  <span className="relative">
+                    {item.label}
+                    {item.to === '/settings' && needsSetup && (
+                      <span className="absolute -right-2 -top-1 h-2 w-2 rounded-full bg-red-500" />
+                    )}
+                  </span>
                 </NavLink>
               ))}
             </div>

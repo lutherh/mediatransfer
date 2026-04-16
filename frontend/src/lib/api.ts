@@ -1249,3 +1249,150 @@ export async function resolveImmichAsset(
   return resp.json();
 }
 
+// ── Settings & Setup API ───────────────────────────────────────────────────
+
+export type BootstrapStatus = {
+  needsSetup: boolean;
+  authTokenSet: boolean;
+  dbConnected: boolean;
+  configured: { scaleway: boolean; google: boolean; immich: boolean };
+};
+
+export type SettingsStatus = {
+  scaleway: boolean;
+  google: boolean;
+  immich: boolean;
+  authTokenSet: boolean;
+};
+
+export type ScalewaySettingsResponse = {
+  configured: boolean;
+  region?: string;
+  bucket?: string;
+  prefix?: string;
+  storageClass?: string;
+  accessKey?: string;
+  secretKey?: string;
+};
+
+export type GoogleSettingsResponse = {
+  configured: boolean;
+  clientId?: string;
+  clientSecret?: string;
+  redirectUri?: string;
+};
+
+export type ImmichSettingsResponse = {
+  configured: boolean;
+  url?: string;
+  apiKey?: string;
+};
+
+export type TestResult = { ok: boolean; error?: string; serverVersion?: string };
+
+export async function fetchBootstrapStatus(): Promise<BootstrapStatus> {
+  const res = await fetch(`${API_BASE_URL}/setup/bootstrap-status`, {
+    signal: AbortSignal.timeout(10_000),
+  });
+  return res.json();
+}
+
+export async function fetchSettingsStatus(): Promise<SettingsStatus> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/status`);
+  return res.json();
+}
+
+export async function fetchScalewaySettings(): Promise<ScalewaySettingsResponse> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/scaleway`);
+  return res.json();
+}
+
+export async function testScalewaySettings(body: {
+  accessKey?: string;
+  secretKey?: string;
+  region: string;
+  bucket: string;
+}): Promise<TestResult> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/scaleway/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20_000),
+  });
+  return res.json();
+}
+
+export async function saveScalewaySettings(body: {
+  accessKey?: string;
+  secretKey?: string;
+  region: string;
+  bucket: string;
+  prefix?: string;
+  storageClass?: string;
+}): Promise<void> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/scaleway`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `Save failed (${res.status})`);
+  }
+}
+
+export async function fetchGoogleSettings(): Promise<GoogleSettingsResponse> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/google`);
+  return res.json();
+}
+
+export async function saveGoogleSettings(body: {
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+}): Promise<void> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/google`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `Save failed (${res.status})`);
+  }
+}
+
+export async function fetchImmichSettings(): Promise<ImmichSettingsResponse> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/immich`);
+  return res.json();
+}
+
+export async function testImmichSettings(body: {
+  url: string;
+  apiKey: string;
+}): Promise<TestResult> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/immich/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15_000),
+  });
+  return res.json();
+}
+
+export async function saveImmichSettings(body: {
+  url: string;
+  apiKey?: string;
+}): Promise<void> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/immich`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `Save failed (${res.status})`);
+  }
+}
+
