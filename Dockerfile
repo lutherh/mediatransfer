@@ -36,6 +36,7 @@ COPY --from=build /app/src/generated ./dist/generated
 COPY prisma ./prisma
 COPY prisma.config.ts ./prisma.config.ts
 COPY scripts ./scripts
+COPY src ./src
 
 # Run as non-root user
 USER node
