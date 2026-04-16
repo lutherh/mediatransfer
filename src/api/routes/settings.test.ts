@@ -11,7 +11,7 @@ vi.mock('../../config/runtime-settings.js', () => ({
 }));
 
 const { mockS3Send } = vi.hoisted(() => ({
-  mockS3Send: vi.fn(async () => ({ Contents: [] })),
+  mockS3Send: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ Contents: [] })),
 }));
 
 vi.mock('@aws-sdk/client-s3', () => {

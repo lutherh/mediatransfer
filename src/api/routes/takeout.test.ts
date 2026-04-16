@@ -45,6 +45,12 @@ function baseEnv(overrides: Partial<Env> = {}): Env {
     SCW_REGION: 'fr-par',
     SCW_BUCKET: undefined,
     SCW_PREFIX: undefined,
+    SCW_STORAGE_CLASS: 'ONEZONE_IA',
+    SCW_ENDPOINT_URL: undefined,
+    SCW_FORCE_PATH_STYLE: 'true',
+    SCW_S3_REQUEST_TIMEOUT_MS: 300_000,
+    SCW_S3_LIST_MAX_RETRIES: 5,
+    THUMB_CACHE_DIR: path.join(tempDir, 'thumbs'),
     GOOGLE_CLIENT_ID: undefined,
     GOOGLE_CLIENT_SECRET: undefined,
     GOOGLE_REDIRECT_URI: 'http://localhost:5173/auth/google/callback',
@@ -59,6 +65,8 @@ function baseEnv(overrides: Partial<Env> = {}): Env {
     TRANSFER_STATE_PATH: path.join(tempDir, 'state.json'),
     UPLOAD_CONCURRENCY: 4,
     UPLOAD_RETRY_COUNT: 5,
+    WORKER_CONCURRENCY: 2,
+    TRANSFER_ITEM_CONCURRENCY: 4,
     ...overrides,
   };
 }
