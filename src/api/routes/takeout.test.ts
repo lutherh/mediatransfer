@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { registerTakeoutRoutes } from './takeout.js';
+import { registerTakeoutRoutes, validateCustomPath } from './takeout.js';
 import type { Env } from '../../config/env.js';
 
 const spawnMock = vi.fn();
@@ -1319,3 +1319,38 @@ describe('takeout routes', () => {
   });
 });
 
+
+describe('validateCustomPath', () => {
+  it('accepts ordinary absolute and relative paths', () => {
+    expect(validateCustomPath('C:\\Users\\foo\\bar')).toBeNull();
+    expect(validateCustomPath('/var/lib/app/data')).toBeNull();
+    expect(validateCustomPath('./relative/dir')).toBeNull();
+    expect(validateCustomPath('path with spaces/ok')).toBeNull();
+  });
+
+  it('rejects shell metacharacters that could enable command injection', () => {
+    const bad = [
+      'C:\\a & calc.exe',
+      'a|b',
+      'a;rm',
+      'a\x60whoami\x60',
+      'a\x24(id)',
+      'a>b',
+      'a<b',
+      'a"b',
+      "a'b",
+      'a*b',
+      'a?b',
+      'a\nb',
+      'a\rb',
+      'a\tb',
+    ];
+    for (const value of bad) {
+      expect(validateCustomPath(value), value).not.toBeNull();
+    }
+  });
+
+  it('rejects paths containing a null byte', () => {
+    expect(validateCustomPath('a\u0000b')).not.toBeNull();
+  });
+});
