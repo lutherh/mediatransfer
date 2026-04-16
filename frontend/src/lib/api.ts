@@ -5,14 +5,44 @@ const TAKEOUT_FETCH_TIMEOUT_MS = 10_000;
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 
 /** Wrapper around fetch() that injects the Authorization header when VITE_API_TOKEN is set.
- *  Also applies a default 30s timeout via AbortSignal unless one is already provided. */
-export function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+ *  Also applies a default 30s timeout via AbortSignal unless one is already provided,
+ *  and translates AbortError (from our own timeout) into a human-readable "Request timed out"
+ *  error. User-provided signals pass through unchanged (AbortError re-thrown as-is). */
+export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   if (API_TOKEN && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${API_TOKEN}`);
   }
+  const userProvidedSignal = init?.signal != null;
   const signal = init?.signal ?? AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT_MS);
-  return fetch(input, { ...init, headers, signal });
+  try {
+    return await fetch(input, { ...init, headers, signal });
+  } catch (err) {
+    // Only translate timeouts from OUR internal AbortSignal.timeout().
+    // If the caller provided their own signal, surface the AbortError verbatim
+    // so they can distinguish user cancellation from a timeout.
+    if (!userProvidedSignal && err instanceof DOMException && err.name === 'TimeoutError') {
+      throw new Error(`Request timed out after ${DEFAULT_FETCH_TIMEOUT_MS}ms`);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Read a Response as JSON, throwing a normalized Error on non-2xx status.
+ * Use this in preference to `if (!response.ok) { ... } return response.json()`
+ * so error handling stays consistent across the codebase.
+ */
+export async function parseResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
+  if (!response.ok) {
+    const raw = await response.text().catch(() => '');
+    const { code, message } = parseApiError(raw);
+    if (code) {
+      throw new ApiError(code, message ?? fallbackMessage);
+    }
+    throw new Error(message ?? fallbackMessage);
+  }
+  return (await response.json()) as T;
 }
 
 export type TransferJob = {
@@ -1177,7 +1207,12 @@ export function scanDuplicatesStream(
                 settled = true;
                 reject(new Error(event.message));
               }
-            } catch { /* skip malformed */ }
+            } catch (parseErr) {
+              // Don't fail the stream on a single malformed frame, but do
+              // surface it so it's debuggable. A run of bad frames still
+              // eventually hits STREAM_ENDED_UNEXPECTEDLY.
+              console.warn('[scanDuplicatesStream] Skipped malformed SSE frame', parseErr);
+            }
           }
         }
 
@@ -1224,7 +1259,7 @@ export type RemapResult = {
 
 export async function fetchImmichOrphans(): Promise<OrphanScanResult> {
   const resp = await apiFetch(`${API_BASE_URL}/catalog/api/immich/orphans`);
-  return resp.json();
+  return parseResponse<OrphanScanResult>(resp, 'Failed to fetch Immich orphans');
 }
 
 export async function remapImmichAssets(
@@ -1233,9 +1268,10 @@ export async function remapImmichAssets(
 ): Promise<RemapResult> {
   const resp = await apiFetch(`${API_BASE_URL}/catalog/api/immich/remap`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ remaps, backup }),
   });
-  return resp.json();
+  return parseResponse<RemapResult>(resp, 'Failed to remap Immich assets');
 }
 
 export async function resolveImmichAsset(
@@ -1244,9 +1280,13 @@ export async function resolveImmichAsset(
 ): Promise<{ updated: boolean; assetId: string; newPath: string }> {
   const resp = await apiFetch(`${API_BASE_URL}/catalog/api/immich/resolve`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ assetId, s3Path }),
   });
-  return resp.json();
+  return parseResponse<{ updated: boolean; assetId: string; newPath: string }>(
+    resp,
+    'Failed to resolve Immich asset',
+  );
 }
 
 // ── Settings & Setup API ───────────────────────────────────────────────────

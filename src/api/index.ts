@@ -2,6 +2,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
+import helmet from '@fastify/helmet';
+import compress from '@fastify/compress';
 import { timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { ZodError } from 'zod';
@@ -169,6 +171,23 @@ export async function createApiServer(options?: CreateApiOptions): Promise<Fasti
 			),
 			requestId: request.id,
 		});
+	});
+
+	// Security headers — applied to all responses.
+	// CSP is intentionally permissive here because the API is consumed by a
+	// separate SPA origin (configured via CORS). Tighten if serving HTML directly.
+	await app.register(helmet, {
+		contentSecurityPolicy: false,
+		crossOriginResourcePolicy: { policy: 'cross-origin' },
+		crossOriginEmbedderPolicy: false,
+		referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+	});
+
+	// Response compression for JSON/HTML above 1KB. Streamed S3 media is
+	// skipped automatically based on content-type.
+	await app.register(compress, {
+		threshold: 1024,
+		encodings: ['br', 'gzip'],
 	});
 
 	await app.register(rateLimit, {

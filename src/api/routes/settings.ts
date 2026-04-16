@@ -201,7 +201,9 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     };
   });
 
-  app.post('/settings/scaleway/test', async (req, reply) => {
+  app.post('/settings/scaleway/test', {
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const parsed = scalewayTestSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message });
     const body = parsed.data;
@@ -230,7 +232,9 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     return result;
   });
 
-  app.put('/settings/scaleway', async (req, reply) => {
+  app.put('/settings/scaleway', {
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const parsed = scalewayPutSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message });
     const body = parsed.data;
@@ -301,7 +305,9 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     return { configured: false, redirectUri: defaultRedirectUri };
   });
 
-  app.put('/settings/google', async (req, reply) => {
+  app.put('/settings/google', {
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const parsed = googlePutSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message });
     const body = parsed.data;
@@ -331,7 +337,9 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     return { configured: false, url: '', apiKey: MASK };
   });
 
-  app.post('/settings/immich/test', async (req, reply) => {
+  app.post('/settings/immich/test', {
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const parsed = immichTestSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message });
     const body = parsed.data;
@@ -352,7 +360,9 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     return result;
   });
 
-  app.put('/settings/immich', async (req, reply) => {
+  app.put('/settings/immich', {
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const parsed = immichPutSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message });
     const body = parsed.data;
