@@ -177,6 +177,13 @@ function GroupRow({
   const [status, setStatus] = useState<'idle' | 'deleting' | 'done' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
 
+  // Compute namespace badges once per group — keys are stable across renders
+  const keepBadge = useMemo(() => pathNamespaceBadge(group.keepKey), [group.keepKey]);
+  const dupBadges = useMemo(
+    () => new Map(group.duplicateKeys.map((k) => [k, pathNamespaceBadge(k)])),
+    [group.duplicateKeys],
+  );
+
   const toggleKey = useCallback((key: string) => {
     setSelectedForDelete((prev) => {
       const next = new Set(prev);
@@ -234,10 +241,9 @@ function GroupRow({
               {basename(group.keepKey)}
             </p>
             {(() => {
-              const badge = pathNamespaceBadge(group.keepKey);
-              return badge ? (
-                <span className={`flex-shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${badge.className}`}>
-                  {badge.label}
+              return keepBadge ? (
+                <span className={`flex-shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${keepBadge.className}`}>
+                  {keepBadge.label}
                 </span>
               ) : null;
             })()}
@@ -290,14 +296,11 @@ function GroupRow({
             <p className="max-w-[80px] truncate text-center text-[9px] text-slate-500" title={group.keepKey}>
               {basename(group.keepKey)}
             </p>
-            {(() => {
-              const badge = pathNamespaceBadge(group.keepKey);
-              return badge ? (
-                <span className={`rounded px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wide ${badge.className}`}>
-                  {badge.label}
-                </span>
-              ) : null;
-            })()}
+            {keepBadge && (
+              <span className={`rounded px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wide ${keepBadge.className}`}>
+                {keepBadge.label}
+              </span>
+            )}
           </div>
 
           {/* Duplicates */}
@@ -315,7 +318,7 @@ function GroupRow({
                 {basename(key)}
               </p>
               {(() => {
-                const badge = pathNamespaceBadge(key);
+                const badge = dupBadges.get(key);
                 return badge ? (
                   <span className={`rounded px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wide ${badge.className}`}>
                     {badge.label}
