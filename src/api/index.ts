@@ -401,7 +401,15 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 			return;
 		}
 
-		for (let index = 0; index < payload.keys.length; index += 1) {
+		// Process items in bounded-concurrency chunks. Each item still runs
+		// its own sequential retry loop; only the outer "start the next item"
+		// step is parallelised. Cancellation is checked between chunks so any
+		// in-flight item in a chunk is allowed to settle and avoid leaking
+		// half-uploaded objects to destination storage.
+		const itemConcurrency = Math.max(1, Math.min(16, loadEnv().TRANSFER_ITEM_CONCURRENCY));
+		let completed = 0;
+
+		for (let chunkStart = 0; chunkStart < payload.keys.length; chunkStart += itemConcurrency) {
 			if (await shouldStop()) {
 				await createTransferLog({
 					jobId: payload.transferJobId,
@@ -410,69 +418,76 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 				return;
 			}
 
-			const mediaItemId = payload.keys[index];
-			let result: { destinationKey: string; filename?: string; skipped: boolean } | null = null;
-			let successfulAttempt = 0;
+			const chunk = payload.keys.slice(chunkStart, chunkStart + itemConcurrency);
 
-			for (let attempt = 1; attempt <= ITEM_RETRY_MAX_ATTEMPTS; attempt += 1) {
-				await createTransferLog({
-					jobId: payload.transferJobId,
-					message: `Processing item ${mediaItemId} (${attempt}/${ITEM_RETRY_MAX_ATTEMPTS})`,
-					meta: {
-						mediaItemId,
-						attempt,
-						maxAttempts: ITEM_RETRY_MAX_ATTEMPTS,
-						status: 'IN_PROGRESS',
-					},
-				});
-				try {
-					result = await transferPickedMediaItemToScaleway(payload, mediaItemId);
-					successfulAttempt = attempt;
-					break;
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					const canRetry =
-						attempt < ITEM_RETRY_MAX_ATTEMPTS &&
-						isRetryableTransferItemError(error);
+			const chunkResults = await Promise.all(
+				chunk.map(async (mediaItemId) => {
+					let result: { destinationKey: string; filename?: string; skipped: boolean } | null = null;
+					let successfulAttempt = 0;
 
-					if (!canRetry) {
+					for (let attempt = 1; attempt <= ITEM_RETRY_MAX_ATTEMPTS; attempt += 1) {
 						await createTransferLog({
 							jobId: payload.transferJobId,
-							level: 'ERROR',
-							message: `Item failed ${mediaItemId}: ${message}`,
+							message: `Processing item ${mediaItemId} (${attempt}/${ITEM_RETRY_MAX_ATTEMPTS})`,
 							meta: {
 								mediaItemId,
 								attempt,
 								maxAttempts: ITEM_RETRY_MAX_ATTEMPTS,
-								status: 'FAILED',
-								error: message,
+								status: 'IN_PROGRESS',
 							},
 						});
-						throw error;
+						try {
+							result = await transferPickedMediaItemToScaleway(payload, mediaItemId);
+							successfulAttempt = attempt;
+							break;
+						} catch (error) {
+							const message = error instanceof Error ? error.message : String(error);
+							const canRetry =
+								attempt < ITEM_RETRY_MAX_ATTEMPTS &&
+								isRetryableTransferItemError(error);
+
+							if (!canRetry) {
+								await createTransferLog({
+									jobId: payload.transferJobId,
+									level: 'ERROR',
+									message: `Item failed ${mediaItemId}: ${message}`,
+									meta: {
+										mediaItemId,
+										attempt,
+										maxAttempts: ITEM_RETRY_MAX_ATTEMPTS,
+										status: 'FAILED',
+										error: message,
+									},
+								});
+								throw error;
+							}
+
+							const delayMs = computeItemRetryDelay(attempt);
+							await createTransferLog({
+								jobId: payload.transferJobId,
+								level: 'WARN',
+								message: `Retrying item ${mediaItemId} (attempt ${attempt + 1}/${ITEM_RETRY_MAX_ATTEMPTS})`,
+								meta: {
+									mediaItemId,
+									attempt,
+									maxAttempts: ITEM_RETRY_MAX_ATTEMPTS,
+									delayMs,
+									error: message,
+									status: 'RETRYING',
+								},
+							});
+
+							await delay(delayMs);
+						}
 					}
 
-					const delayMs = computeItemRetryDelay(attempt);
-					await createTransferLog({
-						jobId: payload.transferJobId,
-						level: 'WARN',
-						message: `Retrying item ${mediaItemId} (attempt ${attempt + 1}/${ITEM_RETRY_MAX_ATTEMPTS})`,
-						meta: {
-							mediaItemId,
-							attempt,
-							maxAttempts: ITEM_RETRY_MAX_ATTEMPTS,
-							delayMs,
-							error: message,
-							status: 'RETRYING',
-						},
-					});
+					if (!result) {
+						throw new Error(`Transfer item ${mediaItemId} did not produce a result`);
+					}
 
-					await delay(delayMs);
-				}
-			}
-
-			if (!result) {
-				throw new Error(`Transfer item ${mediaItemId} did not produce a result`);
-			}
+					return { mediaItemId, result, successfulAttempt };
+				}),
+			);
 
 			if (await shouldStop()) {
 				await createTransferLog({
@@ -482,31 +497,37 @@ async function processQueuedTransfer(payload: TransferJobPayload): Promise<void>
 				return;
 			}
 
-			const progress = total === 0 ? 1 : (startIndex + index + 1) / total;
+			// Emit per-item completion logs in deterministic (submission) order.
+			for (const { mediaItemId, result, successfulAttempt } of chunkResults) {
+				completed += 1;
+				const progress = total === 0 ? 1 : (startIndex + completed) / total;
 
+				await createTransferLog({
+					jobId: payload.transferJobId,
+					message: result.skipped
+						? `Skipped existing ${result.filename ?? mediaItemId}`
+						: `Uploaded ${result.filename ?? mediaItemId}`,
+					meta: {
+						mediaItemId,
+						destinationKey: result.destinationKey,
+						skipped: result.skipped,
+						progress,
+						itemProgressPercent: 100,
+						completed: startIndex + completed,
+						total,
+						attempts: successfulAttempt,
+						status: result.skipped ? 'SKIPPED' : 'COMPLETED',
+					},
+				});
+			}
+
+			// Single progress write per chunk keeps DB load bounded.
+			const progress = total === 0 ? 1 : (startIndex + completed) / total;
 			await updateJob(payload.transferJobId, {
 				progress,
 				status: progress >= 1 ? TransferStatus.COMPLETED : TransferStatus.IN_PROGRESS,
 				completedAt: progress >= 1 ? new Date() : null,
 				errorMessage: null,
-			});
-
-			await createTransferLog({
-				jobId: payload.transferJobId,
-				message: result.skipped
-					? `Skipped existing ${result.filename ?? mediaItemId}`
-					: `Uploaded ${result.filename ?? mediaItemId}`,
-				meta: {
-					mediaItemId,
-					destinationKey: result.destinationKey,
-					skipped: result.skipped,
-					progress,
-					itemProgressPercent: 100,
-					completed: startIndex + index + 1,
-					total,
-					attempts: successfulAttempt,
-					status: result.skipped ? 'SKIPPED' : 'COMPLETED',
-				},
 			});
 		}
 	} catch (error) {
