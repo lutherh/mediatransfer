@@ -1068,6 +1068,10 @@ export type DuplicateGroup = {
   keepKey: string;
   /** Raw S3 keys that are safe to delete. */
   duplicateKeys: string[];
+  /** True when the group spans `immich/` and `transfers/` namespaces. */
+  crossNamespace: boolean;
+  /** True when all keys are in `immich/` — must be deduplicated via Immich. */
+  immichOnly: boolean;
 };
 
 export type DuplicatesResult = {
@@ -1089,15 +1093,6 @@ export function encodeS3Key(key: string): string {
     binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-export async function fetchDuplicates(): Promise<DuplicatesResult> {
-  const response = await apiFetch(`${API_BASE_URL}/catalog/api/duplicates`);
-  if (!response.ok) {
-    const raw = await response.text();
-    throw new Error(parseApiErrorMessage(raw) ?? 'Failed to fetch duplicates');
-  }
-  return response.json();
 }
 
 // ── Dedup scan status polling ──────────────────────────────────────────────

@@ -107,6 +107,19 @@ export type DuplicateGroup = {
   keepKey: string;
   /** Keys that are duplicates and safe to remove. */
   duplicateKeys: string[];
+  /**
+   * True when the group contains keys from both the `immich/` and `transfers/`
+   * namespaces. The algorithm keeps the `immich/` copy so the `transfers/` copy
+   * ends up in `duplicateKeys` — which is safe to delete from this tool.
+   * Shown with a warning badge in the UI.
+   */
+  crossNamespace: boolean;
+  /**
+   * True when every key in the group belongs to the `immich/` namespace.
+   * This tool has no visibility into Immich's database, so these groups are
+   * excluded from scan results and must be handled via Immich's own dedup.
+   */
+  immichOnly: boolean;
 };
 
 export type DeduplicateResult = {
@@ -1521,17 +1534,31 @@ function normalizeEtag(etag: string | undefined): string {
  * Score a key for "keep" priority.  Higher = better candidate to keep.
  *
  * Prefers:
- *  1. Keys with a proper YYYY/MM/DD date path   (+10)
- *  2. Keys that are shorter (less nesting noise) (+5 minus depth penalty)
- *  3. Deterministic tiebreak via lexicographic order
+ *  1. Immich-managed paths (`immich/library/`, `immich/upload/`)    (+50 / +40)
+ *     Immich has DB records pointing at these — they must never be the deleted copy.
+ *     Bonuses are large enough that even an unrealistically deep path (30+ slashes)
+ *     will never score below a `transfers/` path (+8 max).
+ *  2. Dated transfers path (`transfers/YYYY/MM/DD/`)                 (+8)
+ *  3. All other paths                                                 (0)
+ *  4. Depth penalty                                                   (-1 per slash)
+ *  5. Deterministic tiebreak via lexicographic order
  */
 export function scoreKeyForKeep(key: string): number {
   let score = 0;
-  // Proper date path like 2020/03/15/
-  if (/^((?:19|20)\d{2})\/(\d{2})\/(\d{2})\//.test(key)) {
-    score += 10;
+  // Immich library files — Immich's own DB points here; highest priority to keep
+  if (key.startsWith('immich/library/')) {
+    score += 50;
+  } else if (key.startsWith('immich/upload/')) {
+    // Immich upload originals — also Immich-managed
+    score += 40;
+  } else if (key.startsWith('immich/')) {
+    // Other immich/ sub-paths
+    score += 30;
+  } else if (/^transfers\/((?:19|20)\d{2})\/\d{2}\/\d{2}\//.test(key)) {
+    // Dated transfers path like transfers/2020/03/15/file.jpg
+    score += 8;
   }
-  // Penalise deep nesting
+  // Penalise deep nesting (tiebreak within same namespace; cannot override namespace bonus)
   const depth = (key.match(/\//g) ?? []).length;
   score -= depth;
   return score;
@@ -1572,11 +1599,19 @@ export function buildDuplicateGroups(
     const keepKey = items[0]!.key;
     const duplicateKeys = items.slice(1).map((i) => i.key);
 
+    const allKeys = [keepKey, ...duplicateKeys];
+    const hasImmich = allKeys.some((k) => k.startsWith('immich/'));
+    const hasTransfers = allKeys.some((k) => k.startsWith('transfers/'));
+    const immichOnly = hasImmich && !hasTransfers;
+    const crossNamespace = hasImmich && hasTransfers;
+
     groups.push({
       fingerprint,
       size: items[0]!.size,
       keepKey,
       duplicateKeys,
+      crossNamespace,
+      immichOnly,
     });
   }
 
