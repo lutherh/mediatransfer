@@ -647,85 +647,143 @@ describe('scaleway catalog service', () => {
   // ── Deduplication tests ──────────────────────────────────────
 
   describe('scoreKeyForKeep', () => {
-    it('scores keys with proper date path higher', () => {
-      const datePathScore = scoreKeyForKeep('2020/03/15/photo.jpg');
-      const flatScore = scoreKeyForKeep('archive/photo.jpg');
-      expect(datePathScore).toBeGreaterThan(flatScore);
+    it('scores immich/library/ highest', () => {
+      expect(scoreKeyForKeep('immich/library/admin/2020/2020-03-15/photo.jpg')).toBeGreaterThan(
+        scoreKeyForKeep('transfers/2020/03/15/photo.jpg'),
+      );
     });
 
-    it('penalises deeply nested keys', () => {
-      const shallow = scoreKeyForKeep('2020/03/15/photo.jpg');
-      const deep = scoreKeyForKeep('backup/archive/old/2020/03/15/subfolder/photo.jpg');
+    it('scores immich/upload/ higher than transfers/', () => {
+      expect(scoreKeyForKeep('immich/upload/uuid/01/02/file.jpg')).toBeGreaterThan(
+        scoreKeyForKeep('transfers/2020/03/15/photo.jpg'),
+      );
+    });
+
+    it('scores dated transfers/ path higher than undated', () => {
+      const dated = scoreKeyForKeep('transfers/2020/03/15/photo.jpg');
+      const undated = scoreKeyForKeep('transfers/unknown-date/photo.jpg');
+      expect(dated).toBeGreaterThan(undated);
+    });
+
+    it('penalises deeply nested keys within same namespace', () => {
+      const shallow = scoreKeyForKeep('transfers/2020/03/15/photo.jpg');
+      const deep = scoreKeyForKeep('transfers/2020/03/15/sub/folder/photo.jpg');
       expect(shallow).toBeGreaterThan(deep);
     });
 
-    it('returns positive score for standard date-path keys', () => {
-      expect(scoreKeyForKeep('2020/01/01/img.jpg')).toBeGreaterThan(0);
+    it('returns positive score for dated transfers path', () => {
+      expect(scoreKeyForKeep('transfers/2020/01/01/img.jpg')).toBeGreaterThan(0);
     });
 
-    it('returns lower score for non-date paths', () => {
-      expect(scoreKeyForKeep('random/folder/img.jpg')).toBeLessThan(
-        scoreKeyForKeep('2020/01/01/img.jpg'),
+    it('returns lower score for undated paths than dated', () => {
+      expect(scoreKeyForKeep('transfers/unknown-date/img.jpg')).toBeLessThan(
+        scoreKeyForKeep('transfers/2020/01/01/img.jpg'),
       );
+    });
+
+    it('immich path with extreme depth (30 slashes) still beats transfers/', () => {
+      // Bonus of +30 for immich/ minus 30 slashes = 0, which is still >= transfers/ scored 4.
+      // With +50 for immich/library/ the margin is even larger.
+      const deepImmich = 'immich/library/' + 'level/'.repeat(14) + 'photo.jpg'; // 16 slashes
+      const transfers = 'transfers/2020/03/15/photo.jpg'; // 4 slashes, score = 4
+      expect(scoreKeyForKeep(deepImmich)).toBeGreaterThan(scoreKeyForKeep(transfers));
     });
   });
 
   describe('buildDuplicateGroups', () => {
     it('returns empty array when no duplicates', () => {
       const objects = [
-        { key: '2020/01/01/a.jpg', size: 100, etag: 'aaa' },
-        { key: '2020/01/02/b.jpg', size: 200, etag: 'bbb' },
-        { key: '2020/01/03/c.jpg', size: 300, etag: 'ccc' },
+        { key: 'transfers/2020/01/01/a.jpg', size: 100, etag: 'aaa' },
+        { key: 'transfers/2020/01/02/b.jpg', size: 200, etag: 'bbb' },
+        { key: 'transfers/2020/01/03/c.jpg', size: 300, etag: 'ccc' },
       ];
       expect(buildDuplicateGroups(objects)).toEqual([]);
     });
 
     it('groups duplicates by size + etag', () => {
       const objects = [
-        { key: '2020/01/01/a.jpg', size: 100, etag: 'aaa' },
-        { key: '2021/06/15/a_copy.jpg', size: 100, etag: 'aaa' },
-        { key: '2020/01/02/b.jpg', size: 200, etag: 'bbb' },
+        { key: 'transfers/2020/01/01/a.jpg', size: 100, etag: 'aaa' },
+        { key: 'transfers/2021/06/15/a_copy.jpg', size: 100, etag: 'aaa' },
+        { key: 'transfers/2020/01/02/b.jpg', size: 200, etag: 'bbb' },
       ];
       const groups = buildDuplicateGroups(objects);
       expect(groups).toHaveLength(1);
       expect(groups[0]!.duplicateKeys).toHaveLength(1);
     });
 
-    it('keeps the key with proper date path', () => {
+    it('keeps the dated transfers copy over the undated copy', () => {
       const objects = [
-        { key: 'archive/flat/photo.jpg', size: 500, etag: 'eee' },
-        { key: '2020/03/15/photo.jpg', size: 500, etag: 'eee' },
+        { key: 'transfers/unknown-date/photo.jpg', size: 500, etag: 'eee' },
+        { key: 'transfers/2020/03/15/photo.jpg', size: 500, etag: 'eee' },
       ];
       const groups = buildDuplicateGroups(objects);
       expect(groups).toHaveLength(1);
-      expect(groups[0]!.keepKey).toBe('2020/03/15/photo.jpg');
-      expect(groups[0]!.duplicateKeys).toEqual(['archive/flat/photo.jpg']);
+      expect(groups[0]!.keepKey).toBe('transfers/2020/03/15/photo.jpg');
+      expect(groups[0]!.duplicateKeys).toEqual(['transfers/unknown-date/photo.jpg']);
+      expect(groups[0]!.crossNamespace).toBe(false);
+      expect(groups[0]!.immichOnly).toBe(false);
+    });
+
+    it('cross-namespace: keeps immich/library/ copy over transfers/ copy', () => {
+      const objects = [
+        { key: 'transfers/2019/07/06/20190706_122849.jpg', size: 15_000_000, etag: 'abc' },
+        { key: 'immich/library/admin/2019/2019-07-06/20190706_122849.jpg', size: 15_000_000, etag: 'abc' },
+      ];
+      const groups = buildDuplicateGroups(objects);
+      expect(groups).toHaveLength(1);
+      expect(groups[0]!.keepKey).toBe('immich/library/admin/2019/2019-07-06/20190706_122849.jpg');
+      expect(groups[0]!.duplicateKeys).toEqual(['transfers/2019/07/06/20190706_122849.jpg']);
+      expect(groups[0]!.crossNamespace).toBe(true);
+      expect(groups[0]!.immichOnly).toBe(false);
+    });
+
+    it('cross-namespace: keeps immich/library/ over transfers/unknown-date/', () => {
+      const objects = [
+        { key: 'transfers/unknown-date/f63d869b-MVI_6667.AVI', size: 229_900_000, etag: 'xyz' },
+        { key: 'immich/upload/765547b1-e737-4815-9244-a6ce3cd6d659/02/83/0283776f.mp4', size: 229_900_000, etag: 'xyz' },
+      ];
+      const groups = buildDuplicateGroups(objects);
+      expect(groups).toHaveLength(1);
+      expect(groups[0]!.keepKey).toContain('immich/upload/');
+      expect(groups[0]!.crossNamespace).toBe(true);
+      expect(groups[0]!.immichOnly).toBe(false);
+    });
+
+    it('immich-only: both keys are immich/ — flags immichOnly', () => {
+      const objects = [
+        { key: 'immich/library/admin/2020/2020-03-15/photo.jpg', size: 500, etag: 'eee' },
+        { key: 'immich/upload/uuid-1234/01/23/abcd1234.jpg', size: 500, etag: 'eee' },
+      ];
+      const groups = buildDuplicateGroups(objects);
+      expect(groups).toHaveLength(1);
+      expect(groups[0]!.immichOnly).toBe(true);
+      expect(groups[0]!.crossNamespace).toBe(false);
     });
 
     it('handles triple duplicates — keeps one, removes two', () => {
       const objects = [
-        { key: 'backup/old/photo.jpg', size: 1000, etag: 'fff' },
-        { key: '2020/06/01/photo.jpg', size: 1000, etag: 'fff' },
-        { key: 'archive/2020/photo.jpg', size: 1000, etag: 'fff' },
+        { key: 'transfers/unknown-date/photo.jpg', size: 1000, etag: 'fff' },
+        { key: 'transfers/2020/06/01/photo.jpg', size: 1000, etag: 'fff' },
+        { key: 'transfers/2020/06/02/photo_copy.jpg', size: 1000, etag: 'fff' },
       ];
       const groups = buildDuplicateGroups(objects);
       expect(groups).toHaveLength(1);
-      expect(groups[0]!.keepKey).toBe('2020/06/01/photo.jpg');
+      expect(groups[0]!.keepKey).toBe('transfers/2020/06/01/photo.jpg');
       expect(groups[0]!.duplicateKeys).toHaveLength(2);
     });
 
     it('does not group items with same size but different etag', () => {
       const objects = [
-        { key: '2020/01/01/a.jpg', size: 100, etag: 'aaa' },
-        { key: '2020/01/02/b.jpg', size: 100, etag: 'bbb' },
+        { key: 'transfers/2020/01/01/a.jpg', size: 100, etag: 'aaa' },
+        { key: 'transfers/2020/01/02/b.jpg', size: 100, etag: 'bbb' },
       ];
       expect(buildDuplicateGroups(objects)).toEqual([]);
     });
 
     it('does not group items with same etag but different size', () => {
       const objects = [
-        { key: '2020/01/01/a.jpg', size: 100, etag: 'aaa' },
-        { key: '2020/01/02/b.jpg', size: 200, etag: 'aaa' },
+        { key: 'transfers/2020/01/01/a.jpg', size: 100, etag: 'aaa' },
+        { key: 'transfers/2020/01/02/b.jpg', size: 200, etag: 'aaa' },
       ];
       expect(buildDuplicateGroups(objects)).toEqual([]);
     });
@@ -733,11 +791,11 @@ describe('scaleway catalog service', () => {
     it('sorts groups by bytes wasted descending', () => {
       const objects = [
         // group A: 1 dup × 100 = 100 bytes wasted
-        { key: '2020/01/01/small.jpg', size: 100, etag: 'aaa' },
-        { key: '2020/01/02/small_copy.jpg', size: 100, etag: 'aaa' },
+        { key: 'transfers/2020/01/01/small.jpg', size: 100, etag: 'aaa' },
+        { key: 'transfers/2020/01/02/small_copy.jpg', size: 100, etag: 'aaa' },
         // group B: 1 dup × 5000 = 5000 bytes wasted
-        { key: '2020/01/01/big.mp4', size: 5000, etag: 'bbb' },
-        { key: '2020/01/02/big_copy.mp4', size: 5000, etag: 'bbb' },
+        { key: 'transfers/2020/01/01/big.mp4', size: 5000, etag: 'bbb' },
+        { key: 'transfers/2020/01/02/big_copy.mp4', size: 5000, etag: 'bbb' },
       ];
       const groups = buildDuplicateGroups(objects);
       expect(groups).toHaveLength(2);
@@ -747,28 +805,28 @@ describe('scaleway catalog service', () => {
 
     it('uses lexicographic order as tiebreaker when scores are equal', () => {
       const objects = [
-        { key: '2020/01/01/z_photo.jpg', size: 100, etag: 'aaa' },
-        { key: '2020/01/01/a_photo.jpg', size: 100, etag: 'aaa' },
+        { key: 'transfers/2020/01/01/z_photo.jpg', size: 100, etag: 'aaa' },
+        { key: 'transfers/2020/01/01/a_photo.jpg', size: 100, etag: 'aaa' },
       ];
       const groups = buildDuplicateGroups(objects);
       expect(groups).toHaveLength(1);
-      // Both have same date path score, so lexicographically smaller wins
-      expect(groups[0]!.keepKey).toBe('2020/01/01/a_photo.jpg');
-      expect(groups[0]!.duplicateKeys).toEqual(['2020/01/01/z_photo.jpg']);
+      // Both have same score, so lexicographically smaller key wins
+      expect(groups[0]!.keepKey).toBe('transfers/2020/01/01/a_photo.jpg');
+      expect(groups[0]!.duplicateKeys).toEqual(['transfers/2020/01/01/z_photo.jpg']);
     });
 
     it('handles multiple independent duplicate groups', () => {
       const objects = [
-        { key: '2020/01/01/a.jpg', size: 100, etag: 'aaa' },
-        { key: '2020/01/02/a_copy.jpg', size: 100, etag: 'aaa' },
-        { key: '2020/03/01/b.mp4', size: 2000, etag: 'bbb' },
-        { key: '2020/03/02/b_copy.mp4', size: 2000, etag: 'bbb' },
-        { key: '2020/05/01/c.png', size: 500, etag: 'ccc' }, // unique
+        { key: 'transfers/2020/01/01/a.jpg', size: 100, etag: 'aaa' },
+        { key: 'transfers/2020/01/02/a_copy.jpg', size: 100, etag: 'aaa' },
+        { key: 'transfers/2020/03/01/b.mp4', size: 2000, etag: 'bbb' },
+        { key: 'transfers/2020/03/02/b_copy.mp4', size: 2000, etag: 'bbb' },
+        { key: 'transfers/2020/05/01/c.png', size: 500, etag: 'ccc' }, // unique
       ];
       const groups = buildDuplicateGroups(objects);
       expect(groups).toHaveLength(2);
       const allDupKeys = groups.flatMap((g) => g.duplicateKeys);
-      expect(allDupKeys).not.toContain('2020/05/01/c.png');
+      expect(allDupKeys).not.toContain('transfers/2020/05/01/c.png');
     });
 
     it('handles empty input', () => {

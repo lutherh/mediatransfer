@@ -20,6 +20,26 @@ function basename(key: string): string {
   return key.split('/').pop() ?? key;
 }
 
+/** Returns a human-readable namespace label and Tailwind colour classes for an S3 key. */
+function pathNamespaceBadge(key: string): { label: string; className: string } | null {
+  if (key.startsWith('immich/library/')) {
+    return { label: 'Immich library', className: 'bg-blue-100 text-blue-700' };
+  }
+  if (key.startsWith('immich/upload/')) {
+    return { label: 'Immich upload', className: 'bg-blue-100 text-blue-700' };
+  }
+  if (key.startsWith('immich/')) {
+    return { label: 'Immich', className: 'bg-blue-100 text-blue-700' };
+  }
+  if (/^transfers\/((?:19|20)\d{4})\/\d{2}\/\d{2}\//.test(key)) {
+    return { label: 'Transfers (dated)', className: 'bg-emerald-100 text-emerald-700' };
+  }
+  if (key.startsWith('transfers/')) {
+    return { label: 'Transfers (no date)', className: 'bg-amber-100 text-amber-700' };
+  }
+  return null;
+}
+
 // ── Thumb ──────────────────────────────────────────────────────────────────
 
 function Thumb({
@@ -188,6 +208,19 @@ function GroupRow({
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white">
+      {/* Cross-namespace warning strip */}
+      {group.crossNamespace && (
+        <div className="flex items-center gap-2 rounded-t-lg border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+          <svg className="h-3.5 w-3.5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+          </svg>
+          <span>
+            <strong>Cross-namespace duplicate</strong> — Immich copy is kept; the{' '}
+            <span className="font-mono">transfers/</span> copy will be deleted. Safe to proceed.
+          </span>
+        </div>
+      )}
+
       {/* Summary row */}
       <div className="flex items-center gap-3 px-4 py-3">
         {/* Compact keep thumb */}
@@ -196,9 +229,19 @@ function GroupRow({
         </div>
 
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-slate-800" title={group.keepKey}>
-            {basename(group.keepKey)}
-          </p>
+          <div className="flex items-center gap-1.5">
+            <p className="truncate text-sm font-medium text-slate-800" title={group.keepKey}>
+              {basename(group.keepKey)}
+            </p>
+            {(() => {
+              const badge = pathNamespaceBadge(group.keepKey);
+              return badge ? (
+                <span className={`flex-shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${badge.className}`}>
+                  {badge.label}
+                </span>
+              ) : null;
+            })()}
+          </div>
           <p className="text-xs text-slate-500">
             {totalCopies} copies · {formatBytes(group.size)} each ·{' '}
             <span className="text-red-600 font-medium">{formatBytes(wastedBytes)} wasted</span>
@@ -247,6 +290,14 @@ function GroupRow({
             <p className="max-w-[80px] truncate text-center text-[9px] text-slate-500" title={group.keepKey}>
               {basename(group.keepKey)}
             </p>
+            {(() => {
+              const badge = pathNamespaceBadge(group.keepKey);
+              return badge ? (
+                <span className={`rounded px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wide ${badge.className}`}>
+                  {badge.label}
+                </span>
+              ) : null;
+            })()}
           </div>
 
           {/* Duplicates */}
@@ -263,6 +314,14 @@ function GroupRow({
               <p className="max-w-[80px] truncate text-center text-[9px] text-slate-500" title={key}>
                 {basename(key)}
               </p>
+              {(() => {
+                const badge = pathNamespaceBadge(key);
+                return badge ? (
+                  <span className={`rounded px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wide ${badge.className}`}>
+                    {badge.label}
+                  </span>
+                ) : null;
+              })()}
             </div>
           ))}
         </div>
@@ -420,11 +479,28 @@ export function CatalogDedupPage() {
     });
   }, []);
 
-  // Filter out fully-deleted groups
+  // Filter out fully-deleted groups and immich-only groups (this tool can't safely handle those)
   const visibleGroups = useMemo(() => {
     if (!data) return [];
-    return data.groups.filter((g) => !deletedKeys.has(g.keepKey) && !g.duplicateKeys.every((k) => deletedKeys.has(k)));
+    return data.groups.filter(
+      (g) =>
+        !g.immichOnly &&
+        !deletedKeys.has(g.keepKey) &&
+        !g.duplicateKeys.every((k) => deletedKeys.has(k)),
+    );
   }, [data, deletedKeys]);
+
+  // Count of immich-only groups excluded from the list
+  const immichOnlyCount = useMemo(
+    () => data?.groups.filter((g) => g.immichOnly).length ?? 0,
+    [data],
+  );
+
+  // Count of cross-namespace groups (immich/ + transfers/ mixed)
+  const crossNamespaceCount = useMemo(
+    () => visibleGroups.filter((g) => g.crossNamespace).length,
+    [visibleGroups],
+  );
 
   // Apply search filter + sort
   const filteredGroups = useMemo(() => {
@@ -619,6 +695,37 @@ export function CatalogDedupPage() {
               </p>
             </Card>
           </div>
+
+          {/* Immich-only exclusion notice */}
+          {immichOnlyCount > 0 && (
+            <div className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+              <svg className="mt-0.5 h-4 w-4 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5h.253a.25.25 0 01.244.304l-.459 2.066A1.75 1.75 0 0010.747 15H11a.75.75 0 000-1.5h-.253a.25.25 0 01-.244-.304l.459-2.066A1.75 1.75 0 009.253 9H9z" clipRule="evenodd" />
+              </svg>
+              <span>
+                <strong>{immichOnlyCount.toLocaleString()} Immich-only group{immichOnlyCount !== 1 ? 's' : ''} excluded</strong> —
+                these duplicates exist entirely within <span className="font-mono">immich/</span> paths.
+                This tool cannot safely delete them without corrupting Immich's database.
+                Use Immich's built-in deduplication instead.
+              </span>
+            </div>
+          )}
+
+          {/* Cross-namespace advisory */}
+          {crossNamespaceCount > 0 && (
+            <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <svg className="mt-0.5 h-4 w-4 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+              </svg>
+              <span>
+                <strong>{crossNamespaceCount.toLocaleString()} cross-namespace group{crossNamespaceCount !== 1 ? 's' : ''}</strong> —
+                these contain both an <span className="font-mono">immich/</span> copy and a{' '}
+                <span className="font-mono">transfers/</span> copy of the same file.
+                The <strong>Immich copy is kept</strong> and the transfers copy is marked for deletion.
+                This is safe to proceed with.
+              </span>
+            </div>
+          )}
 
           {visibleGroups.length === 0 ? (
             <Card>

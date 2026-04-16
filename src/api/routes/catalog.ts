@@ -360,45 +360,6 @@ export async function registerCatalogRoutes(
     reply.raw.end();
   });
 
-  app.get('/catalog/api/duplicates', async (_req, reply) => {
-    const catalogService = requireCatalog(catalog, reply);
-    if (!catalogService) {
-      return;
-    }
-
-    try {
-      const groups = await catalogService.findDuplicates();
-      const totalDuplicates = groups.reduce((sum, group) => sum + group.duplicateKeys.length, 0);
-      const bytesFreed = groups.reduce((sum, group) => sum + group.duplicateKeys.length * group.size, 0);
-      return { groups, totalDuplicates, bytesFreed };
-    } catch (err) {
-      const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
-      const status = isTimeout ? 503 : 500;
-      const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to find duplicates';
-      console.error('[catalog] /catalog/api/duplicates error:', err);
-      return reply.status(status).send({ error: message });
-    }
-  });
-
-  app.post('/catalog/api/deduplicate', async (req, reply) => {
-    const catalogService = requireCatalog(catalog, reply);
-    if (!catalogService) {
-      return;
-    }
-
-    const body = z.object({ dryRun: z.boolean().optional() }).parse(req.body);
-    try {
-      const result = await catalogService.deduplicateObjects({ dryRun: body.dryRun });
-      return result;
-    } catch (err) {
-      const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
-      const status = isTimeout ? 503 : 500;
-      const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to deduplicate objects';
-      console.error('[catalog] POST /catalog/api/deduplicate error:', err);
-      return reply.status(status).send({ error: message });
-    }
-  });
-
   // ── Thumbnail endpoint ─────────────────────────────────────────────────
   // Serves on-demand resized JPEG thumbnails for grid tiles (small=256px)
   // and lightbox preview (large=1920px). Cached in-memory + aggressive
