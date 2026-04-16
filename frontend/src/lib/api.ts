@@ -13,6 +13,14 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
   if (API_TOKEN && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${API_TOKEN}`);
   }
+  // Auto-set Content-Type for JSON string bodies when caller didn't set one.
+  // Skipped for FormData/Blob/ArrayBuffer/URLSearchParams (browser sets correct header).
+  if (
+    typeof init?.body === 'string' &&
+    !headers.has('Content-Type')
+  ) {
+    headers.set('Content-Type', 'application/json');
+  }
   const userProvidedSignal = init?.signal != null;
   const signal = init?.signal ?? AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT_MS);
   try {
