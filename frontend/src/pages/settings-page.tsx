@@ -64,7 +64,7 @@ export function SettingsPage() {
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Settings</h1>
         <p className="text-sm text-slate-500 mt-1">
-          Configure integrations for Scaleway Object Storage, Google Photos, and Immich.
+          Configure integrations for S3-compatible Object Storage, Google Photos, and Immich.
         </p>
       </div>
 
@@ -85,7 +85,7 @@ export function SettingsPage() {
         {/* Scaleway */}
         <Card className="overflow-hidden p-0">
           <SectionHeader
-            title="Scaleway Object Storage"
+            title="Object Storage (S3)"
             configured={status?.scaleway ?? false}
             open={open === 'scaleway'}
             onToggle={() => toggle('scaleway')}

@@ -61,11 +61,14 @@ const moveBodySchema = z.object({
   newDatePrefix: z.string().regex(/^\d{4}\/\d{2}\/\d{2}$/, 'Must be YYYY/MM/DD'),
 });
 
+/** Maximum moves per bulk-move request. Must match the chunk size used by the frontend. */
+const MAX_BULK_MOVE_SIZE = 100;
+
 const bulkMoveBodySchema = z.object({
   moves: z.array(z.object({
     encodedKey: z.string().min(1).max(1024),
     newDatePrefix: z.string().regex(/^\d{4}\/\d{2}\/\d{2}$/, 'Must be YYYY/MM/DD'),
-  })).min(1).max(100),
+  })).min(1).max(MAX_BULK_MOVE_SIZE),
 });
 
 export async function registerCatalogRoutes(
@@ -78,7 +81,7 @@ export async function registerCatalogRoutes(
       return reply.status(503).type('text/html').send(`<!doctype html>
 <html><body style="font-family:system-ui;padding:24px">
 <h2>Catalog unavailable</h2>
-<p>Scaleway catalog browser is not configured. Set SCW_ACCESS_KEY, SCW_SECRET_KEY, SCW_REGION and SCW_BUCKET.</p>
+<p>Object storage catalog is not configured. Set SCW_ACCESS_KEY, SCW_SECRET_KEY, SCW_REGION and SCW_BUCKET (or equivalent env vars for your S3 provider).</p>
 </body></html>`);
     }
 

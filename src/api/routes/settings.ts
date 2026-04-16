@@ -28,6 +28,10 @@ export type ScalewayStoredConfig = {
   bucket: string;
   prefix?: string;
   storageClass?: string;
+  /** Explicit S3 endpoint URL override (omit to derive from region) */
+  endpoint?: string;
+  /** Use path-style requests. Defaults to true. Set false for AWS S3. */
+  forcePathStyle?: boolean;
 };
 
 export type GoogleStoredConfig = {
@@ -46,17 +50,21 @@ export type ImmichStoredConfig = {
 const scalewayTestSchema = z.object({
   accessKey: z.string().optional(),
   secretKey: z.string().optional(),
-  region: z.string().min(1).default('fr-par'),
+  region: z.string().min(1),
   bucket: z.string().min(1),
+  endpoint: z.string().url().optional(),
+  forcePathStyle: z.boolean().optional(),
 });
 
 const scalewayPutSchema = z.object({
   accessKey: z.string().optional(),
   secretKey: z.string().optional(),
-  region: z.string().min(1).default('fr-par'),
+  region: z.string().min(1),
   bucket: z.string().min(1),
   prefix: z.string().optional(),
-  storageClass: z.enum(['STANDARD', 'ONEZONE_IA', 'GLACIER']).optional(),
+  storageClass: z.string().optional(),
+  endpoint: z.string().url().optional(),
+  forcePathStyle: z.boolean().optional(),
 });
 
 const googlePutSchema = z.object({
@@ -94,6 +102,10 @@ async function resolveScalewayConfig(): Promise<ScalewayStoredConfig | null> {
     bucket,
     prefix: process.env.SCW_PREFIX?.trim() || undefined,
     storageClass: process.env.SCW_STORAGE_CLASS?.trim() || undefined,
+    endpoint: process.env.SCW_ENDPOINT_URL?.trim() || undefined,
+    forcePathStyle: process.env.SCW_FORCE_PATH_STYLE === 'false' ? false
+      : process.env.SCW_FORCE_PATH_STYLE === 'true' ? true
+      : undefined,
   };
 }
 
@@ -103,14 +115,16 @@ async function testScalewayConnection(cfg: {
   secretKey: string;
   region: string;
   bucket: string;
+  endpoint?: string;
+  forcePathStyle?: boolean;
 }): Promise<{ ok: boolean; error?: string }> {
-  const endpoint = resolveScalewayEndpoint(cfg.region);
+  const endpoint = cfg.endpoint ?? resolveScalewayEndpoint(cfg.region);
   const signingRegion = resolveScalewaySigningRegion(cfg.region);
   const client = new S3Client({
-    endpoint,
+    ...(endpoint ? { endpoint } : {}),
     region: signingRegion,
     credentials: { accessKeyId: cfg.accessKey, secretAccessKey: cfg.secretKey },
-    forcePathStyle: false,
+    forcePathStyle: cfg.forcePathStyle ?? true,
   });
   try {
     await client.send(new ListObjectsV2Command({ Bucket: cfg.bucket, MaxKeys: 1 }));
@@ -180,6 +194,8 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       bucket: cfg.bucket,
       prefix: cfg.prefix ?? '',
       storageClass: cfg.storageClass ?? 'ONEZONE_IA',
+      endpoint: cfg.endpoint,
+      forcePathStyle: cfg.forcePathStyle,
       accessKey: MASK,
       secretKey: MASK,
     };
@@ -204,6 +220,8 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       secretKey,
       region: body.region,
       bucket: body.bucket,
+      endpoint: body.endpoint,
+      forcePathStyle: body.forcePathStyle,
     });
 
     if (!result.ok) {
@@ -232,6 +250,8 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       secretKey,
       region: body.region,
       bucket: body.bucket,
+      endpoint: body.endpoint,
+      forcePathStyle: body.forcePathStyle,
     });
     if (!test.ok) {
       return reply.code(400).send({ error: `Connection test failed: ${test.error}` });
@@ -244,6 +264,8 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       bucket: body.bucket,
       prefix: body.prefix,
       storageClass: body.storageClass,
+      endpoint: body.endpoint,
+      forcePathStyle: body.forcePathStyle,
     });
 
     return reply.code(204).send();

@@ -1271,6 +1271,8 @@ export type ScalewaySettingsResponse = {
   bucket?: string;
   prefix?: string;
   storageClass?: string;
+  endpoint?: string;
+  forcePathStyle?: boolean;
   accessKey?: string;
   secretKey?: string;
 };
@@ -1312,6 +1314,8 @@ export async function testScalewaySettings(body: {
   secretKey?: string;
   region: string;
   bucket: string;
+  endpoint?: string;
+  forcePathStyle?: boolean;
 }): Promise<TestResult> {
   const res = await apiFetch(`${API_BASE_URL}/settings/scaleway/test`, {
     method: 'POST',
@@ -1329,6 +1333,8 @@ export async function saveScalewaySettings(body: {
   bucket: string;
   prefix?: string;
   storageClass?: string;
+  endpoint?: string;
+  forcePathStyle?: boolean;
 }): Promise<void> {
   const res = await apiFetch(`${API_BASE_URL}/settings/scaleway`, {
     method: 'PUT',

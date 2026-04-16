@@ -21,6 +21,8 @@ type FormState = {
   bucket: string;
   prefix: string;
   storageClass: string;
+  endpoint: string;
+  forcePathStyle: boolean;
 };
 
 const MASK = '••••••••';
@@ -31,10 +33,12 @@ export function ScalewayStep({ onSaved, compact }: Props) {
   const [form, setForm] = useState<FormState>({
     accessKey: '',
     secretKey: '',
-    region: 'fr-par',
+    region: '',
     bucket: '',
     prefix: '',
     storageClass: 'ONEZONE_IA',
+    endpoint: '',
+    forcePathStyle: true,
   });
   const [testResult, setTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
   const [testing, setTesting] = useState(false);
@@ -48,10 +52,12 @@ export function ScalewayStep({ onSaved, compact }: Props) {
       if (cfg.configured) {
         setForm((f) => ({
           ...f,
-          region: cfg.region ?? 'fr-par',
+          region: cfg.region ?? '',
           bucket: cfg.bucket ?? '',
           prefix: cfg.prefix ?? '',
           storageClass: cfg.storageClass ?? 'ONEZONE_IA',
+          endpoint: cfg.endpoint ?? '',
+          forcePathStyle: cfg.forcePathStyle ?? true,
         }));
       }
       setLoaded(true);
@@ -73,6 +79,8 @@ export function ScalewayStep({ onSaved, compact }: Props) {
         secretKey: form.secretKey || undefined,
         region: form.region,
         bucket: form.bucket,
+        endpoint: form.endpoint || undefined,
+        forcePathStyle: form.forcePathStyle,
       });
       setTestResult(result);
     } catch (e) {
@@ -93,6 +101,8 @@ export function ScalewayStep({ onSaved, compact }: Props) {
         bucket: form.bucket,
         prefix: form.prefix || undefined,
         storageClass: form.storageClass || undefined,
+        endpoint: form.endpoint || undefined,
+        forcePathStyle: form.forcePathStyle,
       });
       // Reload to reflect new state
       const updated = await fetchScalewaySettings();
@@ -117,16 +127,16 @@ export function ScalewayStep({ onSaved, compact }: Props) {
     <div className={compact ? '' : 'space-y-4'}>
       {!compact && (
         <div className="mb-2">
-          <h3 className="text-base font-semibold text-slate-900">Scaleway Object Storage</h3>
+          <h3 className="text-base font-semibold text-slate-900">Object Storage (S3-Compatible)</h3>
           <p className="text-sm text-slate-500 mt-1">
-            Configure S3-compatible credentials for your Scaleway bucket.
+            Configure S3-compatible credentials. Works with Scaleway, AWS S3, Backblaze B2, Cloudflare R2, and others.
           </p>
         </div>
       )}
 
       {existing?.configured && (
         <Alert variant="success" className="mb-3">
-          Scaleway is configured — bucket: <strong>{existing.bucket}</strong> / region:{' '}
+          Object storage configured — bucket: <strong>{existing.bucket}</strong> / region:{' '}
           <strong>{existing.region}</strong>
         </Alert>
       )}
@@ -161,6 +171,7 @@ export function ScalewayStep({ onSaved, compact }: Props) {
             className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
             value={form.region}
             onChange={(e) => set('region', e.target.value)}
+            placeholder="e.g. fr-par, us-east-1, eu-west-1"
           />
         </div>
         <div>
@@ -183,15 +194,44 @@ export function ScalewayStep({ onSaved, compact }: Props) {
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-700 mb-1">Storage Class</label>
-          <select
+          <input
+            type="text"
+            list="storage-class-options"
             className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
             value={form.storageClass}
             onChange={(e) => set('storageClass', e.target.value)}
-          >
-            <option value="STANDARD">Standard — daily access, full speed</option>
-            <option value="ONEZONE_IA">Infrequent Access — cheaper, slower retrieval</option>
-            <option value="GLACIER">Glacier Archive — cheapest, very slow retrieval</option>
-          </select>
+            placeholder="e.g. STANDARD, STANDARD_IA, ONEZONE_IA"
+          />
+          <datalist id="storage-class-options">
+            <option value="STANDARD" />
+            <option value="STANDARD_IA" />
+            <option value="ONEZONE_IA" />
+            <option value="GLACIER" />
+            <option value="DEEP_ARCHIVE" />
+            <option value="INTELLIGENT_TIERING" />
+          </datalist>
+        </div>
+        <div className="sm:col-span-2">
+          <label className="block text-xs font-medium text-slate-700 mb-1">Endpoint URL <span className="font-normal text-slate-400">(optional — leave blank for Scaleway auto-detect)</span></label>
+          <input
+            type="url"
+            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+            value={form.endpoint}
+            onChange={(e) => set('endpoint', e.target.value)}
+            placeholder="e.g. https://s3.amazonaws.com or https://s3.us-west-001.backblazeb2.com"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            id="force-path-style"
+            type="checkbox"
+            checked={form.forcePathStyle}
+            onChange={(e) => set('forcePathStyle', e.target.checked)}
+            className="rounded border-slate-300"
+          />
+          <label htmlFor="force-path-style" className="text-xs text-slate-700">
+            Path-style requests <span className="text-slate-400">(on for Scaleway/B2/R2; off for AWS S3)</span>
+          </label>
         </div>
       </div>
 
