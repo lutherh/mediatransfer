@@ -1589,9 +1589,11 @@ export function buildDuplicateGroups(
   for (const [fingerprint, items] of map) {
     if (items.length < 2) continue;
 
-    // Sort: highest score first, then lexicographic for determinism
+    // Pre-compute scores once per key to avoid calling scoreKeyForKeep() twice per
+    // sort comparison (O(n log n) comparisons × 2 = 2n log n calls otherwise).
+    const scoreCache = new Map(items.map((item) => [item.key, scoreKeyForKeep(item.key)]));
     items.sort((a, b) => {
-      const scoreDiff = scoreKeyForKeep(b.key) - scoreKeyForKeep(a.key);
+      const scoreDiff = (scoreCache.get(b.key) ?? 0) - (scoreCache.get(a.key) ?? 0);
       if (scoreDiff !== 0) return scoreDiff;
       return a.key.localeCompare(b.key);
     });
