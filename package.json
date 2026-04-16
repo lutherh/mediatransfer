@@ -47,11 +47,11 @@
     "@vitest/coverage-v8": "^4.1.0",
     "music-metadata": "^11.12.3",
     "prisma": "^7.7.0",
-    "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0"
   },
   "dependencies": {
+    "tsx": "^4.21.0",
     "@aws-sdk/client-s3": "^3.1027.0",
     "@aws-sdk/lib-storage": "^3.1027.0",
     "@fastify/cors": "^11.2.0",
