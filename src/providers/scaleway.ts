@@ -22,7 +22,8 @@ const SCALEWAY_REGIONS: Record<string, string> = {
 
 /**
  * Resolve the region value into an SDK signing region.
- * Accepts either region code (`nl-ams`) or full Scaleway S3 endpoint URL.
+ * Accepts a Scaleway region code (`nl-ams`), a full S3 endpoint URL, or any
+ * plain region string (e.g. `us-east-1` for AWS).
  */
 export function resolveScalewaySigningRegion(region: string): string {
   const normalized = region.toLowerCase();
@@ -33,63 +34,62 @@ export function resolveScalewaySigningRegion(region: string): string {
   if (region.startsWith('https://') || region.startsWith('http://')) {
     try {
       const parsed = new URL(region);
-      const match = /^s3\.([a-z0-9-]+)\.scw\.cloud$/i.exec(parsed.hostname);
-      if (match?.[1]) {
-        return match[1].toLowerCase();
-      }
+      // Try Scaleway-style: s3.{region}.scw.cloud
+      const scwMatch = /^s3\.([a-z0-9-]+)\.scw\.cloud$/i.exec(parsed.hostname);
+      if (scwMatch?.[1]) return scwMatch[1].toLowerCase();
+      // Generic: s3.{region}.provider.tld (AWS, Backblaze B2, etc.)
+      const genericMatch = /^s3[.-]([a-z0-9-]+)\./i.exec(parsed.hostname);
+      if (genericMatch?.[1]) return genericMatch[1].toLowerCase();
+      // Fall back to full hostname as signing region
+      return parsed.hostname;
     } catch {
-      // ignored, handled by throw below
+      // ignored — fall through
     }
-
-    throw new Error(
-      `Cannot derive Scaleway signing region from endpoint URL "${region}". ` +
-        'Use a known Scaleway endpoint like https://s3.nl-ams.scw.cloud or provide region code.',
-    );
   }
 
-  const known = Object.keys(SCALEWAY_REGIONS).join(', ');
-  throw new Error(
-    `Unknown Scaleway region "${region}". Known regions: ${known}. ` +
-      'You can also pass a full endpoint URL.',
-  );
+  // Unknown plain string — treat as a direct signing region (e.g. "us-east-1", "eu-west-1")
+  return region;
 }
 
 /**
- * Resolve a Scaleway region string to an S3 endpoint URL.
- * Accepts both region codes ("fr-par") and full URLs.
+ * Resolve a region string to an S3 endpoint URL.
+ * Accepts Scaleway region codes ("fr-par"), full endpoint URLs, or unknown
+ * region strings. Returns `undefined` for unknown plain regions so the AWS SDK
+ * can handle endpoint resolution itself (needed for standard AWS S3).
  */
-export function resolveScalewayEndpoint(region: string): string {
+export function resolveScalewayEndpoint(region: string): string | undefined {
   const endpoint = SCALEWAY_REGIONS[region.toLowerCase()];
   if (endpoint) return endpoint;
 
-  // Allow passing a full URL directly (custom / new regions)
+  // Accept any explicit URL (Backblaze B2, Cloudflare R2, custom S3-compatible)
   if (region.startsWith('https://') || region.startsWith('http://')) {
     return region;
   }
 
-  const known = Object.keys(SCALEWAY_REGIONS).join(', ');
-  throw new Error(
-    `Unknown Scaleway region "${region}". Known regions: ${known}. ` +
-      'You can also pass a full endpoint URL.',
-  );
+  // Unknown plain region — let the AWS SDK resolve the default endpoint
+  return undefined;
 }
 
 // ── Configuration ───────────────────────────────────────────────
 
 export type ScalewayConfig = ProviderConfig & {
   provider: 'scaleway';
-  /** Scaleway region code (e.g. "fr-par") or full endpoint URL */
+  /** Region code (e.g. "fr-par", "us-east-1") or full S3 endpoint URL */
   region: string;
   /** Target bucket name */
   bucket: string;
-  /** Access key (SCW_ACCESS_KEY) */
+  /** Access key */
   accessKey: string;
-  /** Secret key (SCW_SECRET_KEY) */
+  /** Secret key */
   secretKey: string;
   /** Optional key prefix to scope operations */
   prefix?: string;
-  /** S3 storage class for new uploads (e.g. STANDARD, ONEZONE_IA, GLACIER) */
+  /** S3 storage class for new uploads (e.g. STANDARD, ONEZONE_IA, GLACIER, STANDARD_IA) */
   storageClass?: string;
+  /** Explicit S3 endpoint URL override (if omitted, derived from region) */
+  endpoint?: string;
+  /** Use path-style S3 requests. Defaults to true. Set false for AWS S3 virtual-hosted style. */
+  forcePathStyle?: boolean;
 };
 
 /**
@@ -111,7 +111,7 @@ export function validateScalewayConfig(config: ProviderConfig): ScalewayConfig {
     throw new Error('Scaleway config: "secretKey" is required');
   }
 
-  const { storageClass } = config as Record<string, unknown>;
+  const { storageClass, endpoint, forcePathStyle } = config as Record<string, unknown>;
   return {
     provider: 'scaleway',
     region: region as string,
@@ -120,6 +120,8 @@ export function validateScalewayConfig(config: ProviderConfig): ScalewayConfig {
     secretKey: secretKey as string,
     prefix: typeof prefix === 'string' ? prefix : undefined,
     storageClass: typeof storageClass === 'string' ? storageClass : undefined,
+    endpoint: typeof endpoint === 'string' ? endpoint : undefined,
+    forcePathStyle: typeof forcePathStyle === 'boolean' ? forcePathStyle : undefined,
   };
 }
 
@@ -144,12 +146,12 @@ export class ScalewayProvider implements CloudProvider {
       client ??
       new S3Client({
         region: resolveScalewaySigningRegion(config.region),
-        endpoint: resolveScalewayEndpoint(config.region),
+        endpoint: config.endpoint ?? resolveScalewayEndpoint(config.region),
         credentials: {
           accessKeyId: config.accessKey,
           secretAccessKey: config.secretKey,
         },
-        forcePathStyle: true,
+        forcePathStyle: config.forcePathStyle ?? true,
       });
   }
 

@@ -17,7 +17,6 @@ services:
       - ./data:/app/data
       - ./scripts:/app/scripts:ro
       - ./.env:/app/.env:ro
-      - ./.env.immich:/app/.env.immich:ro
     command: ["sh", "-c", "npx prisma db push && exec node dist/index.js"]
     environment:
       NODE_ENV: production
@@ -36,6 +35,8 @@ services:
       SCW_BUCKET: ${SCW_BUCKET:-}
       SCW_STORAGE_CLASS: ${SCW_STORAGE_CLASS:-}
       SCW_PREFIX: ${SCW_PREFIX:-}
+      SCW_ENDPOINT_URL: ${SCW_ENDPOINT_URL:-}
+      SCW_FORCE_PATH_STYLE: ${SCW_FORCE_PATH_STYLE:-true}
       SCW_S3_REQUEST_TIMEOUT_MS: ${SCW_S3_REQUEST_TIMEOUT_MS:-300000}
       SCW_S3_LIST_MAX_RETRIES: ${SCW_S3_LIST_MAX_RETRIES:-5}
       THUMB_CACHE_DIR: ${THUMB_CACHE_DIR:-./data/thumbs}
@@ -49,9 +50,11 @@ services:
       GOOGLE_BATCH_TEMP_DIR: ${GOOGLE_BATCH_TEMP_DIR:-./data/takeout/work/google-api-batches}
       TAKEOUT_INPUT_DIR: ${TAKEOUT_INPUT_DIR:-./data/takeout/input}
       TAKEOUT_WORK_DIR: ${TAKEOUT_WORK_DIR:-./data/takeout/work}
+      TAKEOUT_ARCHIVE_DIR: ${TAKEOUT_ARCHIVE_DIR:-}
       TRANSFER_STATE_PATH: ${TRANSFER_STATE_PATH:-./data/takeout/state.json}
       UPLOAD_CONCURRENCY: ${UPLOAD_CONCURRENCY:-4}
       UPLOAD_RETRY_COUNT: ${UPLOAD_RETRY_COUNT:-5}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
     healthcheck:
       test:
         [
