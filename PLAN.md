@@ -351,3 +351,261 @@ Provide a web catalog page to visually verify transferred media in Scaleway Obje
 - Install shadcn/ui, Tailwind, TanStack Query
 - Build pages: Transfers list, New Transfer form, Job detail view
 - **Tests:** Component tests with Vitest + Testing Library
+
+---
+
+## Phase 11 — First-Run Setup Wizard & Settings
+
+> Goal: allow a new user to configure all runtime-settable integrations from the
+> browser, without ever editing a file.  Bootstrap-only variables (`DATABASE_URL`,
+> `ENCRYPTION_SECRET`, `REDIS_*`, `HOST`, `PORT`) stay in `.env` because the
+> server cannot start without them.  Everything else can be written to the
+> `app_settings` table (AES-256-GCM encrypted) and read back at runtime.
+
+### Security Boundaries
+
+| Layer | Rule |
+|---|---|
+| Transport | All endpoints behind existing `API_AUTH_TOKEN` bearer check |
+| At rest | All secrets encrypted with `encryptStringAsync()` before DB write |
+| Read back | Secrets are **never** returned to the client — masked as `"••••••••"` |
+| Input validation | Zod schema on every `POST`/`PATCH` request body |
+| Connection test | Every provider is test-dialled before its credentials are saved |
+| Bootstrap problem | If `API_AUTH_TOKEN` is not set (first run), the `/setup/*` prefix is exempt from auth; once a token is set it is required — same pattern as the existing `/health` exemption |
+
+### Step 30: Backend — `app_settings` runtime config layer
+
+`[ ]`
+
+**New file:** `src/api/routes/settings.ts`
+
+Registers the following Fastify routes (all `Content-Type: application/json`,
+all validated with Zod):
+
+```
+GET  /settings/status
+     Returns which integration groups are configured.
+     { scaleway: bool, google: bool, immich: bool, authTokenSet: bool }
+     Never returns secret values.
+
+GET  /settings/scaleway
+     Returns non-secret Scaleway config.
+     { region, bucket, prefix, storageClass, configured: bool }
+     accessKey / secretKey returned as "••••••••" if set.
+
+POST /settings/scaleway/test
+     Body: { accessKey, secretKey, region, bucket }
+     Calls ListObjectsV2 with max=1 to verify credentials.
+     Returns { ok: bool, error?: string }
+
+PUT  /settings/scaleway
+     Body: { accessKey, secretKey, region, bucket, prefix?, storageClass? }
+     Validates via /test first, then writes to app_settings key
+     "scaleway_config" as encrypted JSON.
+
+GET  /settings/google
+     Returns { clientId: "••••••••", clientSecret: "••••••••", redirectUri, configured: bool }
+
+PUT  /settings/google
+     Body: { clientId, clientSecret, redirectUri }
+     Writes to app_settings key "google_oauth_config" as encrypted JSON.
+
+GET  /settings/immich
+     Returns { url, apiKey: "••••••••", configured: bool }
+
+POST /settings/immich/test
+     Body: { url, apiKey }
+     Calls GET <url>/api/server/ping to verify.
+     Returns { ok: bool, serverVersion?: string, error?: string }
+
+PUT  /settings/immich
+     Body: { url, apiKey }
+     Validates via /test first, then writes to app_settings key
+     "immich_config" as encrypted JSON.
+```
+
+**Config resolution order** (applied at call time, not process startup):
+
+For each provider the service reads from DB first, falls back to env.  This
+means `.env` still works as the authoritative source when DB has nothing.
+
+```
+scaleway_config     → SCW_ACCESS_KEY / SCW_SECRET_KEY / SCW_BUCKET / SCW_REGION
+google_oauth_config → GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET
+immich_config       → IMMICH_URL / IMMICH_API_KEY
+```
+
+New helper: `src/config/runtime-settings.ts`
+- `getRuntimeSettings(key)` — reads `app_settings` row, decrypts, parses JSON
+- `setRuntimeSettings(key, value)` — encrypts, upserts `app_settings` row
+
+**Tests:** `src/api/routes/settings.test.ts`
+- `GET /settings/status` returns correct flags when nothing configured
+- `PUT /settings/scaleway` with valid data writes to DB; GET returns masked key
+- `PUT /settings/scaleway` with bad credentials returns 400, nothing written
+- `PUT /settings/immich` with unreachable URL returns 400
+- Secrets never appear in any GET response body
+- PUT without auth token → 401
+
+### Step 31: Backend — `/setup/bootstrap-status` (no auth required)
+
+`[ ]`
+
+**New file:** `src/api/routes/setup.ts`
+
+Single unauthenticated endpoint:
+
+```
+GET  /setup/bootstrap-status
+     Returns { needsSetup: bool, authTokenSet: bool, dbConnected: bool }
+     No secrets returned.  No auth required.  Always returns 200.
+```
+
+`needsSetup` is `true` when `authTokenSet === false` OR no integration
+(Scaleway / Immich / Google) is configured.
+
+Auth exemption: add `/setup/bootstrap-status` to the existing auth-skip list
+in `src/api/index.ts` alongside `/health`.
+
+**Tests:**
+- Unauthenticated request returns 200
+- Returns `needsSetup: true` when auth token not set
+- Returns `dbConnected: false` when DB is unreachable (mock Prisma)
+
+### Step 32: Frontend — Setup wizard page
+
+`[ ]`
+
+**New file:** `frontend/src/pages/setup-page.tsx`
+
+- On mount: calls `GET /setup/bootstrap-status` (no auth header required).
+- If `needsSetup === false`, immediately redirects to `/`.
+- Otherwise renders a full-screen wizard using the existing `Stepper` component
+  with four steps:
+  1. **Auth token** — advisory only; shows instructions to set `API_AUTH_TOKEN`
+     in `.env` and restart; green tick if already set.
+  2. **Storage (Scaleway S3)** — credential form (Step 33).
+  3. **Google Photos** — OAuth client form (Step 34).
+  4. **Immich** — URL + API key form (Step 35).
+- Steps 2–4 each have a "Skip for now" button.
+- A "Done" button on step 4 redirects to `/`.
+
+Route: `/setup` — added to `frontend/src/app.tsx` outside the `<Layout>`
+wrapper (full-screen, no nav bar).
+
+**Nav badge:** `frontend/src/components/layout.tsx` adds a red dot on the
+"Settings" nav link when `needsSetup === true`.  Polls
+`GET /setup/bootstrap-status` with a 5-minute `staleTime`.
+
+### Step 33: Frontend — Scaleway S3 configuration step
+
+`[ ]`
+
+Component: `frontend/src/pages/setup/scaleway-step.tsx`
+
+Fields:
+- Access Key (`type="password"`, `autocomplete="new-password"`)
+- Secret Key (`type="password"`, `autocomplete="new-password"`)
+- Region (text, default `fr-par`)
+- Bucket (text)
+- Prefix (text, optional)
+- Storage Class (select: `STANDARD` | `ONEZONE_IA` | `GLACIER`)
+
+Behaviour:
+1. On mount: `GET /settings/scaleway` — pre-fills non-secret fields; secret
+   inputs show empty placeholder text "already set — leave blank to keep".
+2. "Test connection" button → `POST /settings/scaleway/test`; shows green or
+   red inline alert.
+3. "Save" button disabled until test passes → `PUT /settings/scaleway`.
+4. Per-field Zod error messages shown below each input.
+
+### Step 34: Frontend — Google OAuth configuration step
+
+`[ ]`
+
+Component: `frontend/src/pages/setup/google-step.tsx`
+
+Fields:
+- Client ID (text)
+- Client Secret (`type="password"`)
+- Redirect URI (text, pre-filled from server default)
+
+Collapsible "How to get credentials" panel with numbered instructions linking
+to Google Cloud Console.
+
+After saving: "Connect Google account →" button that triggers the existing
+OAuth flow via `GET /auth/google/url`.
+
+### Step 35: Frontend — Immich configuration step
+
+`[ ]`
+
+Component: `frontend/src/pages/setup/immich-step.tsx`
+
+Fields:
+- Server URL (text, e.g. `http://localhost:2283`)
+- API Key (`type="password"`)
+
+"Test" button → `POST /settings/immich/test`; on success shows the Immich
+server version from the ping response.
+
+"Save" button disabled until test passes → `PUT /settings/immich`.
+
+### Step 36: Frontend — Settings page (ongoing config)
+
+`[ ]`
+
+**New file:** `frontend/src/pages/settings-page.tsx`
+
+Reuses the same three step components (Steps 33–35) rendered as collapsible
+`<Card>` sections rather than a wizard, so users can update any integration
+without going through the full wizard again.
+
+Route: `/settings` — added to the main `<Layout>` nav with a gear icon.
+The red badge from Step 32 appears here when setup is incomplete.
+
+### Step 37: Tests
+
+`[ ]`
+
+Backend (`src/api/routes/settings.test.ts`):
+- All CRUD routes for each integration (status, get, test, put)
+- GET responses mask secrets
+- Test-dial failure → 400 returned, nothing written to DB
+- Unauthenticated PUT → 401
+- `GET /setup/bootstrap-status` → 200 without auth token
+
+Frontend (Vitest + Testing Library):
+- `ScalewayStep` shows masked placeholder when config already exists
+- "Save" disabled until test succeeds
+- Error message shown when test-dial fails
+- Setup page redirects to `/` when `needsSetup === false`
+
+---
+
+### What is NOT in scope (stays in `.env` only)
+
+| Variable | Why it cannot be set from UI |
+|---|---|
+| `DATABASE_URL` | Server cannot start without it |
+| `ENCRYPTION_SECRET` | Key derivation happens at process start |
+| `REDIS_*` | Queue is initialized at startup |
+| `NODE_ENV`, `HOST`, `PORT`, `LOG_LEVEL` | Structural; restart required |
+| `WORKER_CONCURRENCY`, `UPLOAD_CONCURRENCY` | Queue init; restart required |
+
+### Secret masking convention
+
+Any `app_settings` value whose JSON field name ends in `Key`, `Secret`,
+`Token`, or `Password` is returned as the literal string `"••••••••"` in all
+GET responses.  The client treats a masked value as "already set" and leaves
+the input empty; any content typed into a masked field is treated as a new
+value to save.
+
+### No new packages required
+
+All building blocks already exist in the codebase:
+- `AppSetting` Prisma model (`prisma/schema.prisma`)
+- `encryptStringAsync` / `decryptStringAsync` (`src/utils/crypto.ts`)
+- `Stepper`, `Card`, `Alert`, `Button` UI components
+- Fastify + Zod validation pipeline (`src/api/index.ts`)
+- `apiFetch` with bearer token (`frontend/src/lib/api.ts`)
