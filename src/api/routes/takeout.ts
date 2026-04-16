@@ -1110,7 +1110,11 @@ function resolveActionCommands(action: TakeoutAction): ActionCommand[] {
     verify: 'takeout:verify',
     resume: 'takeout:resume',
     'repair-dates': 'takeout:repair-dates -- --apply',
-    'repair-dates-s3': 'takeout:repair-dates-s3 -- --apply --video --metadata-dir data/takeout/work/metadata',
+    'repair-dates-s3': (() => {
+      const workDir = customPaths.get('workDir') ?? (resolvedEnv ? path.resolve(resolvedEnv.TAKEOUT_WORK_DIR) : 'data/takeout/work');
+      const metadataDir = path.join(workDir, 'metadata');
+      return `takeout:repair-dates-s3 -- --apply --video --metadata-dir ${metadataDir}`;
+    })(),
     'cleanup-move': 'takeout:cleanup -- --apply --move-archives --include-unscanned',
     'cleanup-delete': 'takeout:cleanup -- --apply --delete-archives --include-unscanned',
     'cleanup-force-move': 'takeout:cleanup -- --apply --move-archives --force --include-unscanned',
