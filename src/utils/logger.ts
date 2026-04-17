@@ -18,6 +18,33 @@ export function createLogger(
   const options: LoggerOptions = {
     name: 'mediatransfer',
     level: env.LOG_LEVEL,
+    redact: {
+      paths: [
+        // Env-like object keys that may get logged during startup/debug
+        '*.SCW_SECRET_KEY',
+        '*.SCW_ACCESS_KEY',
+        '*.GOOGLE_CLIENT_SECRET',
+        '*.GOOGLE_REFRESH_TOKEN',
+        '*.GOOGLE_ACCESS_TOKEN',
+        '*.GOOGLE_PASSWORD',
+        '*.IMMICH_API_KEY',
+        '*.API_AUTH_TOKEN',
+        '*.ENCRYPTION_SECRET',
+        '*.DATABASE_URL',
+        // Generic payload keys
+        '*.secretKey',
+        '*.accessKey',
+        '*.clientSecret',
+        '*.refreshToken',
+        '*.accessToken',
+        '*.apiKey',
+        '*.password',
+        '*.token',
+        'headers.authorization',
+        'headers["x-api-key"]',
+      ],
+      censor: '[REDACTED]',
+    },
     ...(usePrettyTransport && {
       transport: {
         target: 'pino-pretty',
