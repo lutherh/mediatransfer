@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
-# Start MediaTransfer + Immich services
-# Works on Linux, macOS, and WSL.
+# Start / stop / restart the MediaTransfer + Immich stacks.
+#
+# Works on:
+#   - Linux (Docker Engine)
+#   - macOS (Docker Desktop)
+#   - WSL2 (Docker Desktop with WSL integration)
+#   - Git Bash on Windows
+#
+# The rclone-cleanup sidecar defined in docker-compose.immich.yml handles
+# stale FUSE mounts inside the Docker host namespace. That same mechanism
+# works identically on Linux / macOS / Windows Docker Desktop, so this
+# wrapper deliberately stays OS-agnostic and does no host-side fiddling.
 #
 # Usage:
-#   ./start-all.sh          # start both stacks
-#   ./start-all.sh stop     # stop both stacks
-#   ./start-all.sh restart  # restart both stacks
+#   ./start-all.sh [up|start|down|stop|restart|status|logs [service…]]
 
 set -euo pipefail
 
@@ -13,7 +21,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$ROOT_DIR"
 
-# Wait for Docker daemon to be ready (relevant at boot)
+COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.immich.yml)
+
 wait_for_docker() {
   local retries=30
   while ! docker info >/dev/null 2>&1; do
@@ -27,50 +36,31 @@ wait_for_docker() {
   done
 }
 
-# Ensure the rclone volume plugin is enabled (may be disabled after reboot)
-ensure_rclone_plugin() {
-  if docker plugin ls --format '{{.Name}} {{.Enabled}}' 2>/dev/null | grep -q 'rclone.*false'; then
-    echo "Enabling rclone Docker plugin..."
-    docker plugin enable rclone || true
-  fi
-}
-
-# Clean stale FUSE mounts from a previous rclone crash.
-# On Docker Desktop (WSL2), a crashed rclone container leaves zombie FUSE
-# mount entries in the VM's mount table, causing "transport endpoint is not
-# connected" errors on the bind-mount path.
-clean_stale_fuse() {
-  echo "Checking for stale FUSE mounts..."
-  if command -v wsl.exe >/dev/null 2>&1; then
-    # Running inside WSL or Git Bash on Windows — clean via the docker-desktop distro
-    wsl.exe -d docker-desktop -u root -- sh -c \
-      'for mp in $(mount | grep fuse.rclone | awk "{print \$3}"); do
-        echo "  Cleaning stale mount: $mp"
-        umount -l "$mp" 2>/dev/null || true
-       done' 2>/dev/null || true
+require_compose() {
+  if ! docker compose version >/dev/null 2>&1; then
+    echo "ERROR: 'docker compose' (v2) is required. Install Docker Desktop or the compose-plugin package." >&2
+    exit 1
   fi
 }
 
 ACTION="${1:-up}"
+shift || true
 
 wait_for_docker
-ensure_rclone_plugin
+require_compose
 
 case "$ACTION" in
   up|start)
-    clean_stale_fuse
-
     echo "Starting all services..."
-    docker compose -f docker-compose.yml -f docker-compose.immich.yml up -d
-
+    docker compose "${COMPOSE_FILES[@]}" up -d --remove-orphans
     echo ""
     echo "All services started."
-    docker compose -f docker-compose.yml -f docker-compose.immich.yml ps --format 'table {{.Name}}\t{{.Status}}'
+    docker compose "${COMPOSE_FILES[@]}" ps --format 'table {{.Name}}\t{{.Status}}'
     ;;
 
   down|stop)
     echo "Stopping all services..."
-    docker compose -f docker-compose.yml -f docker-compose.immich.yml down
+    docker compose "${COMPOSE_FILES[@]}" down
     ;;
 
   restart)
@@ -78,8 +68,16 @@ case "$ACTION" in
     "$0" up
     ;;
 
+  status|ps)
+    docker compose "${COMPOSE_FILES[@]}" ps
+    ;;
+
+  logs)
+    docker compose "${COMPOSE_FILES[@]}" logs -f "$@"
+    ;;
+
   *)
-    echo "Usage: $0 {up|start|down|stop|restart}" >&2
+    echo "Usage: $0 {up|start|down|stop|restart|status|logs [service…]}" >&2
     exit 1
     ;;
 esac

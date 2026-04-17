@@ -1,20 +1,16 @@
 @echo off
+REM Thin shim for Windows cmd.exe — delegates to the cross-platform
+REM PowerShell implementation. Works without Git Bash, WSL, or any bash
+REM dependency. Prefers `pwsh` (PowerShell 7+) when available, otherwise
+REM falls back to Windows PowerShell 5.1 which ships with every Windows 10+.
 setlocal
 
-REM Resolve mediatransfer root (parent of scripts/)
-for %%I in ("%~dp0..") do set "ROOT_DIR=%%~fI"
+set "SCRIPT=%~dp0start-all.ps1"
 
-REM Find Git Bash
-if exist "C:\Program Files\Git\bin\bash.exe" (
-    set "GIT_BASH=C:\Program Files\Git\bin\bash.exe"
-    goto :found
+where pwsh >nul 2>&1
+if %ERRORLEVEL%==0 (
+    pwsh -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" %*
+) else (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" %*
 )
-if exist "C:\Program Files (x86)\Git\bin\bash.exe" (
-    set "GIT_BASH=C:\Program Files (x86)\Git\bin\bash.exe"
-    goto :found
-)
-echo ERROR: Git Bash not found
-exit /b 1
-
-:found
-"%GIT_BASH%" -c "cd \"$(cygpath '%ROOT_DIR%')\" && ./scripts/start-all.sh %*"
+exit /b %ERRORLEVEL%

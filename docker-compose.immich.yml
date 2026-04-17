@@ -51,7 +51,10 @@ services:
         trap cleanup TERM INT
         mkdir -p /mnt/s3 &&
         fusermount -uz /mnt/s3 2>/dev/null || true &&
-        rclone mount ":s3:$${RCLONE_BUCKET}/$${RCLONE_PREFIX:-immich}" /mnt/s3 \
+        # Trailing slash on the remote path is REQUIRED for Scaleway. Without it
+        # rclone probes the prefix via HeadObject, and Scaleway returns 403
+        # (not 404) for non-existent keys, causing the mount to fail.
+        rclone mount ":s3:$${RCLONE_BUCKET}/$${RCLONE_PREFIX:-immich}/" /mnt/s3 \
           --s3-provider Scaleway \
           --s3-access-key-id "$$SCW_ACCESS_KEY" \
           --s3-secret-access-key "$$SCW_SECRET_KEY" \

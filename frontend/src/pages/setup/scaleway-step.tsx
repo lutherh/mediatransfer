@@ -64,7 +64,7 @@ export function ScalewayStep({ onSaved, compact }: Props) {
     }).catch(() => setLoaded(true));
   }, []);
 
-  function set(field: keyof FormState, value: string) {
+  function set<K extends keyof FormState>(field: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [field]: value }));
     setTestResult(null);
     setSaveError(null);
