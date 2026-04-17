@@ -135,7 +135,8 @@ services:
       immich-redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:2283/api/server/ping"]
+      # The Immich image ships curl but not wget, so use curl here.
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:2283/api/server/ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -185,6 +186,20 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # Cloudflare Tunnel — publishes immich-server to immich.<domain> over HTTPS.
+  # Outbound-only connection to Cloudflare edge; no router port-forward needed.
+  # Token is issued in Cloudflare Zero Trust → Networks → Tunnels → home-immich.
+  immich-tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: immich_tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env.immich}
+    depends_on:
+      # Don't wait for health — cloudflared will retry the upstream itself,
+      # and blocking on service_healthy left the container in "Created" limbo
+      # if Immich took longer than expected to come up.
+      - immich-server
 
 volumes:
   immich-pgdata:
