@@ -53,8 +53,20 @@ describe('loadEnv', () => {
   });
 
   it('should accept all valid NODE_ENV values', () => {
+    // Production adds stricter requirements (API_AUTH_TOKEN, longer ENCRYPTION_SECRET,
+    // no weak DB password), so build a per-env fixture rather than reusing validEnv.
+    const perEnv: Record<'development' | 'production' | 'test', typeof validEnv> = {
+      development: validEnv,
+      test: validEnv,
+      production: {
+        ...validEnv,
+        DATABASE_URL: 'postgresql://user:S0meStrongPass!@localhost:5432/mediatransfer',
+        ENCRYPTION_SECRET: 'a-very-secure-secret-key-32-chars+',
+        API_AUTH_TOKEN: 'a-real-api-auth-token-1234567890',
+      },
+    };
     for (const nodeEnv of ['development', 'production', 'test'] as const) {
-      const env = loadEnv({ ...validEnv, NODE_ENV: nodeEnv });
+      const env = loadEnv({ ...perEnv[nodeEnv], NODE_ENV: nodeEnv });
       expect(env.NODE_ENV).toBe(nodeEnv);
     }
   });

@@ -86,6 +86,39 @@ const envSchema = z.object({
    * how many jobs run concurrently).
    */
   TRANSFER_ITEM_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
+}).superRefine((env, ctx) => {
+  // Production-only hardening: reject weak or missing secrets that are safe
+  // in dev but dangerous when the service is exposed to the internet.
+  if (env.NODE_ENV !== 'production') return;
+
+  if (!env.API_AUTH_TOKEN) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['API_AUTH_TOKEN'],
+      message: 'API_AUTH_TOKEN is required in production (min 16 chars).',
+    });
+  }
+  if (env.ENCRYPTION_SECRET.length < 32) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['ENCRYPTION_SECRET'],
+      message: 'ENCRYPTION_SECRET must be at least 32 characters in production.',
+    });
+  }
+  // Reject well-known default / dev DB credentials
+  const weakDbPatterns = [
+    /:mediatransfer@/i,
+    /:postgres@/i,
+    /:password@/i,
+    /:changeme@/i,
+  ];
+  if (weakDbPatterns.some((re) => re.test(env.DATABASE_URL))) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['DATABASE_URL'],
+      message: 'DATABASE_URL uses a weak/default password. Set a strong POSTGRES_PASSWORD in production.',
+    });
+  }
 });
 
 export type Env = z.infer<typeof envSchema>;
