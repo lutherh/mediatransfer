@@ -72,12 +72,19 @@ services:
       - .env
       - .env.immich
     volumes:
+      # Host bind with `rshared` propagation is required so rclone's FUSE
+      # mount inside this container becomes visible to immich-server.
+      # Stale endpoints after an unclean shutdown are handled by the
+      # rclone-cleanup sidecar + the write-based healthcheck below.
       - ./data/s3-mount:/mnt/s3:rshared
     depends_on:
       rclone-cleanup:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "ls", "/mnt/s3"]
+      # `ls` succeeds even on a dead FUSE mount (returns empty). A touch/rm on
+      # a sentinel file forces a real syscall round-trip through rclone and
+      # fails fast when the mount is broken — Docker then restarts the container.
+      test: ["CMD-SHELL", "touch /mnt/s3/.healthcheck && rm -f /mnt/s3/.healthcheck"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -112,7 +119,7 @@ services:
       - ${ENCODED_VIDEO_LOCATION:-./data/immich/encoded-video}:/usr/src/app/upload/encoded-video
       - ${PROFILE_LOCATION:-./data/immich/profile}:/usr/src/app/upload/profile
       - ${BACKUP_LOCATION:-./data/immich/backups}:/usr/src/app/upload/backups
-      - ./data/s3-mount:/usr/src/app/upload/s3transfers:ro,slave
+      - ./data/s3-mount:/usr/src/app/upload/s3transfers:ro,rslave
     env_file:
       - .env.immich
     depends_on:
