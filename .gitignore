@@ -76,6 +76,9 @@ scripts/_test-*
 
 # Obsolete PowerShell/cmd scripts (replaced by .sh)
 scripts/*.ps1
+# Exception: start-all.ps1 is the canonical Windows wrapper invoked by
+# scripts/start-all.cmd. See plans/05-host-side-fuse-cleanup.md.
+!scripts/start-all.ps1
 scripts/immich-update.cmd
 data/immich-asset-paths.txt
 data/library-admin-assets.csv
