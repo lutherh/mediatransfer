@@ -68,11 +68,17 @@ function Clear-StaleFuseMounts {
     if (-not $isWin) { return }
     if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) { return }
 
-    # Silently lazy-unmount any stale rclone FUSE endpoints in the
-    # docker-desktop VM. Required because Docker refuses to create
-    # containers when the host bind path has a dead FUSE endpoint,
-    # which prevents the in-container rclone-cleanup sidecar from
-    # running. See plans/03-stale-fuse-mounts.md.
+    # Lazy-unmount any stale rclone FUSE endpoints in the docker-desktop
+    # VM. Required because Docker refuses to create containers when the
+    # host bind path has a dead FUSE endpoint, which prevents the
+    # in-container rclone-cleanup sidecar from running.
+    # See plans/03-stale-fuse-mounts.md and plans/05-host-side-fuse-cleanup.md.
+    $stale = wsl -d docker-desktop -- sh -c `
+        "mount 2>/dev/null | grep fuse.rclone | awk '{print \$3}'" 2>$null
+    if (-not $stale) { return }
+
+    $count = ($stale | Measure-Object).Count
+    Write-Host "Cleaning $count stale FUSE mount(s) in docker-desktop VM..."
     wsl -d docker-desktop -- sh -c `
         "mount 2>/dev/null | grep fuse.rclone | awk '{print \$3}' | xargs -r -n1 umount -l 2>/dev/null" `
         *> $null
