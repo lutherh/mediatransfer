@@ -1,10 +1,10 @@
 # 07 — LAN endpoint in the Immich mobile app
 
-**Status:** 🔧 Recommended — not yet applied
+**Status:** ✅ Applied 2026‑04‑23 (host + firewall). Mobile app config still per-device.
 **Files to change:**
-- [../docker-compose.immich.yml](../docker-compose.immich.yml) (port binding)
-- Windows Firewall (manual)
-- Immich iOS / Android app (manual per device)
+- [../docker-compose.immich.yml](../docker-compose.immich.yml) (port binding) — done, bound to `192.168.0.161:2283`.
+- Windows Firewall — done, inbound rule `Immich LAN 2283` (TCP 2283, Remote `192.168.0.0/24`, Private profile).
+- Immich iOS / Android app (manual per device) — **still required on each phone**.
 
 ## Problem
 On home Wi‑Fi, every photo / video upload from the phones currently
@@ -18,7 +18,7 @@ needed to leave the LAN. It:
 
 ## Fix
 Configure the Immich app to prefer a LAN URL when reachable, falling back
-to the public hostname otherwise.
+to the public hostname otherwise. Unless this re-triggers login again
 
 ### Step 1 — expose 2283 on the LAN
 In [../docker-compose.immich.yml](../docker-compose.immich.yml), change
