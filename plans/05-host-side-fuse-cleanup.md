@@ -1,6 +1,6 @@
 # 05 — Host‑side FUSE cleanup before `docker compose up`
 
-**Status:** 🔧 Recommended — not yet applied
+**Status:** ✅ Applied 2026‑04‑23
 **File to change:** [../scripts/start-all.ps1](../scripts/start-all.ps1)
 **Related:** [03-stale-fuse-mounts.md](03-stale-fuse-mounts.md)
 
