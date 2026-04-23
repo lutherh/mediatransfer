@@ -258,6 +258,13 @@ Google Photos Picker remains for interactive subset transfers.
 - Add `GET /transfers/:id/logs` endpoint
 - **Tests:** Test log entries written during transfer, test log retrieval endpoint
 
+### Step 26: Error handling & resilience
+`[x]`
+- Global Fastify error handler with structured error responses
+- Provider-specific retry strategies (exponential backoff)
+- Dead letter queue for permanently failed jobs
+- **Tests:** Test error response format, test retry behavior, test DLQ placement
+
 ---
 
 ## Phase 9 — Scaleway Catalog Browser (Google-Photos-like verification)
@@ -265,7 +272,7 @@ Google Photos Picker remains for interactive subset transfers.
 ### Goal
 Provide a web catalog page to visually verify transferred media in Scaleway Object Storage, with smooth infinite scrolling behavior similar to a photo library browser.
 
-### Step 26: Catalog backend service
+### Step 27: Catalog backend service
 `[x]`
 - Create `src/catalog/scaleway-catalog.ts` with:
   - Paginated listing via S3 `ListObjectsV2` (`max`, `token`, optional `prefix`)
@@ -275,7 +282,7 @@ Provide a web catalog page to visually verify transferred media in Scaleway Obje
 - Add object streaming support via `GetObject`
 - **Tests:** Covered through API tests with mocked catalog service
 
-### Step 27: Catalog API routes
+### Step 28: Catalog API routes
 `[x]`
 - Add `src/api/routes/catalog.ts` endpoints:
   - `GET /catalog` → browser UI HTML
@@ -284,7 +291,7 @@ Provide a web catalog page to visually verify transferred media in Scaleway Obje
 - Return clear `503` when Scaleway catalog env vars are missing
 - **Tests:** Added route assertions in `src/api/index.test.ts`
 
-### Step 28: Infinite-scroll browser UI
+### Step 29: Infinite-scroll browser UI
 `[x]`
 - Build lightweight UI served by `/catalog`:
   - Sticky top bar with prefix filter + reload
@@ -295,14 +302,14 @@ Provide a web catalog page to visually verify transferred media in Scaleway Obje
   - Back-to-top control
 - **Tests:** Endpoint and API behavior verified in server test suite
 
-### Step 29: Auth compatibility for browser media fetches
+### Step 30: Auth compatibility for browser media fetches
 `[x]`
 - Support `apiToken` query parameter on `/catalog*` requests
 - Keep header auth support (`Authorization` / `x-api-key`) unchanged
 - Redact `req.query.apiToken` in logs
 - **Tests:** Existing auth tests remain green and catalog tests pass
 
-### Step 30: Validation and rollout
+### Step 31: Validation and rollout
 `[x]`
 - Run `npm run lint` and `npm run test`
 - Manual smoke test:
@@ -318,34 +325,35 @@ Provide a web catalog page to visually verify transferred media in Scaleway Obje
 - Clicking an item previews full media stream
 - Works with and without API auth token
 
-### Step 26: Error handling & resilience
-`[x]`
-- Global Fastify error handler with structured error responses
-- Provider-specific retry strategies (exponential backoff)
-- Dead letter queue for permanently failed jobs
-- **Tests:** Test error response format, test retry behavior, test DLQ placement
+### Step 32: Virtualized catalog grid refactor
+`[~]`
+- Replace the DOM-heavy infinite-scroll grid with a section-aware virtualized
+  renderer so the catalog stays responsive with 10k+ items.
+- Detailed implementation guide and test checkpoints live in
+  [`VIRTUALIZED_GRID_PLAN.md`](VIRTUALIZED_GRID_PLAN.md).
+- **Tests:** Per-checkpoint frontend tests defined in the linked plan.
 
 ---
 
-## Phase 9 — Docker & Deployment
+## Phase 10 — Docker & Deployment
 
-### Step 27: Production Dockerfile
+### Step 33: Production Dockerfile
 `[x]`
 - Multi-stage Dockerfile (build → production)
 - Update `docker-compose.yml` for full-stack local run (this is the primary deployment target)
 - Add npm scripts: `dev`, `build`, `start`, `test`, `lint`
 - **Tests:** Verify build succeeds, app starts in container locally
 
-### Step 28: CI pipeline
+### Step 34: CI pipeline
 `[x]`
 - Create `.github/workflows/ci.yml`: lint → test → build (no cloud deployment step — tool runs locally)
 - **Tests:** Verify pipeline definition is valid (lint the YAML)
 
 ---
 
-## Phase 10 (Optional) — Frontend
+## Phase 11 (Optional) — Frontend
 
-### Step 29: React frontend scaffold
+### Step 35: React frontend scaffold
 `[x]`
 - Scaffold with Vite + React + TypeScript
 - Install shadcn/ui, Tailwind, TanStack Query
@@ -354,7 +362,7 @@ Provide a web catalog page to visually verify transferred media in Scaleway Obje
 
 ---
 
-## Phase 11 — First-Run Setup Wizard & Settings
+## Phase 12 — First-Run Setup Wizard & Settings
 
 > Goal: allow a new user to configure all runtime-settable integrations from the
 > browser, without ever editing a file.  Bootstrap-only variables (`DATABASE_URL`,
@@ -373,7 +381,7 @@ Provide a web catalog page to visually verify transferred media in Scaleway Obje
 | Connection test | Every provider is test-dialled before its credentials are saved |
 | Bootstrap problem | If `API_AUTH_TOKEN` is not set (first run), the `/setup/*` prefix is exempt from auth; once a token is set it is required — same pattern as the existing `/health` exemption |
 
-### Step 30: Backend — `app_settings` runtime config layer
+### Step 36: Backend — `app_settings` runtime config layer
 
 `[x]`
 
@@ -447,7 +455,7 @@ New helper: `src/config/runtime-settings.ts`
 - Secrets never appear in any GET response body
 - PUT without auth token → 401
 
-### Step 31: Backend — `/setup/bootstrap-status` (no auth required)
+### Step 37: Backend — `/setup/bootstrap-status` (no auth required)
 
 `[x]`
 
@@ -472,7 +480,7 @@ in `src/api/index.ts` alongside `/health`.
 - Returns `needsSetup: true` when auth token not set
 - Returns `dbConnected: false` when DB is unreachable (mock Prisma)
 
-### Step 32: Frontend — Setup wizard page
+### Step 38: Frontend — Setup wizard page
 
 `[x]`
 
@@ -497,7 +505,7 @@ wrapper (full-screen, no nav bar).
 "Settings" nav link when `needsSetup === true`.  Polls
 `GET /setup/bootstrap-status` with a 5-minute `staleTime`.
 
-### Step 33: Frontend — Scaleway S3 configuration step
+### Step 39: Frontend — Scaleway S3 configuration step
 
 `[x]`
 
@@ -519,7 +527,7 @@ Behaviour:
 3. "Save" button disabled until test passes → `PUT /settings/scaleway`.
 4. Per-field Zod error messages shown below each input.
 
-### Step 34: Frontend — Google OAuth configuration step
+### Step 40: Frontend — Google OAuth configuration step
 
 `[x]`
 
@@ -536,7 +544,7 @@ to Google Cloud Console.
 After saving: "Connect Google account →" button that triggers the existing
 OAuth flow via `GET /auth/google/url`.
 
-### Step 35: Frontend — Immich configuration step
+### Step 41: Frontend — Immich configuration step
 
 `[x]`
 
@@ -551,7 +559,7 @@ server version from the ping response.
 
 "Save" button disabled until test passes → `PUT /settings/immich`.
 
-### Step 36: Frontend — Settings page (ongoing config)
+### Step 42: Frontend — Settings page (ongoing config)
 
 `[x]`
 
@@ -564,7 +572,7 @@ without going through the full wizard again.
 Route: `/settings` — added to the main `<Layout>` nav with a gear icon.
 The red badge from Step 32 appears here when setup is incomplete.
 
-### Step 37: Tests
+### Step 43: Tests
 
 `[x]`
 
@@ -609,3 +617,55 @@ All building blocks already exist in the codebase:
 - `Stepper`, `Card`, `Alert`, `Button` UI components
 - Fastify + Zod validation pipeline (`src/api/index.ts`)
 - `apiFetch` with bearer token (`frontend/src/lib/api.ts`)
+
+---
+
+## Phase 13 — Scaleway → Immich migration & tunnel operations
+
+Covers the third documented transfer leg: Scaleway Object Storage → Immich.
+Operational reliability for the Cloudflare tunnel that fronts Immich is tracked
+separately.
+
+### Step 44: Scaleway ↔ Immich diff & push
+`[x]`
+- `src/api/routes/immich-compare.ts` — endpoints to diff Scaleway catalog
+  contents against an Immich library and surface missing assets.
+- PowerShell helpers under `scripts/` push selected Scaleway objects to Immich.
+- **Tests:** Route-level tests in the API test suite.
+
+### Step 45: Cloudflare tunnel reliability
+`[x]` (fixed) / `[ ]` (recommended items pending)
+- Root cause and fixes are tracked in
+  [`IMMICH_TUNNEL_PLAN.md`](IMMICH_TUNNEL_PLAN.md), with per-change detail
+  files under [`plans/`](plans/) (`01-quic-to-http2.md` … `08-remove-quic-comments.md`).
+- Verification checklist in `IMMICH_TUNNEL_PLAN.md` must pass after any change
+  to `docker-compose.immich.yml` or the tunnel config.
+
+---
+
+## Appendix — Shipped modules not previously enumerated
+
+The following modules exist in the codebase and are covered by tests but were
+added after the original numbered plan was written. They are listed here so the
+plan reflects reality; future numbered phases should incorporate them as
+needed.
+
+**API (`src/api/routes/`):**
+- `google-auth.ts`, `google-token-store.ts` — interactive Google OAuth web flow
+  (complementing the auth helpers in Step 8).
+- `cloud-usage.ts` — Scaleway storage usage reporting.
+- `pipeline.ts`, `watcher.ts`, `uploads.ts` — pipeline orchestration and direct
+  upload endpoints.
+- `catalog-albums.ts` — album-grouped catalog view (companion to the
+  prefix/date grid in Phase 9).
+
+**Takeout (`src/takeout/`):**
+- `runner.ts`, `google-api-runner.ts` — orchestration runners that drive the
+  unpack → manifest → upload pipeline end-to-end.
+- `incremental.ts`, `pipeline-state.ts` — resumable pipeline state for
+  incremental runs.
+- `sequence-analysis.ts` — Takeout archive sequence detection.
+- `watch-downloads.ts` — auto-pickup of new archive parts from a watched
+  directory.
+- `archive-browser.ts`, `archive-metadata.ts` — in-archive browsing helpers.
+
