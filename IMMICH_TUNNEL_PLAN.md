@@ -13,11 +13,11 @@ Each step below lives in its own file under [plans/](plans/).
 ## ✅ Fixed — 2026‑04‑23
 1. [plans/01-quic-to-http2.md](plans/01-quic-to-http2.md) — switch cloudflared to HTTP/2.
 2. [plans/02-compose-token-interpolation.md](plans/02-compose-token-interpolation.md) — fix `${CLOUDFLARE_TUNNEL_TOKEN}` parse error.
-3. [plans/03-stale-fuse-mounts.md](plans/03-stale-fuse-mounts.md) — clear stale `fuse.rclone` mounts in WSL VM.
+3. [plans/03-stale-fuse-mounts.md](plans/03-stale-fuse-mounts.md) — clear stale `fuse.rclone` mounts in WSL VM (manual one‑off; permanent automation in plan 05).
 4. [plans/04-remove-sysctls.md](plans/04-remove-sysctls.md) — drop `sysctls` block that Docker Desktop rejects.
+5. [plans/05-host-side-fuse-cleanup.md](plans/05-host-side-fuse-cleanup.md) — pre‑`docker compose up` WSL unmount baked into `start-all.ps1`.
 
 ## 🔧 Recommended — not yet applied
-5. [plans/05-host-side-fuse-cleanup.md](plans/05-host-side-fuse-cleanup.md) — pre‑`docker compose up` WSL unmount.
 6. [plans/06-cloudflare-ingress-timeouts.md](plans/06-cloudflare-ingress-timeouts.md) — raise `connectTimeout` / `tlsTimeout` / `tcpKeepAlive`.
 7. [plans/07-lan-endpoint-mobile.md](plans/07-lan-endpoint-mobile.md) — bypass tunnel on home Wi‑Fi.
 8. [plans/08-remove-quic-comments.md](plans/08-remove-quic-comments.md) — trim now‑obsolete QUIC comments.
