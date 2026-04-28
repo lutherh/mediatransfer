@@ -12,6 +12,19 @@
 # works identically on Linux / macOS / Windows Docker Desktop, so this
 # wrapper deliberately stays OS-agnostic and does no host-side fiddling.
 #
+# macOS prerequisite (Immich):
+#   docker-compose.immich.yml binds ${UPLOAD_LOCATION:-./data/immich} into the
+#   Immich container as /usr/src/app/upload. With UPLOAD_LOCATION pointing at
+#   ./data/immich-s3 (the rclone S3 mount), that path MUST be a live NFS mount
+#   before the container starts — otherwise Immich silently writes originals
+#   into a stale snapshot inside the container layer, which is a data-loss
+#   risk on the next restart.
+#
+#   On macOS we therefore verify that data/immich-s3 is currently an `nfs`
+#   mount before bringing the stack up. Set START_ALL_AUTO_MOUNT=1 to have
+#   this script auto-run ./scripts/mount-s3.sh --background when the mount
+#   is missing; otherwise it fails loud and points at the docs.
+#
 # Usage:
 #   ./start-all.sh [up|start|down|stop|restart|status|logs [service…]]
 
@@ -41,6 +54,65 @@ require_compose() {
     echo "ERROR: 'docker compose' (v2) is required. Install Docker Desktop or the compose-plugin package." >&2
     exit 1
   fi
+}
+
+# Read a key from a .env-style file (no shell sourcing → no token interpolation surprises).
+read_env_val() {
+  local file="$1" key="$2" default="${3:-}"
+  local val
+  val=$(grep -E "^\s*${key}\s*=" "$file" 2>/dev/null | head -1 | sed "s/^[^=]*=\s*//" | sed "s/^[\"']//;s/[\"']\s*$//" | tr -d '\r')
+  echo "${val:-$default}"
+}
+
+# macOS-only: ensure the rclone S3 mount backing UPLOAD_LOCATION is live before
+# bringing the Immich stack up. Without it, Immich writes originals into a
+# stale path inside the container layer instead of S3 — silent data loss.
+ensure_macos_s3_mount() {
+  [ "$(uname -s)" = "Darwin" ] || return 0
+  [ -f .env.immich ] || return 0  # no Immich config = no Immich stack to guard
+
+  local upload_location
+  upload_location="$(read_env_val .env.immich UPLOAD_LOCATION ./data/immich)"
+
+  # Only guard when UPLOAD_LOCATION is the dedicated S3 mount path.
+  case "$upload_location" in
+    *immich-s3*) ;;
+    *) return 0 ;;
+  esac
+
+  local abs_mount="$upload_location"
+  if [[ "$abs_mount" != /* ]]; then
+    abs_mount="$ROOT_DIR/$abs_mount"
+  fi
+
+  if mount | grep -E "on ${abs_mount}[[:space:]].*\(nfs" >/dev/null 2>&1; then
+    echo "S3 mount: $abs_mount (nfs, live)"
+    return 0
+  fi
+
+  if [ "${START_ALL_AUTO_MOUNT:-0}" = "1" ]; then
+    echo "S3 mount missing at $abs_mount — auto-mounting (START_ALL_AUTO_MOUNT=1)..."
+    "$SCRIPT_DIR/mount-s3.sh" --background
+    sleep 2
+    if ! mount | grep -E "on ${abs_mount}[[:space:]].*\(nfs" >/dev/null 2>&1; then
+      echo "ERROR: auto-mount of $abs_mount did not produce a live nfs mount." >&2
+      exit 1
+    fi
+    return 0
+  fi
+
+  cat >&2 <<EOF
+ERROR: Immich expects $abs_mount to be a live S3 mount, but it isn't.
+
+  Mount it first:
+    ./scripts/mount-s3.sh --background
+
+  Or re-run this script with auto-mount enabled:
+    START_ALL_AUTO_MOUNT=1 $0 ${ACTION}
+
+  See README.md → "Native macOS Setup" / "Optional: Immich" for details.
+EOF
+  exit 1
 }
 
 # Auto-detect the host's LAN IP and export it for compose so phones on
@@ -92,6 +164,7 @@ fi
 
 case "$ACTION" in
   up|start)
+    ensure_macos_s3_mount
     echo "Starting all services..."
     docker compose "${COMPOSE_FILES[@]}" up -d --remove-orphans
     echo ""

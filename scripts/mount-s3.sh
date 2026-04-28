@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Mount Scaleway S3 bucket for Immich originals storage.
-# Requires: rclone, fuse3 (Linux) or macFUSE (macOS)
+# Requires:
+#   - Linux: rclone + fuse3   (apt install rclone fuse3)
+#   - macOS: rclone only      (brew install rclone) — uses `rclone nfsmount`,
+#                              NO macFUSE / NO kernel extension / NO reboot.
 #
 # Usage:
 #   ./scripts/mount-s3.sh              # mount (foreground — Ctrl+C to stop)
-#   ./scripts/mount-s3.sh --background # mount as daemon
-#   ./scripts/mount-s3.sh --unmount    # unmount
+#   ./scripts/mount-s3.sh --background # mount as daemon (writes a PID file)
+#   ./scripts/mount-s3.sh --unmount    # unmount AND stop the daemon
 #
 # S3 credentials are read from .env (single source of truth):
 #   SCW_ACCESS_KEY, SCW_SECRET_KEY, SCW_REGION
@@ -92,10 +95,32 @@ if ! grep -q fuse /proc/filesystems 2>/dev/null && [ "$(uname)" != "Darwin" ]; t
   echo "WARNING: FUSE not found. Install with: sudo apt install fuse3" >&2
 fi
 
+# PID file lives next to the mount point so multiple repos / mount points
+# don't fight over a single global file.
+PID_FILE="${MOUNT_POINT%/}.rclone.pid"
+
 # Unmount
 if [[ "${1:-}" == "--unmount" || "${1:-}" == "-u" ]]; then
   echo "Unmounting $MOUNT_POINT ..."
-  fusermount -uz "$MOUNT_POINT" 2>/dev/null || umount "$MOUNT_POINT" 2>/dev/null || true
+  if [ "$(uname)" = "Darwin" ]; then
+    diskutil unmount force "$MOUNT_POINT" 2>/dev/null || umount -f "$MOUNT_POINT" 2>/dev/null || true
+  else
+    fusermount -uz "$MOUNT_POINT" 2>/dev/null || umount "$MOUNT_POINT" 2>/dev/null || true
+  fi
+  # Stop the rclone daemon — without this it survives the unmount and leaks
+  # an orphan NFS server on a random localhost port (architect review #2).
+  if [ -f "$PID_FILE" ]; then
+    PID=$(cat "$PID_FILE" 2>/dev/null || true)
+    if [ -n "${PID:-}" ] && kill -0 "$PID" 2>/dev/null; then
+      kill "$PID" 2>/dev/null || true
+      sleep 1
+      kill -9 "$PID" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
+  fi
+  # Belt-and-braces: kill any rclone process still bound to this exact mount
+  # point (covers daemons started before this PID-file change shipped).
+  pkill -f "rclone .*${MOUNT_SUBCMD:-(mount|nfsmount)}.* ${MOUNT_POINT}" 2>/dev/null || true
   echo "Done."
   exit 0
 fi
@@ -109,8 +134,20 @@ echo "  Bucket:   $BUCKET"
 echo "  Prefix:   $PREFIX"
 echo ""
 
+# On macOS, Homebrew's rclone bottle does NOT include macFUSE bindings, so the
+# `mount` subcommand fails immediately. Use `nfsmount` instead — it serves NFS
+# on a local port and uses the system's built-in NFS client (no kernel ext,
+# no reboot, no macFUSE). On Linux we keep the original FUSE-based `mount`.
+if [ "$(uname)" = "Darwin" ]; then
+  MOUNT_SUBCMD="nfsmount"
+  EXTRA_MOUNT_FLAGS=()
+else
+  MOUNT_SUBCMD="mount"
+  EXTRA_MOUNT_FLAGS=(--allow-other)
+fi
+
 RCLONE_ARGS=(
-  mount "$SOURCE" "$MOUNT_POINT"
+  "$MOUNT_SUBCMD" "$SOURCE" "$MOUNT_POINT"
   --s3-provider Scaleway
   --s3-access-key-id "$ACCESS_KEY"
   --s3-secret-access-key "$SECRET_KEY"
@@ -127,14 +164,22 @@ RCLONE_ARGS=(
   --poll-interval 0
   --transfers 8
   --s3-chunk-size 16M
-  --allow-other
+  ${EXTRA_MOUNT_FLAGS[@]+"${EXTRA_MOUNT_FLAGS[@]}"}
   --log-level NOTICE
 )
 
 if [[ "${1:-}" == "--background" || "${1:-}" == "-b" ]]; then
-  RCLONE_ARGS+=(--daemon)
+  RCLONE_ARGS+=(--daemon --rc --rc-addr=localhost:0)
   rclone "${RCLONE_ARGS[@]}"
-  echo "Mount running in background. Unmount with: $0 --unmount"
+  # Capture the PID of the daemon rclone forks. `rclone --daemon` double-forks,
+  # so we record the most recent rclone PID owning this mount point.
+  sleep 1
+  RCLONE_PID=$(pgrep -f "rclone .*${MOUNT_SUBCMD}.* ${MOUNT_POINT}" | tail -1 || true)
+  if [ -n "${RCLONE_PID:-}" ]; then
+    echo "$RCLONE_PID" > "$PID_FILE"
+  fi
+  echo "Mount running in background (pid ${RCLONE_PID:-?}, pidfile $PID_FILE)."
+  echo "Unmount with: $0 --unmount"
 else
   echo "Mount running in foreground. Press Ctrl+C to stop."
   echo ""

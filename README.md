@@ -41,6 +41,8 @@ docker --version
 git --version
 ```
 
+> **macOS users:** before starting any long-running job (Takeout import, S3 upload, Immich), apply the recommended sleep settings — see [macOS sleep settings](#macos-sleep-settings). On a sleeping Mac, transfers stall, the Cloudflare Tunnel drops, and Immich loses its S3 mount.
+
 ## Quick Start — Step by Step
 
 Follow these steps in order. Each step depends on the one before it.
@@ -253,10 +255,15 @@ bash scripts/setup-mac-native.sh
 
 This script will:
 
-- `brew install node postgresql@16 redis`
+- `brew install node postgresql@16 redis rclone`
 - Start Postgres and Redis as Homebrew background services (autostart on login)
 - Create the `mediatransfer` Postgres role and database
+- Verify Docker Desktop is reachable (only relevant if you also plan to run Immich)
+- Offer to apply [macOS sleep settings](#macos-sleep-settings) so long-running jobs aren't killed mid-flight (interactive — say `y` only if this Mac is meant to stay on)
+- Offer to mount your S3 bucket via `./scripts/mount-s3.sh --background` (only if `.env` and `.env.immich` are already present)
 - Print a recap of the values that were configured
+
+The script is **idempotent** — re-running it is safe and skips work that's already done. Pass `-y` / `--yes` (or set `ASSUME_YES=1`) to take all defaults non-interactively.
 
 ### Step 4: Create your `.env`
 
@@ -310,72 +317,117 @@ brew services start redis           # start Redis
 | `Error: connect ECONNREFUSED 127.0.0.1:6379` | Run `brew services start redis`. |
 | Old Docker containers still bound to ports 5432/6379 | Run `docker compose down` once to release them. |
 
+## macOS sleep settings
+
+Long-running jobs (Takeout import, S3 upload, the Cloudflare Tunnel container, the rclone S3 mount) all break if the Mac sleeps. If this machine acts as an always-on host, disable sleep on **both** AC and battery profiles:
+
+```bash
+# AC power (always-on host)
+sudo pmset -c sleep 0 disksleep 0 displaysleep 0 womp 1 powernap 1
+
+# Battery (only if the laptop must keep running while unplugged — drains battery)
+sudo pmset -b sleep 0 disksleep 0 displaysleep 0 womp 1 powernap 1
+```
+
+Verify with:
+
+```bash
+pmset -g custom
+```
+
+Expected (relevant fields) on both `AC Power` and `Battery Power` blocks:
+
+```
+ sleep                0
+ disksleep            0
+ displaysleep         0
+ womp                 1
+ powernap             1
+```
+
+`scripts/setup-mac-native.sh` will offer to apply these settings interactively (it asks for confirmation before each profile because battery sleep=0 has real cost).
+
+> **Cloudflare Tunnel:** the tunnel runs as the `immich_tunnel` Docker container, so its uptime depends on Docker Desktop being up. Enable Docker Desktop → Settings → General → **Start Docker Desktop when you log in** so the tunnel comes back automatically after a reboot.
+
 ## Optional: Immich
 
 Immich gives you phone auto-backup and a local photo browsing UI — like Google Photos, but on your own machine. It runs alongside MediaTransfer and stores originals on your S3 bucket.
 
-> **How it works:** Immich only knows about local folders. We use the rclone Docker volume plugin to mount your S3 bucket as a read-only folder inside the Immich container. Thumbnails and transcodes stay on your local disk for speed; originals are served from S3.
+> **How it works:** Immich only knows about local folders. We mount your S3 bucket on the **host** with rclone, then bind-mount that directory into the Immich container as `UPLOAD_LOCATION`. Thumbnails and transcodes stay on your local disk for speed; originals live on S3.
+>
+> Two host-mount flavors are supported:
+> - **Linux / WSL2:** rclone FUSE mount (`rclone mount`, requires `fuse3`).
+> - **macOS:** rclone NFS mount (`rclone nfsmount`, uses macOS's built-in NFS client). **No macFUSE required** — do not install kernel extensions.
+>
+> Both are wrapped by [`scripts/mount-s3.sh`](scripts/mount-s3.sh), which auto-detects the OS.
 
-### Step 1: Install the rclone Docker volume plugin
+### Step 1: Install rclone on the host
 
-Immich doesn't support S3 natively. We use the rclone Docker volume plugin to mount your S3 bucket as a read-only volume inside the Immich container.
+| Platform | Command |
+|---|---|
+| macOS | `brew install rclone` *(no macFUSE, no reboot)* |
+| Linux | `sudo apt install rclone fuse3` |
 
-```bash
-docker plugin install rclone/docker-volume-rclone:latest --grant-all-permissions
-```
+> The Homebrew `rclone` bottle does not ship the FUSE `mount` subcommand. `scripts/mount-s3.sh` automatically uses `rclone nfsmount` on Darwin instead, which uses the system NFS client — no kernel extension is involved.
 
-### Step 2: Create the S3 Docker volume
-
-Create a Docker volume that maps to your S3 bucket's `transfers/` prefix:
-
-```bash
-docker volume create \
-  --driver rclone \
-  --opt type=s3 \
-  --opt s3-provider=Scaleway \
-  --opt s3-endpoint=s3.<region>.scw.cloud \
-  --opt s3-access-key-id=<your-access-key> \
-  --opt s3-secret-access-key=<your-secret-key> \
-  --opt s3-region=<region> \
-  --opt path=<bucket>/transfers \
-  --opt vfs-cache-mode=full \
-  --opt vfs-cache-max-size=10G \
-  --opt vfs-cache-max-age=72h \
-  --opt dir-cache-time=5m \
-  --opt vfs-read-chunk-size=16M \
-  s3-photosync
-```
-
-Replace `<region>`, `<your-access-key>`, `<your-secret-key>`, and `<bucket>` with your Scaleway values from `.env`.
-
-### Step 3: Create the Immich config
+### Step 2: Configure `.env.immich` and mount the bucket
 
 ```bash
 cp .env.immich.example .env.immich
 ```
 
-Open `.env.immich` and set your bucket name:
+Open `.env.immich` and set at least:
+
 ```env
 RCLONE_BUCKET=my-photos
+RCLONE_PREFIX=immich
+UPLOAD_LOCATION=./data/immich-s3
+TUNNEL_TOKEN=eyJhIjoi...   # only if you use the Cloudflare Tunnel
 ```
 
-S3 credentials are read from your main `.env` automatically.
+S3 credentials (`SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_REGION`) are read from your main `.env` — not duplicated here.
 
-### Step 4: Start Immich
+Mount the bucket as a host directory **before** starting Immich:
 
 ```bash
+./scripts/mount-s3.sh --background
+```
+
+Verify it's live:
+
+```bash
+mount | grep immich-s3
+# macOS expected output:
+#   <host>:/ on /…/data/immich-s3 (nfs, nodev, nosuid, mounted by …)
+# Linux expected output:
+#   :s3:my-photos/immich on /…/data/immich-s3 type fuse.rclone (…)
+```
+
+To unmount later:
+
+```bash
+./scripts/mount-s3.sh --unmount
+```
+
+> **Why this matters:** `docker-compose.immich.yml` bind-mounts `${UPLOAD_LOCATION}` into the Immich container as `/usr/src/app/upload`. If `data/immich-s3` is **not** a live mount when the container starts, Immich silently writes originals into a stale path inside the container layer — invisible to S3, lost on the next `down`/`up`. `scripts/start-all.sh` enforces this on macOS by refusing to start unless the NFS mount is live (set `START_ALL_AUTO_MOUNT=1` to have it auto-mount instead).
+
+### Step 3: Start Immich
+
+```bash
+./scripts/start-all.sh up
+# or, Immich-only:
 docker compose -f docker-compose.immich.yml up -d
 ```
 
 Open [http://localhost:2283](http://localhost:2283) and create the admin account.
 
-The S3 volume is mounted read-only at `/usr/src/app/upload/s3transfers` inside the Immich container. Phone uploads and new imports go to local storage as usual.
+Originals land at `${UPLOAD_LOCATION}` on the host — i.e. directly on the S3 mount. Thumbs, transcodes, profile pictures, and backups stay on local disk per the per-folder overrides in `.env.immich`.
 
 ### Step 4a: Generate an Immich API key (for MediaTransfer)
 
 MediaTransfer talks to Immich over its REST API, so it needs an API key. The key can **only** be created in the Immich web UI — the mobile app cannot generate one.
 
-1. Make sure Immich is running (Step 4 above) and reachable at [http://localhost:2283](http://localhost:2283).
+1. Make sure Immich is running (Step 3 above) and reachable at [http://localhost:2283](http://localhost:2283).
 2. Sign in (or create the admin account on first launch).
 3. Click your **profile picture** (top-right) → **Account Settings** → **API Keys** → **New API Key**.
 4. Give it a name (e.g. `MediaTransfer`) and create it.
@@ -413,8 +465,11 @@ New-NetFirewallRule -DisplayName "Immich" -Direction Inbound -LocalPort 2283 -Pr
 
 ### Startup order (every time)
 
-1. Start Docker Desktop (the rclone volume plugin starts automatically with Docker)
-2. Start Immich: `docker compose -f docker-compose.immich.yml up -d`
+1. Start Docker Desktop.
+2. Mount the S3 bucket on the host: `./scripts/mount-s3.sh --background`
+3. Start the stack: `./scripts/start-all.sh up`
+
+On macOS, `start-all.sh` will refuse to start Immich if `data/immich-s3` isn't a live NFS mount. Set `START_ALL_AUTO_MOUNT=1` to have it auto-run the mount script for you.
 
 ### Stopping Immich
 
