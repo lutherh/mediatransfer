@@ -128,6 +128,22 @@ fi
 # Ensure mount directory
 mkdir -p "$MOUNT_POINT"
 
+# Defensively unmount any stale NFS / FUSE handle still pointing at this path.
+# Without this, when launchd restarts a crashed rclone the kernel keeps the old
+# mount handle alive (pointing at the dead rclone NFS port), and Finder pops
+# "Server connections interrupted." `mount` always lists active entries, so a
+# match here means the previous server is gone but the client mount lingers.
+if mount | grep -q " ${MOUNT_POINT} "; then
+  echo "Found stale mount at $MOUNT_POINT — clearing before remount..."
+  if [ "$(uname)" = "Darwin" ]; then
+    diskutil unmount force "$MOUNT_POINT" 2>/dev/null \
+      || umount -f "$MOUNT_POINT" 2>/dev/null \
+      || true
+  else
+    fusermount -uz "$MOUNT_POINT" 2>/dev/null || umount -l "$MOUNT_POINT" 2>/dev/null || true
+  fi
+fi
+
 echo "Mounting $SOURCE -> $MOUNT_POINT"
 echo "  Endpoint: $ENDPOINT"
 echo "  Bucket:   $BUCKET"
