@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# Install per-user launchd agents for fully hands-off macOS boot.
+#
+# Two agents:
+#   1. uk.4to.mediatransfer.s3mount   — mounts the Scaleway S3 bucket via
+#      `rclone nfsmount` (run in supervised foreground; launchd handles
+#      restarts). NFS port is pinned via RCLONE_NFS_PORT in .env.immich so
+#      restarts are transparent to the kernel NFS client.
+#   2. uk.4to.mediatransfer.stack     — once the mount is healthy, starts
+#      the Immich + tunnel stack via `start-all.sh up`. RunAtLoad only;
+#      not KeepAlive (Docker handles container restarts itself).
+#
+# Why both? Without the stack agent, login = mount up but no Immich.
+# Without the mount agent, login = Immich starts into an empty dir.
+#
+# OrbStack/Docker Desktop must be set to "Open at Login" separately —
+# we add OrbStack as a System Events login item below.
+#
+# Usage:
+#   ./scripts/install-mac-launchagent.sh             # install + load
+#   ./scripts/install-mac-launchagent.sh --uninstall # remove everything
+#   ./scripts/install-mac-launchagent.sh --status    # show state
+
+set -euo pipefail
+
+if [ "$(uname)" != "Darwin" ]; then
+  echo "ERROR: macOS only." >&2
+  exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+LABEL_MOUNT="uk.4to.mediatransfer.s3mount"
+LABEL_STACK="uk.4to.mediatransfer.stack"
+PLIST_MOUNT="$HOME/Library/LaunchAgents/${LABEL_MOUNT}.plist"
+PLIST_STACK="$HOME/Library/LaunchAgents/${LABEL_STACK}.plist"
+LOG_DIR="$ROOT_DIR/data/logs"
+MOUNT_SCRIPT="$SCRIPT_DIR/mount-s3.sh"
+START_SCRIPT="$SCRIPT_DIR/start-all.sh"
+
+# Resolve absolute paths for binaries used inside launchd's minimal PATH.
+RCLONE_BIN="$(command -v rclone || true)"
+if [ -z "$RCLONE_BIN" ]; then
+  echo "ERROR: rclone not installed. Run: brew install rclone" >&2
+  exit 1
+fi
+DOCKER_BIN="$(command -v docker || true)"
+BIN_DIR_RCLONE="$(dirname "$RCLONE_BIN")"
+BIN_DIR_DOCKER="${DOCKER_BIN:+$(dirname "$DOCKER_BIN"):}"
+
+uninstall() {
+  for label in "$LABEL_STACK" "$LABEL_MOUNT"; do
+    if launchctl list "$label" &>/dev/null; then
+      echo "Unloading $label..."
+      launchctl unload "$HOME/Library/LaunchAgents/${label}.plist" 2>/dev/null || true
+    fi
+    rm -f "$HOME/Library/LaunchAgents/${label}.plist"
+  done
+  if mount | grep -q "$ROOT_DIR/data/immich-s3"; then
+    echo "Unmounting NFS mount..."
+    "$MOUNT_SCRIPT" --unmount || true
+  fi
+  echo "Done. To also drop OrbStack from login items, do it via System Settings → General → Login Items."
+}
+
+status() {
+  for label in "$LABEL_MOUNT" "$LABEL_STACK"; do
+    plist="$HOME/Library/LaunchAgents/${label}.plist"
+    echo "── $label"
+    [ -f "$plist" ] && echo "   plist: yes ($plist)" || echo "   plist: no"
+    if launchctl list "$label" &>/dev/null; then
+      pid=$(launchctl list "$label" | awk -F'=' '/"PID"/ {gsub(/[ ;]/,"",$2); print $2}')
+      lastexit=$(launchctl list "$label" | awk -F'=' '/"LastExitStatus"/ {gsub(/[ ;]/,"",$2); print $2}')
+      echo "   loaded: yes  pid=${pid:-none}  lastExit=${lastexit:-?}"
+    else
+      echo "   loaded: no"
+    fi
+  done
+  echo "── Mount table:"
+  mount | grep -E "data/immich-s3|nfs.*mounted by" | sed 's/^/   /' || echo "   (no NFS mount)"
+  echo "── OrbStack login item:"
+  osascript -e 'tell application "System Events" to get the name of every login item' 2>&1 | tr ',' '\n' | grep -i orbstack | sed 's/^/   /' || echo "   (not registered)"
+  echo "── Docker:"
+  if docker info &>/dev/null; then echo "   running"; else echo "   not running"; fi
+}
+
+case "${1:-}" in
+  --uninstall|-u) uninstall ; exit 0 ;;
+  --status|-s)    status ; exit 0 ;;
+esac
+
+# ── Pre-flight ──
+[ -x "$MOUNT_SCRIPT" ] || { echo "ERROR: $MOUNT_SCRIPT missing/not executable" >&2; exit 1; }
+[ -x "$START_SCRIPT" ] || { echo "ERROR: $START_SCRIPT missing/not executable" >&2; exit 1; }
+[ -f "$ROOT_DIR/.env" ] || { echo "ERROR: .env missing" >&2; exit 1; }
+[ -f "$ROOT_DIR/.env.immich" ] || { echo "ERROR: .env.immich missing" >&2; exit 1; }
+
+mkdir -p "$LOG_DIR" "$(dirname "$PLIST_MOUNT")"
+
+# Unload any previous versions before rewriting.
+for label in "$LABEL_STACK" "$LABEL_MOUNT"; do
+  plist="$HOME/Library/LaunchAgents/${label}.plist"
+  if launchctl list "$label" &>/dev/null; then
+    echo "Unloading previous $label..."
+    launchctl unload "$plist" 2>/dev/null || true
+  fi
+done
+
+# If a manual mount is up from `mount-s3.sh --background`, hand over to launchd.
+if mount | grep -q "$ROOT_DIR/data/immich-s3"; then
+  echo "Found existing manual mount — unmounting before launchd takes over..."
+  "$MOUNT_SCRIPT" --unmount || true
+fi
+
+# ── Mount agent (KeepAlive, supervised foreground rclone) ──
+cat > "$PLIST_MOUNT" <<PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${LABEL_MOUNT}</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>${MOUNT_SCRIPT}</string>
+    <string>--supervised</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>${ROOT_DIR}</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${BIN_DIR_RCLONE}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>${HOME}</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+    <key>Crashed</key>
+    <true/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>${LOG_DIR}/s3mount.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>${LOG_DIR}/s3mount.err.log</string>
+</dict>
+</plist>
+PLIST_EOF
+echo "Wrote $PLIST_MOUNT"
+
+# ── Stack agent (RunAtLoad only — Docker manages containers) ──
+cat > "$PLIST_STACK" <<PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${LABEL_STACK}</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>set -e
+# Wait up to 5 minutes for Docker to be ready (OrbStack starts at login).
+for i in \$(seq 1 60); do
+  if docker info >/dev/null 2>&1; then break; fi
+  sleep 5
+done
+docker info >/dev/null 2>&1 || { echo "Docker never came up" >&2; exit 1; }
+# Wait up to 2 minutes for the S3 mount to be live.
+for i in \$(seq 1 24); do
+  if mount | grep -q '${ROOT_DIR}/data/immich-s3'; then break; fi
+  sleep 5
+done
+mount | grep -q '${ROOT_DIR}/data/immich-s3' || { echo "S3 mount never came up" >&2; exit 1; }
+exec '${START_SCRIPT}' up</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>${ROOT_DIR}</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${BIN_DIR_DOCKER}${BIN_DIR_RCLONE}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>${HOME}</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>${LOG_DIR}/stack.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>${LOG_DIR}/stack.err.log</string>
+</dict>
+</plist>
+PLIST_EOF
+echo "Wrote $PLIST_STACK"
+
+# ── OrbStack login item (so Docker socket is up at login) ──
+HAS_ORBSTACK=$(osascript -e 'tell application "System Events" to get the name of every login item' 2>/dev/null | tr ',' '\n' | grep -ic orbstack || true)
+if [ "$HAS_ORBSTACK" = "0" ]; then
+  if [ -d "/Applications/OrbStack.app" ]; then
+    echo "Adding OrbStack as a login item..."
+    osascript -e 'tell application "System Events" to make login item at end with properties {path:"/Applications/OrbStack.app", hidden:true}' >/dev/null || true
+  else
+    echo "WARNING: /Applications/OrbStack.app not found — start it manually or install Docker Desktop and add it to login items." >&2
+  fi
+fi
+
+echo "Loading agents..."
+launchctl load -w "$PLIST_MOUNT"
+launchctl load -w "$PLIST_STACK"
+sleep 4
+
+echo
+status
+echo
+echo "Logs:"
+echo "  mount: $LOG_DIR/s3mount.{out,err}.log"
+echo "  stack: $LOG_DIR/stack.{out,err}.log"
+echo
+echo "Remove with: $0 --uninstall"
