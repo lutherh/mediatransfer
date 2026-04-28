@@ -25,8 +25,8 @@ type FormState = {
 
 /** Total milliseconds to wait after `Start Immich` before re-probing. */
 const START_PROBE_DELAY_MS = 4_000;
-/** Tick interval for the post-start countdown progress UI. */
-const START_PROBE_TICK_MS = 100;
+/** Interval (ms) between progress-bar updates during the post-start wait. */
+const START_PROBE_PROGRESS_INTERVAL_MS = 100;
 
 type ReachableState =
   | { state: 'idle' }
@@ -144,7 +144,7 @@ export function ImmichStep({ onSaved, compact }: Props) {
           window.clearInterval(startProgressTimerRef.current);
           startProgressTimerRef.current = null;
         }
-      }, START_PROBE_TICK_MS);
+      }, START_PROBE_PROGRESS_INTERVAL_MS);
       window.setTimeout(() => {
         setStartProgress(-1);
         void probeReachable(form.url);

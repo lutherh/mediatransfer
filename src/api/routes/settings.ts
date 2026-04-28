@@ -168,7 +168,10 @@ async function testImmichConnection(cfg: {
  * "bad client" from "bad code", which lets us validate clientId/clientSecret
  * without a real OAuth round-trip:
  *  - HTTP 401 + `error: invalid_client` → clientId/clientSecret are wrong.
- *  - HTTP 400 + `error: invalid_grant`/`invalid_request` → client accepted, code rejected (= creds valid).
+ *  - HTTP 400 + `error: invalid_grant` → client accepted, code rejected (= creds valid).
+ *  - HTTP 400 + `error: invalid_request` → client accepted, request shape rejected. We treat
+ *    this as "creds valid" because Google only returns it once it has accepted the client
+ *    auth and is rejecting some other aspect of our deliberately-malformed probe.
  *  - HTTP 400 + `error: redirect_uri_mismatch` → registered redirect URIs don't include this one.
  */
 async function testGoogleConnection(cfg: {
