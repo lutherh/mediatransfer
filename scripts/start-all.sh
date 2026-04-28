@@ -84,6 +84,9 @@ ensure_macos_s3_mount() {
   if [[ "$abs_mount" != /* ]]; then
     abs_mount="$ROOT_DIR/$abs_mount"
   fi
+  # Normalize: ./data/immich-s3 -> data/immich-s3 (the `mount` table holds
+  # the kernel's canonicalized path, no /./ segments).
+  abs_mount="$(cd "$abs_mount" 2>/dev/null && pwd -P || echo "$abs_mount")"
 
   if mount | grep -E "on ${abs_mount}[[:space:]].*\(nfs" >/dev/null 2>&1; then
     echo "S3 mount: $abs_mount (nfs, live)"
