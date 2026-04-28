@@ -72,6 +72,11 @@ fi
 BUCKET=$(read_env_val "$IMMICH_ENV" RCLONE_BUCKET "$(read_env_val "$MAIN_ENV" SCW_BUCKET)")
 PREFIX=$(read_env_val "$IMMICH_ENV" RCLONE_PREFIX "immich")
 MOUNT_POINT=$(read_env_val "$IMMICH_ENV" UPLOAD_LOCATION "./data/immich-s3")
+# Pinning the NFS port matters on macOS: when rclone is restarted by launchd,
+# reusing the same port lets the kernel NFS client reconnect transparently.
+# Without this, every restart picks a new ephemeral port and Finder shows
+# "Server connections interrupted" on the now-orphaned mount.
+NFS_PORT=$(read_env_val "$IMMICH_ENV" RCLONE_NFS_PORT "32049")
 
 if [ -z "$BUCKET" ]; then
   echo "ERROR: No bucket configured. Set RCLONE_BUCKET in .env.immich or SCW_BUCKET in .env" >&2
@@ -156,7 +161,9 @@ echo ""
 # no reboot, no macFUSE). On Linux we keep the original FUSE-based `mount`.
 if [ "$(uname)" = "Darwin" ]; then
   MOUNT_SUBCMD="nfsmount"
-  EXTRA_MOUNT_FLAGS=()
+  # Pin the NFS server port so launchd-restarts are transparent to the kernel
+  # NFS client. See NFS_PORT comment above.
+  EXTRA_MOUNT_FLAGS=(--addr "localhost:$NFS_PORT")
 else
   MOUNT_SUBCMD="mount"
   EXTRA_MOUNT_FLAGS=(--allow-other)
@@ -185,7 +192,7 @@ RCLONE_ARGS=(
 )
 
 if [[ "${1:-}" == "--background" || "${1:-}" == "-b" ]]; then
-  RCLONE_ARGS+=(--daemon --rc --rc-addr=localhost:0)
+  RCLONE_ARGS+=(--daemon)
   rclone "${RCLONE_ARGS[@]}"
   # Capture the PID of the daemon rclone forks. `rclone --daemon` double-forks,
   # so we record the most recent rclone PID owning this mount point.
@@ -196,8 +203,14 @@ if [[ "${1:-}" == "--background" || "${1:-}" == "-b" ]]; then
   fi
   echo "Mount running in background (pid ${RCLONE_PID:-?}, pidfile $PID_FILE)."
   echo "Unmount with: $0 --unmount"
+elif [[ "${1:-}" == "--supervised" ]]; then
+  # For launchd: run rclone as a foreground child, replacing the shell so
+  # signals from launchd reach rclone directly (clean SIGTERM → unmount → exit).
+  # Do NOT use --daemon here; launchd is the supervisor.
+  echo "Mount running supervised (foreground, exec'd into rclone)."
+  exec rclone "${RCLONE_ARGS[@]}"
 else
   echo "Mount running in foreground. Press Ctrl+C to stop."
   echo ""
-  rclone "${RCLONE_ARGS[@]}"
+  exec rclone "${RCLONE_ARGS[@]}"
 fi
