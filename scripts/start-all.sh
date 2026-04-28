@@ -43,11 +43,52 @@ require_compose() {
   fi
 }
 
+# Auto-detect the host's LAN IP and export it for compose so phones on
+# home Wi-Fi can reach immich-server on :2283 without going through the
+# Cloudflare tunnel. Never hardcoded — the value is local to this host.
+# Honors IMMICH_LAN_IP if already set in .env.immich; otherwise picks
+# the first non-loopback, non-Docker IPv4 in the 10/172.16/192.168 ranges.
+detect_lan_ip() {
+  if [ -n "${IMMICH_LAN_IP:-}" ]; then
+    echo "$IMMICH_LAN_IP"
+    return
+  fi
+  local ip=""
+  case "$(uname -s)" in
+    Darwin)
+      for iface in en0 en1 en2 en3; do
+        ip="$(ipconfig getifaddr "$iface" 2>/dev/null || true)"
+        [ -n "$ip" ] && break
+      done
+      ;;
+    Linux)
+      ip="$(ip -4 -o route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+      ;;
+  esac
+  # Filter out anything that's not a real LAN IP.
+  if ! echo "$ip" | grep -Eq '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)'; then
+    ip=""
+  fi
+  echo "$ip"
+}
+
 ACTION="${1:-up}"
 shift || true
 
 wait_for_docker
 require_compose
+
+# Source .env.immich so IMMICH_LAN_IP (if user-pinned) wins over auto-detect.
+if [ -f .env.immich ]; then
+  set -a; . ./.env.immich; set +a
+fi
+IMMICH_LAN_IP="$(detect_lan_ip)"
+export IMMICH_LAN_IP
+if [ -n "$IMMICH_LAN_IP" ]; then
+  echo "LAN endpoint: http://${IMMICH_LAN_IP}:2283"
+else
+  echo "LAN endpoint: not detected — binding to 127.0.0.1 only"
+fi
 
 case "$ACTION" in
   up|start)

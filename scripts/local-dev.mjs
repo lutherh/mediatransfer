@@ -12,6 +12,7 @@ const rootDir = path.resolve(scriptDir, '..');
 const frontendDir = path.join(rootDir, 'frontend');
 
 const setupOnly = process.argv.includes('--setup-only');
+const isNative = process.argv.includes('--native') || !!process.env.NO_DOCKER;
 
 const DOCKER_READY_TIMEOUT_MS = 120_000;
 const DOCKER_POLL_INTERVAL_MS = 3_000;
@@ -263,6 +264,10 @@ function launchDockerDesktop() {
 }
 
 async function ensureDockerRunning() {
+  if (isNative) {
+    console.log('Skipping Docker checks for native mode.');
+    return;
+  }
   if (isDockerRunning()) {
     console.log('Docker daemon is running.');
     return;
@@ -332,12 +337,16 @@ async function runSetup() {
   await ensureDependencies();
   await ensureDockerRunning();
 
-  // Stop any existing containers (e.g. stale 'app' service) that may conflict
-  console.log('Cleaning up existing containers...');
-  await runCommand('docker', ['compose', 'down'], rootDir);
+  if (!isNative) {
+    // Stop any existing containers (e.g. stale 'app' service) that may conflict
+    console.log('Cleaning up existing containers...');
+    await runCommand('docker', ['compose', 'down'], rootDir);
 
-  console.log('Starting local services (Postgres, Redis)...');
-  await runCommand('docker', ['compose', 'up', '-d', 'postgres', 'redis'], rootDir);
+    console.log('Starting local services (Postgres, Redis)...');
+    await runCommand('docker', ['compose', 'up', '-d', 'postgres', 'redis'], rootDir);
+  } else {
+    console.log('Native mode: skipping Docker clean up and start.');
+  }
 
   console.log('Generating Prisma client...');
   validatePrismaSchema();
@@ -364,8 +373,12 @@ async function runSetup() {
 
 async function ensureLocalServicesRunning() {
   await ensureDockerRunning();
-  console.log('Ensuring Postgres/Redis are running...');
-  await runCommand('docker', ['compose', 'up', '-d', 'postgres', 'redis'], rootDir);
+  if (!isNative) {
+    console.log('Ensuring Postgres/Redis are running...');
+    await runCommand('docker', ['compose', 'up', '-d', 'postgres', 'redis'], rootDir);
+  } else {
+    console.log('Native mode: assuming Postgres and Redis are already running locally.');
+  }
 }
 
 async function stopChildProcess(state, force = false) {

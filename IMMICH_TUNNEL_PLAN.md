@@ -18,7 +18,7 @@ Each step below lives in its own file under [plans/](plans/).
 5. [plans/05-host-side-fuse-cleanup.md](plans/05-host-side-fuse-cleanup.md) — pre‑`docker compose up` WSL unmount baked into `start-all.ps1`.
 
 ## ✅ Fixed — 2026‑04‑23 (host side)
-7. [plans/07-lan-endpoint-mobile.md](plans/07-lan-endpoint-mobile.md) — bypass tunnel on home Wi‑Fi. Host now listens on `<lan-ip-redacted>:2283`; firewall rule `Immich LAN 2283` allows `192.168.0.0/24` on the Private profile. Per-device app config still required on each phone.
+7. [plans/07-lan-endpoint-mobile.md](plans/07-lan-endpoint-mobile.md) — bypass tunnel on home Wi‑Fi. Host listens on `${IMMICH_LAN_IP}:2283` (set in `.env.immich`, auto‑detected by `scripts/start-all.sh`); firewall rule allows the home LAN subnet on the Private/trusted profile. Per-device app config still required on each phone.
 
 ## 🔧 Recommended — not yet applied
 6. [plans/06-cloudflare-ingress-timeouts.md](plans/06-cloudflare-ingress-timeouts.md) — raise `connectTimeout` / `tlsTimeout` / `tcpKeepAlive`.

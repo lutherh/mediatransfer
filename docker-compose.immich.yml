@@ -125,7 +125,9 @@ services:
       # is still served via cloudflared -> immich-server:2283 inside
       # the Docker network, which does not need a host port binding.
       # See plans/07-lan-endpoint-mobile.md.
-      - "<lan-ip-redacted>:2283:2283"
+      # IMMICH_LAN_IP is set in .env.immich (gitignored). If unset, falls back
+      # to loopback so we never accidentally expose 2283 to the public NIC.
+      - "${IMMICH_LAN_IP:-127.0.0.1}:2283:2283"
       - "127.0.0.1:2283:2283"
     volumes:
       - ${UPLOAD_LOCATION:-./data/immich}:/usr/src/app/upload
@@ -192,6 +194,13 @@ services:
     image: redis:7-alpine
     container_name: immich_redis
     restart: unless-stopped
+    networks:
+      default:
+        # Upstream Immich expects REDIS_HOSTNAME=redis. The compose service is
+        # renamed to immich-redis to avoid colliding with the MediaTransfer
+        # redis service when both stacks are loaded; this alias keeps the
+        # standard Immich env working unchanged.
+        aliases: [redis]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

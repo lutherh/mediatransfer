@@ -6,9 +6,14 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import path from 'node:path';
 import { S3Client, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { resolveScalewayEndpoint, resolveScalewaySigningRegion } from '../../providers/scaleway.js';
 import { getRuntimeSettings, setRuntimeSettings } from '../../config/runtime-settings.js';
+
+const execFileAsync = promisify(execFile);
 
 // ── Constants ──────────────────────────────────────────────────
 
@@ -388,5 +393,56 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     });
 
     return reply.code(204).send();
+  });
+
+  // ── Immich reachability check (no auth) ─────────────────────
+  // Probes the Immich URL to see if the service is up. Does NOT validate
+  // the API key — it only checks that the host is reachable. Useful in
+  // the setup UI to tell users "Immich isn't running yet".
+  app.get('/settings/immich/reachable', {
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const querySchema = z.object({ url: z.string().url() });
+    const parsed = querySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ ok: false, error: 'Invalid url query parameter' });
+    }
+    const base = parsed.data.url.replace(/\/$/, '');
+    try {
+      // Hit the home page — any HTTP response (even 401/403) means the
+      // server is up. Network/connection errors mean it's not.
+      const res = await fetch(base, {
+        method: 'GET',
+        signal: AbortSignal.timeout(3_000),
+        redirect: 'manual',
+      });
+      return { ok: true, status: res.status };
+    } catch (err) {
+      return reply.code(200).send({
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // ── Immich start helper (local-dev convenience) ─────────────
+  // Runs `docker compose -f docker-compose.immich.yml up -d` from the repo
+  // root. This is a local-dev convenience — the API server is bound to
+  // localhost, so this only runs when invoked from the user's own machine.
+  app.post('/settings/immich/start', {
+    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+  }, async (_req, reply) => {
+    const repoRoot = path.resolve(process.cwd());
+    try {
+      const { stdout, stderr } = await execFileAsync(
+        'docker',
+        ['compose', '-f', 'docker-compose.immich.yml', 'up', '-d'],
+        { cwd: repoRoot, timeout: 120_000, maxBuffer: 1024 * 1024 },
+      );
+      return { ok: true, stdout, stderr };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.code(500).send({ ok: false, error: message });
+    }
   });
 }

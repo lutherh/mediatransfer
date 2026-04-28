@@ -1,4 +1,5 @@
 ---
+name: 'Architect'
 description: "Use when: reviewing architecture, checking plan drift, understanding module boundaries, verifying tech stack compliance, asking 'does this change fit the design?'. Architecture guardian for MediaTransfer."
 tools: [read, search]
 ---

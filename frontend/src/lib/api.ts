@@ -1450,3 +1450,28 @@ export async function saveImmichSettings(body: {
   }
 }
 
+export async function checkImmichReachable(url: string): Promise<{
+  ok: boolean;
+  status?: number;
+  error?: string;
+}> {
+  const res = await apiFetch(
+    `${API_BASE_URL}/settings/immich/reachable?url=${encodeURIComponent(url)}`,
+    { signal: AbortSignal.timeout(5_000) },
+  );
+  return res.json();
+}
+
+export async function startImmich(): Promise<{
+  ok: boolean;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+}> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/immich/start`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(125_000),
+  });
+  return res.json();
+}
+

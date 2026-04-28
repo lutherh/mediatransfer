@@ -30,7 +30,7 @@ If you want the short version: this is a practical migration tool for getting ou
 Install these first:
 
 1. Node.js 20.19+, 22.12+, or 24.0+
-2. Docker Desktop
+2. Docker Desktop *(or skip Docker entirely — see [Native macOS Setup](#5-native-macos-setup-no-docker))*
 3. Git
 
 Check them with:
@@ -205,6 +205,9 @@ After upload, use the local catalog UI:
 |---|---|
 | `npm run app:setup` | Install deps, start services, create DB tables, verify S3 |
 | `npm run app:dev` | Run backend and frontend in dev mode |
+| `npm run setup:mac` | Install Postgres + Redis natively via Homebrew (macOS, no Docker) |
+| `npm run app:setup:native` | Same as `app:setup` but skips all Docker checks |
+| `npm run app:dev:native` | Same as `app:dev` but skips all Docker checks |
 | `npm run build` | TypeScript build |
 | `npm run test` | Run tests |
 | `npm run takeout:scan` | Scan Takeout input |
@@ -217,6 +220,95 @@ After upload, use the local catalog UI:
 | `npm run takeout:repair-dates` | Repair dates from sidecar metadata |
 | `npm run takeout:repair-dates-s3` | Repair dates for `unknown-date` prefix in S3 |
 | `npm run lint` | Type-check without emitting |
+
+## 5. Native macOS Setup (No Docker)
+
+For better performance on macOS (lower RAM/CPU overhead, faster disk I/O), you can run MediaTransfer fully native — Postgres and Redis as Homebrew services, no Docker Desktop required. The repo ships with a setup script and dedicated `:native` npm scripts that bypass Docker entirely.
+
+This was tested end-to-end on a fresh macOS machine. Total time on a clean install: ~5 minutes.
+
+### Step 1: Stop Docker services (if running)
+
+```bash
+docker compose down
+```
+
+If Docker Desktop isn't installed at all, skip this step.
+
+### Step 2: Install Homebrew (one-time, skip if you already have it)
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+The Homebrew installer is interactive — it will ask for your sudo password and pause for confirmation. Run this directly in your terminal.
+
+### Step 3: Install Node.js, PostgreSQL 16, and Redis
+
+Run the bundled setup script. Use `bash` directly the first time because `npm` won't exist yet on a clean machine:
+
+```bash
+bash scripts/setup-mac-native.sh
+```
+
+This script will:
+
+- `brew install node postgresql@16 redis`
+- Start Postgres and Redis as Homebrew background services (autostart on login)
+- Create the `mediatransfer` Postgres role and database
+- Print a recap of the values that were configured
+
+### Step 4: Create your `.env`
+
+```bash
+cp .env.example .env
+```
+
+The shipped `.env.example` already points the database and Redis at `localhost`, so for the native setup **you don't need to change those lines** — they will just work:
+
+```env
+POSTGRES_USER=mediatransfer
+POSTGRES_PASSWORD=mediatransfer
+POSTGRES_DB=mediatransfer
+DATABASE_URL=postgresql://mediatransfer:mediatransfer@localhost:5432/mediatransfer
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_URL=redis://localhost:6379
+```
+
+You only need to fill in your `SCW_*` credentials when you're ready to run actual transfers — the dev server boots fine without them.
+
+### Step 5: Run native setup and start the app
+
+```bash
+npm run app:setup:native
+npm run app:dev:native
+```
+
+`app:setup:native` installs npm deps, generates the Prisma client, pushes the schema to the local Postgres, generates a fresh `ENCRYPTION_SECRET`, and runs the S3 connectivity check (skipped automatically if `SCW_*` keys aren't set yet). It does **not** touch Docker.
+
+`app:dev:native` runs the same dev runner as `app:dev`, but with all Docker checks bypassed.
+
+Open [http://localhost:5173](http://localhost:5173). You're running natively.
+
+### Managing the native services
+
+```bash
+brew services list                  # see status of postgresql@16 and redis
+brew services stop postgresql@16    # stop Postgres
+brew services stop redis            # stop Redis
+brew services start postgresql@16   # start Postgres
+brew services start redis           # start Redis
+```
+
+### Troubleshooting native setup
+
+| Symptom | Fix |
+|---|---|
+| `npm install` fails with `ENOTFOUND github.com` (e.g. while building `ffmpeg-static`) | Stale macOS DNS cache. Run `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`, then retry `npm run app:setup:native`. |
+| `psql: could not connect to server` | Run `brew services start postgresql@16` and re-run setup. |
+| `Error: connect ECONNREFUSED 127.0.0.1:6379` | Run `brew services start redis`. |
+| Old Docker containers still bound to ports 5432/6379 | Run `docker compose down` once to release them. |
 
 ## Optional: Immich
 
@@ -279,6 +371,19 @@ Open [http://localhost:2283](http://localhost:2283) and create the admin account
 
 The S3 volume is mounted read-only at `/usr/src/app/upload/s3transfers` inside the Immich container. Phone uploads and new imports go to local storage as usual.
 
+### Step 4a: Generate an Immich API key (for MediaTransfer)
+
+MediaTransfer talks to Immich over its REST API, so it needs an API key. The key can **only** be created in the Immich web UI — the mobile app cannot generate one.
+
+1. Make sure Immich is running (Step 4 above) and reachable at [http://localhost:2283](http://localhost:2283).
+2. Sign in (or create the admin account on first launch).
+3. Click your **profile picture** (top-right) → **Account Settings** → **API Keys** → **New API Key**.
+4. Give it a name (e.g. `MediaTransfer`) and create it.
+5. **Copy the key immediately** — Immich shows it only once.
+6. Paste it into MediaTransfer's setup page (Immich step), click **Test connection**, then **Save**.
+
+If you lose the key, just delete the entry in Immich and create a new one.
+
 ### Step 5: Remap existing assets to S3 (skip if fresh install)
 
 If you already have photos in `data/immich/library/` that also exist in S3, update Immich's database to point at the S3 mount instead of the local copies:
@@ -328,7 +433,8 @@ docker compose -f docker-compose.immich.yml down
 
 | Problem | What to check |
 |---|---|
-| Docker not running | Start Docker Desktop and rerun `npm run app:dev` |
+| Docker not running | Start Docker Desktop and rerun `npm run app:dev`, or switch to the [Native macOS Setup](#5-native-macos-setup-no-docker) |
+| `ENOTFOUND github.com` during `npm install` on macOS | Flush DNS: `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`, then retry |
 | Google login fails | Confirm the redirect URI is exactly `http://localhost:5173/auth/google/callback` |
 | Upload interrupted | Rerun the same upload command or button action; the state is resumable |
 | `ENCRYPTION_SECRET` error | Run `npm run app:setup` to generate a local secret |

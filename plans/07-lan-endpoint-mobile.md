@@ -2,7 +2,7 @@
 
 **Status:** ✅ Applied 2026‑04‑23 (host + firewall). Mobile app config still per-device.
 **Files to change:**
-- [../docker-compose.immich.yml](../docker-compose.immich.yml) (port binding) — done, bound to `<lan-ip-redacted>:2283`.
+- [../docker-compose.immich.yml](../docker-compose.immich.yml) (port binding) — done, bound to `${IMMICH_LAN_IP}:2283` (set in `.env.immich`, auto‑detected by `scripts/start-all.sh`).
 - Windows Firewall — done, inbound rule `Immich LAN 2283` (TCP 2283, Remote `192.168.0.0/24`, Private profile).
 - Immich iOS / Android app (manual per device) — **still required on each phone**.
 
