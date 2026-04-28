@@ -16,7 +16,7 @@ export type OrphanMatch = {
 	immichPath: string;
 	filename: string;
 	fileCreatedAt: string;
-	/** Best matching S3 path (relative, under transfers/) */
+	/** Best matching S3 path (relative, under s3transfers/) */
 	s3Path: string | null;
 	/** All candidate S3 paths for this filename */
 	s3Candidates: string[];

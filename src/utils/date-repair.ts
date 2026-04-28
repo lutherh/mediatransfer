@@ -54,10 +54,10 @@ export function isWrongDate(date: Date): boolean {
 
 /**
  * Extract `album/filename` from a destination key like
- * `transfers/2020/07/19/Summer_Trip/IMG_1234.jpg` → `Summer_Trip/IMG_1234.jpg`.
+ * `s3transfers/2020/07/19/Summer_Trip/IMG_1234.jpg` → `Summer_Trip/IMG_1234.jpg`.
  *
  * Also handles undated keys:
- * `transfers/unknown-date/Summer_Trip/IMG_1234.jpg` → `Summer_Trip/IMG_1234.jpg`.
+ * `s3transfers/unknown-date/Summer_Trip/IMG_1234.jpg` → `Summer_Trip/IMG_1234.jpg`.
  */
 export function extractAlbumFile(key: string): string {
   const parts = key.split('/');

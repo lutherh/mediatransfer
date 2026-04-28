@@ -136,7 +136,7 @@ describe('takeout/runner', () => {
         mtimeMs: Date.now(),
         capturedAt: '2025-12-13T00:00:00.000Z',
         datePath: '2025/12/13',
-        destinationKey: 'transfers/2025/12/13/Album1/IMG_1.jpg',
+        destinationKey: 's3transfers/2025/12/13/Album1/IMG_1.jpg',
       });
       const entry2 = JSON.stringify({
         sourcePath: '/tmp/old/IMG_2.jpg',
@@ -145,7 +145,7 @@ describe('takeout/runner', () => {
         mtimeMs: Date.now(),
         capturedAt: '2025-12-13T00:00:00.000Z',
         datePath: '2025/12/13',
-        destinationKey: 'transfers/2025/12/13/Album1/IMG_2.jpg',
+        destinationKey: 's3transfers/2025/12/13/Album1/IMG_2.jpg',
       });
       await fs.writeFile(partialManifestPath, `${entry1}\n${entry2}\n`);
 
@@ -201,7 +201,7 @@ describe('takeout/runner', () => {
         mtimeMs: Date.now(),
         capturedAt: '2025-12-13T00:00:00.000Z',
         datePath: '2025/12/13',
-        destinationKey: 'transfers/2025/12/13/Album/IMG_1.jpg',
+        destinationKey: 's3transfers/2025/12/13/Album/IMG_1.jpg',
       });
       await fs.writeFile(manifestPath, `${existingEntry}\n`);
 
@@ -282,7 +282,7 @@ describe('takeout/runner', () => {
             }),
           );
         } else {
-          const familyAlbum = path.join(mediaDir, 'Familie og venner');
+          const familyAlbum = path.join(mediaDir, 'Sample Album');
           await fs.mkdir(familyAlbum, { recursive: true });
           await fs.writeFile(path.join(familyAlbum, 'IMG_0031.MOV'), 'video-from-archive-2');
         }
@@ -292,11 +292,11 @@ describe('takeout/runner', () => {
 
       const manifestRaw = await fs.readFile(path.join(workDir, 'manifest.jsonl'), 'utf8');
       const manifest = manifestRaw.trim().split('\n').map((line) => JSON.parse(line) as ManifestEntry);
-      const refined = manifest.find((entry) => entry.relativePath === 'Familie og venner/IMG_0031.MOV');
+      const refined = manifest.find((entry) => entry.relativePath === 'Sample Album/IMG_0031.MOV');
 
       expect(refined).toBeDefined();
       expect(refined?.datePath).toBe('2017/06/04');
-      expect(refined?.destinationKey).toBe('transfers/2017/06/04/Familie_og_venner/IMG_0031.MOV');
+      expect(refined?.destinationKey).toBe('s3transfers/2017/06/04/Sample_Album/IMG_0031.MOV');
     });
   });
 

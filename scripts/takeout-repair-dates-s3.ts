@@ -2,7 +2,7 @@
  * Repair script for already-uploaded Takeout files with wrong date paths.
  *
  * Works directly from S3 — no local files needed. For each misplaced file
- * under transfers/2026/, downloads the first 256 KB to extract EXIF dates,
+ * under s3transfers/2026/, downloads the first 256 KB to extract EXIF dates,
  * then copies the object to the correct date path and deletes the old one.
  *
  * Sources for correct dates (priority order):
@@ -83,12 +83,12 @@ try {
   throw new Error(`Could not read upload state: ${(err as Error).message}`);
 }
 
-// Find all uploaded items under transfers/2026/
+// Find all uploaded items under s3transfers/2026/
 const wrongDateKeys = Object.entries(uploadState.items)
-  .filter(([key, item]) => key.startsWith('transfers/2026/') && item.status === 'uploaded')
+  .filter(([key, item]) => key.startsWith('s3transfers/2026/') && item.status === 'uploaded')
   .map(([key]) => key);
 
-console.log(`\n📊 Found ${wrongDateKeys.length} files under transfers/2026/ to check`);
+console.log(`\n📊 Found ${wrongDateKeys.length} files under s3transfers/2026/ to check`);
 
 if (wrongDateKeys.length === 0) {
   console.log('✅ Nothing to repair!');
@@ -269,7 +269,7 @@ console.log(`   From sidecar:  ${fromSidecar}`);
 console.log(`   From EXIF:     ${fromExif}`);
 console.log(`   From video:    ${fromVideo}`);
 console.log(`   From filename: ${fromFilename}`);
-console.log(`   No date found: ${noDateFound} (will stay in transfers/2026/)`);
+console.log(`   No date found: ${noDateFound} (will stay in s3transfers/2026/)`);
 console.log(`   S3 missing:    ${s3Missing} (objects deleted/moved previously)`);
 console.log(`   Other errors:  ${exifErrors}`);
 console.log(`   Total to move: ${moves.length}`);

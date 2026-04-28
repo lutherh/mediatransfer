@@ -1,11 +1,11 @@
 #!/usr/bin/env npx tsx
 /**
- * Build mapping from Immich DB asset paths → S3 transfers/ paths.
+ * Build mapping from Immich DB asset paths → S3 s3transfers/ paths.
  * Then update Immich's PostgreSQL database so Immich reads from S3 mount.
  *
  * Strategy:
  *   1. Get all active Immich assets (originalPath, originalFileName, fileCreatedAt)
- *   2. List S3 transfers/ via rclone to build a filename→path index
+ *   2. List S3 s3transfers/ via rclone to build a filename→path index
  *   3. Match each asset by filename + date (YYYY/MM/DD)
  *   4. Update originalPath in asset table via docker exec psql
  *
@@ -109,7 +109,7 @@ function buildS3Index(): Map<string, string[]> {
 
 	const rcloneCmd = [
 		'docker', 'compose', 'exec', '-T', 'app', 'rclone', 'lsf',
-		`:s3:${bucket}/transfers/`,
+			`:s3:${bucket}/immich/s3transfers/`,
 		'--s3-provider', 'Scaleway',
 		'--s3-endpoint', `s3.${region}.scw.cloud`,
 		'--s3-access-key-id', accessKey,
@@ -126,7 +126,7 @@ function buildS3Index(): Map<string, string[]> {
 	});
 
 	const lines = raw.split('\n').filter(l => l.length > 0);
-	console.log(`  Found ${lines.length} files in S3 transfers/`);
+	console.log(`  Found ${lines.length} files in S3 s3transfers/`);
 
 	// Index: lowercase filename → array of relative paths
 	// e.g. "img_2191.heic" → ["2024/10/15/Photos_from_2024/IMG_2191.HEIC"]
@@ -279,7 +279,7 @@ async function main() {
 			continue;
 		}
 
-		// Skip upload/ paths (phone uploads — not in S3 transfers/)
+		// Skip upload/ paths (phone uploads — not in S3 s3transfers/)
 		if (asset.originalPath.startsWith(OLD_UPLOAD_PREFIX)) {
 			uploadPaths++;
 			continue;

@@ -137,48 +137,48 @@ describe('isWrongDate', () => {
 describe('extractAlbumFile', () => {
   it('extracts album/filename from standard date path', () => {
     expect(
-      extractAlbumFile('transfers/2020/07/19/Summer_Trip/IMG_1234.jpg'),
+      extractAlbumFile('s3transfers/2020/07/19/Summer_Trip/IMG_1234.jpg'),
     ).toBe('Summer_Trip/IMG_1234.jpg');
   });
 
   it('extracts album/filename from 2026 wrong-date path', () => {
     expect(
-      extractAlbumFile('transfers/2026/03/15/Archive/photo.jpg'),
+      extractAlbumFile('s3transfers/2026/03/15/Archive/photo.jpg'),
     ).toBe('Archive/photo.jpg');
   });
 
   it('handles nested album paths', () => {
     expect(
-      extractAlbumFile('transfers/2020/01/01/Family/Vacation/pic.jpg'),
+      extractAlbumFile('s3transfers/2020/01/01/Family/Vacation/pic.jpg'),
     ).toBe('Family/Vacation/pic.jpg');
   });
 
   it('handles filename-only (no album folder)', () => {
     expect(
-      extractAlbumFile('transfers/2020/01/01/pic.jpg'),
+      extractAlbumFile('s3transfers/2020/01/01/pic.jpg'),
     ).toBe('pic.jpg');
   });
 
   it('returns empty string when path has exactly 4 segments', () => {
     // This edge case shouldn't happen in practice
-    expect(extractAlbumFile('transfers/2020/01/01')).toBe('');
+    expect(extractAlbumFile('s3transfers/2020/01/01')).toBe('');
   });
 
   it('extracts album/filename from unknown-date path', () => {
     expect(
-      extractAlbumFile('transfers/unknown-date/Summer_Trip/IMG_1234.jpg'),
+      extractAlbumFile('s3transfers/unknown-date/Summer_Trip/IMG_1234.jpg'),
     ).toBe('Summer_Trip/IMG_1234.jpg');
   });
 
   it('extracts filename-only from unknown-date path', () => {
     expect(
-      extractAlbumFile('transfers/unknown-date/photo.jpg'),
+      extractAlbumFile('s3transfers/unknown-date/photo.jpg'),
     ).toBe('photo.jpg');
   });
 
   it('handles nested albums under unknown-date', () => {
     expect(
-      extractAlbumFile('transfers/unknown-date/Family/Vacation/pic.jpg'),
+      extractAlbumFile('s3transfers/unknown-date/Family/Vacation/pic.jpg'),
     ).toBe('Family/Vacation/pic.jpg');
   });
 });
@@ -191,18 +191,18 @@ describe('isVideoKey', () => {
     'video.m4v', 'video.3gp', 'video.3g2',
     'video.avi', 'video.AVI', 'video.mkv', 'video.webm',
   ])('returns true for %s', (key) => {
-    expect(isVideoKey(`transfers/2026/03/15/Album/${key}`)).toBe(true);
+    expect(isVideoKey(`s3transfers/2026/03/15/Album/${key}`)).toBe(true);
   });
 
   it.each([
     'photo.jpg', 'photo.JPG', 'photo.jpeg', 'photo.HEIC',
     'photo.png', 'photo.gif', 'photo.tiff', 'document.pdf',
   ])('returns false for %s', (key) => {
-    expect(isVideoKey(`transfers/2026/03/15/Album/${key}`)).toBe(false);
+    expect(isVideoKey(`s3transfers/2026/03/15/Album/${key}`)).toBe(false);
   });
 
   it('returns false for extensionless files', () => {
-    expect(isVideoKey('transfers/2026/03/15/Album/README')).toBe(false);
+    expect(isVideoKey('s3transfers/2026/03/15/Album/README')).toBe(false);
   });
 });
 
@@ -231,32 +231,32 @@ describe('toDatePath', () => {
 describe('computeNewKey', () => {
   it('rewrites date path for standard key', () => {
     expect(
-      computeNewKey('transfers/2026/03/15/Album/photo.jpg', '2020/06/15'),
-    ).toBe('transfers/2020/06/15/Album/photo.jpg');
+      computeNewKey('s3transfers/2026/03/15/Album/photo.jpg', '2020/06/15'),
+    ).toBe('s3transfers/2020/06/15/Album/photo.jpg');
   });
 
   it('preserves album and filename', () => {
     expect(
-      computeNewKey('transfers/2026/02/24/Familie_og_venner_1_/IMG_0643.MOV', '2016/05/26'),
-    ).toBe('transfers/2016/05/26/Familie_og_venner_1_/IMG_0643.MOV');
+      computeNewKey('s3transfers/2026/02/24/Sample_Album_1_/IMG_0643.MOV', '2016/05/26'),
+    ).toBe('s3transfers/2016/05/26/Sample_Album_1_/IMG_0643.MOV');
   });
 
   it('handles unknown-date paths', () => {
     expect(
-      computeNewKey('transfers/unknown-date/Album/photo.jpg', '2020/06/15'),
-    ).toBe('transfers/2020/06/15/Album/photo.jpg');
+      computeNewKey('s3transfers/unknown-date/Album/photo.jpg', '2020/06/15'),
+    ).toBe('s3transfers/2020/06/15/Album/photo.jpg');
   });
 
   it('handles nested album paths', () => {
     expect(
-      computeNewKey('transfers/2026/01/01/Family/Trip/photo.jpg', '2019/08/20'),
-    ).toBe('transfers/2019/08/20/Family/Trip/photo.jpg');
+      computeNewKey('s3transfers/2026/01/01/Family/Trip/photo.jpg', '2019/08/20'),
+    ).toBe('s3transfers/2019/08/20/Family/Trip/photo.jpg');
   });
 
   it('returns same key when date path is identical', () => {
     expect(
-      computeNewKey('transfers/2020/06/15/Album/photo.jpg', '2020/06/15'),
-    ).toBe('transfers/2020/06/15/Album/photo.jpg');
+      computeNewKey('s3transfers/2020/06/15/Album/photo.jpg', '2020/06/15'),
+    ).toBe('s3transfers/2020/06/15/Album/photo.jpg');
   });
 });
 
@@ -265,29 +265,29 @@ describe('computeNewKey', () => {
 describe('buildSidecarLookup', () => {
   const items = [
     {
-      destinationKey: 'transfers/2020/07/19/Summer/IMG_1234.jpg',
+      destinationKey: 's3transfers/2020/07/19/Summer/IMG_1234.jpg',
       sidecar: { photoTakenTime: '1595174400' } as SidecarMetadata, // 2020-07-19
     },
     {
-      destinationKey: 'transfers/2021/03/10/Winter/IMG_5678.jpg',
+      destinationKey: 's3transfers/2021/03/10/Winter/IMG_5678.jpg',
       sidecar: { creationTime: '1615334400' } as SidecarMetadata,
     },
     // Duplicate basename — same filename in different albums
     {
-      destinationKey: 'transfers/2019/01/01/AlbumA/photo.jpg',
+      destinationKey: 's3transfers/2019/01/01/AlbumA/photo.jpg',
       sidecar: { photoTakenTime: '1546300800' } as SidecarMetadata,
     },
     {
-      destinationKey: 'transfers/2018/06/15/AlbumB/photo.jpg',
+      destinationKey: 's3transfers/2018/06/15/AlbumB/photo.jpg',
       sidecar: { photoTakenTime: '1529020800' } as SidecarMetadata,
     },
     // Item without sidecar — should be skipped
     {
-      destinationKey: 'transfers/2020/01/01/Other/no-sidecar.jpg',
+      destinationKey: 's3transfers/2020/01/01/Other/no-sidecar.jpg',
     },
     // Item with empty sidecar (no dates) — should be skipped
     {
-      destinationKey: 'transfers/2020/01/01/Other/empty-sidecar.jpg',
+      destinationKey: 's3transfers/2020/01/01/Other/empty-sidecar.jpg',
       sidecar: { title: 'vacation' } as SidecarMetadata,
     },
   ];
@@ -309,11 +309,11 @@ describe('buildSidecarLookup', () => {
   });
 
   it('does not include items without sidecar', () => {
-    expect(lookup.byKey.has('transfers/2020/01/01/Other/no-sidecar.jpg')).toBe(false);
+    expect(lookup.byKey.has('s3transfers/2020/01/01/Other/no-sidecar.jpg')).toBe(false);
   });
 
   it('does not include items with empty sidecar (no dates)', () => {
-    expect(lookup.byKey.has('transfers/2020/01/01/Other/empty-sidecar.jpg')).toBe(false);
+    expect(lookup.byKey.has('s3transfers/2020/01/01/Other/empty-sidecar.jpg')).toBe(false);
   });
 });
 
@@ -324,46 +324,46 @@ describe('resolveSidecar', () => {
   const sidecarUnique: SidecarMetadata = { photoTakenTime: '1615334400' };
 
   const items = [
-    { destinationKey: 'transfers/2020/07/19/Summer/IMG_1234.jpg', sidecar: sidecarA },
-    { destinationKey: 'transfers/2021/03/10/Winter/unique-name.jpg', sidecar: sidecarUnique },
+    { destinationKey: 's3transfers/2020/07/19/Summer/IMG_1234.jpg', sidecar: sidecarA },
+    { destinationKey: 's3transfers/2021/03/10/Winter/unique-name.jpg', sidecar: sidecarUnique },
     // Duplicate basename → ambiguous
-    { destinationKey: 'transfers/2019/01/01/AlbumA/photo.jpg', sidecar: sidecarB },
-    { destinationKey: 'transfers/2018/06/15/AlbumB/photo.jpg', sidecar: sidecarC },
+    { destinationKey: 's3transfers/2019/01/01/AlbumA/photo.jpg', sidecar: sidecarB },
+    { destinationKey: 's3transfers/2018/06/15/AlbumB/photo.jpg', sidecar: sidecarC },
   ];
 
   const lookup = buildSidecarLookup(items);
 
   it('resolves by exact key', () => {
-    const result = resolveSidecar(lookup, 'transfers/2020/07/19/Summer/IMG_1234.jpg');
+    const result = resolveSidecar(lookup, 's3transfers/2020/07/19/Summer/IMG_1234.jpg');
     expect(result).toBe(sidecarA);
   });
 
   it('resolves by album+filename when exact key misses', () => {
     // Key with wrong date, but same album/filename
-    const result = resolveSidecar(lookup, 'transfers/2026/03/15/Summer/IMG_1234.jpg');
+    const result = resolveSidecar(lookup, 's3transfers/2026/03/15/Summer/IMG_1234.jpg');
     expect(result).toBe(sidecarA);
   });
 
   it('resolves by unique basename when album path also misses', () => {
     // Different album name, but unique filename
-    const result = resolveSidecar(lookup, 'transfers/2026/03/15/DifferentAlbum/unique-name.jpg');
+    const result = resolveSidecar(lookup, 's3transfers/2026/03/15/DifferentAlbum/unique-name.jpg');
     expect(result).toBe(sidecarUnique);
   });
 
   it('returns undefined for ambiguous basename (multiple matches)', () => {
     // "photo.jpg" exists in two albums → can't resolve unambiguously
-    const result = resolveSidecar(lookup, 'transfers/2026/03/15/UnknownAlbum/photo.jpg');
+    const result = resolveSidecar(lookup, 's3transfers/2026/03/15/UnknownAlbum/photo.jpg');
     expect(result).toBeUndefined();
   });
 
   it('resolves ambiguous basename if album matches', () => {
     // "photo.jpg" is ambiguous by basename, but album+filename is unique
-    const result = resolveSidecar(lookup, 'transfers/2026/03/15/AlbumA/photo.jpg');
+    const result = resolveSidecar(lookup, 's3transfers/2026/03/15/AlbumA/photo.jpg');
     expect(result).toBe(sidecarB);
   });
 
   it('returns undefined for completely unknown file', () => {
-    const result = resolveSidecar(lookup, 'transfers/2026/01/01/Random/unknown.jpg');
+    const result = resolveSidecar(lookup, 's3transfers/2026/01/01/Random/unknown.jpg');
     expect(result).toBeUndefined();
   });
 });
@@ -378,10 +378,10 @@ describe('end-to-end key rewrite', () => {
     const newDatePath = toDatePath(date);
     expect(newDatePath).toBe('2016/05/26');
     const newKey = computeNewKey(
-      'transfers/2026/02/24/Familie_og_venner_1_/IMG_0643.MOV',
+      's3transfers/2026/02/24/Sample_Album_1_/IMG_0643.MOV',
       newDatePath,
     );
-    expect(newKey).toBe('transfers/2016/05/26/Familie_og_venner_1_/IMG_0643.MOV');
+    expect(newKey).toBe('s3transfers/2016/05/26/Sample_Album_1_/IMG_0643.MOV');
   });
 
   it('accepts sidecar with current-year date (2026)', () => {
@@ -402,23 +402,23 @@ describe('end-to-end key rewrite', () => {
     const date = parseSidecarDate(sidecar)!;
     expect(isWrongDate(date)).toBe(false);
     const newKey = computeNewKey(
-      'transfers/2026/03/15/Photos_from_2016/IMG_0786.MOV',
+      's3transfers/2026/03/15/Photos_from_2016/IMG_0786.MOV',
       toDatePath(date),
     );
-    expect(newKey).toBe('transfers/2016/06/19/Photos_from_2016/IMG_0786.MOV');
+    expect(newKey).toBe('s3transfers/2016/06/19/Photos_from_2016/IMG_0786.MOV');
   });
 
   it('end-to-end with lookup + key rewrite', () => {
     const items = [
       {
-        destinationKey: 'transfers/2025/07/19/Norway_2025/IMG_5323.MOV',
+        destinationKey: 's3transfers/2025/07/19/Norway_2025/IMG_5323.MOV',
         sidecar: { photoTakenTime: '19 Jul 2025, 14:27:41 UTC' } as SidecarMetadata,
       },
     ];
     const lookup = buildSidecarLookup(items);
 
     // Simulate the wrong-date key
-    const wrongKey = 'transfers/2026/02/24/Norway_2025/IMG_5323.MOV';
+    const wrongKey = 's3transfers/2026/02/24/Norway_2025/IMG_5323.MOV';
     const sidecar = resolveSidecar(lookup, wrongKey);
     expect(sidecar).toBeDefined();
 
@@ -426,25 +426,25 @@ describe('end-to-end key rewrite', () => {
     expect(isWrongDate(date)).toBe(false);
 
     const newKey = computeNewKey(wrongKey, toDatePath(date));
-    expect(newKey).toBe('transfers/2025/07/19/Norway_2025/IMG_5323.MOV');
+    expect(newKey).toBe('s3transfers/2025/07/19/Norway_2025/IMG_5323.MOV');
   });
 
   it('fallback chain: sidecar miss → basename unique → resolves', () => {
     const items = [
       {
-        destinationKey: 'transfers/2020/05/01/OtherAlbum/unique-video.mp4',
+        destinationKey: 's3transfers/2020/05/01/OtherAlbum/unique-video.mp4',
         sidecar: { photoTakenTime: '1588291200' } as SidecarMetadata, // 2020-05-01
       },
     ];
     const lookup = buildSidecarLookup(items);
 
     // Wrong date, different album, but unique filename
-    const wrongKey = 'transfers/2026/03/15/DifferentAlbum/unique-video.mp4';
+    const wrongKey = 's3transfers/2026/03/15/DifferentAlbum/unique-video.mp4';
     const sidecar = resolveSidecar(lookup, wrongKey);
     expect(sidecar).toBeDefined();
 
     const date = parseSidecarDate(sidecar!)!;
     const newKey = computeNewKey(wrongKey, toDatePath(date));
-    expect(newKey).toBe('transfers/2020/05/01/DifferentAlbum/unique-video.mp4');
+    expect(newKey).toBe('s3transfers/2020/05/01/DifferentAlbum/unique-video.mp4');
   });
 });

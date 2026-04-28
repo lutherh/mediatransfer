@@ -3,14 +3,14 @@
  *
  * Checks:
  *  1. Every "uploaded" key in state.json exists on S3 (no missing files)
- *  2. Every S3 object under transfers/ is tracked in state.json (no orphans)
+ *  2. Every S3 object under s3transfers/ is tracked in state.json (no orphans)
  *  3. File sizes match between S3 and what we expect
  *  4. Total counts are consistent
  *
  * Usage:
  *   npx tsx scripts/takeout-verify-s3.ts                  # full verify
  *   npx tsx scripts/takeout-verify-s3.ts --quick           # count-only (no size check)
- *   npx tsx scripts/takeout-verify-s3.ts --prefix transfers/2019  # check specific prefix
+ *   npx tsx scripts/takeout-verify-s3.ts --prefix s3transfers/2019  # check specific prefix
  */
 import * as dotenv from 'dotenv';
 import path from 'node:path';
@@ -101,15 +101,15 @@ for (const [key, item] of Object.entries(uploadState.items)) {
 console.log(`   ${stateUploaded.size} uploaded items in state` +
   (filterPrefix ? ` (filtered to "${filterPrefix}")` : ''));
 
-// ── Step 2: List all S3 objects under transfers/ ─────────────────
+// ── Step 2: List all S3 objects under s3transfers/ ─────────────────
 
 console.log('\n🔍 Listing S3 objects...');
 
 type S3Item = { key: string; size: number };
 const s3Items = new Map<string, S3Item>();
 
-// List all objects with the transfers/ prefix (or filtered prefix)
-const listPrefix = fullPrefix(filterPrefix ?? 'transfers/');
+// List all objects with the s3transfers/ prefix (or filtered prefix)
+const listPrefix = fullPrefix(filterPrefix ?? 's3transfers/');
 let continuationToken: string | undefined;
 let listBatches = 0;
 
@@ -146,7 +146,7 @@ console.log('\n🔄 Cross-checking...');
 // 3a. Files in state but missing from S3
 const missingFromS3: string[] = [];
 for (const key of stateUploaded.keys()) {
-  if (!key.startsWith('transfers/')) continue; // only check takeout uploads
+  if (!key.startsWith('s3transfers/')) continue; // only check takeout uploads
   if (filterPrefix && !key.startsWith(filterPrefix)) continue;
   if (!s3Items.has(key)) {
     missingFromS3.push(key);
@@ -167,7 +167,7 @@ console.log('\n' + '═'.repeat(60));
 console.log('📊 VERIFICATION REPORT');
 console.log('═'.repeat(60));
 
-console.log(`\n   State uploaded (transfers/):  ${stateUploaded.size}`);
+console.log(`\n   State uploaded (s3transfers/):  ${stateUploaded.size}`);
 console.log(`   S3 objects found:             ${s3Items.size}`);
 console.log(`   Missing from S3:              ${missingFromS3.length}`);
 console.log(`   Orphans on S3 (not in state): ${orphansOnS3.length}`);
@@ -195,7 +195,7 @@ if (orphansOnS3.length > 0) {
 // Year breakdown of S3 contents
 const s3Years: Record<string, number> = {};
 for (const key of s3Items.keys()) {
-  const match = key.match(/^transfers\/(\d{4})\//);
+  const match = key.match(/^s3transfers\/(\d{4})\//);
   if (match) {
     s3Years[match[1]] = (s3Years[match[1]] || 0) + 1;
   }

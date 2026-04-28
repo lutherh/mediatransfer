@@ -21,7 +21,7 @@ function basename(key: string): string {
 }
 
 /** Returns a human-readable namespace label and Tailwind colour classes for an S3 key. */
-function pathNamespaceBadge(key: string): { label: string; className: string } | null {
+export function pathNamespaceBadge(key: string): { label: string; className: string } | null {
   if (key.startsWith('immich/library/')) {
     return { label: 'Immich library', className: 'bg-blue-100 text-blue-700' };
   }
@@ -31,10 +31,10 @@ function pathNamespaceBadge(key: string): { label: string; className: string } |
   if (key.startsWith('immich/')) {
     return { label: 'Immich', className: 'bg-blue-100 text-blue-700' };
   }
-  if (/^transfers\/((?:19|20)\d{4})\/\d{2}\/\d{2}\//.test(key)) {
+  if (/^s3transfers\/((?:19|20)\d{2})\/\d{2}\/\d{2}\//.test(key)) {
     return { label: 'Transfers (dated)', className: 'bg-emerald-100 text-emerald-700' };
   }
-  if (key.startsWith('transfers/')) {
+  if (key.startsWith('s3transfers/')) {
     return { label: 'Transfers (no date)', className: 'bg-amber-100 text-amber-700' };
   }
   return null;
@@ -223,7 +223,7 @@ function GroupRow({
           </svg>
           <span>
             <strong>Cross-namespace duplicate</strong> — Immich copy is kept; the{' '}
-            <span className="font-mono">transfers/</span> copy will be deleted. Safe to proceed.
+            <span className="font-mono">s3transfers/</span> copy will be deleted. Safe to proceed.
           </span>
         </div>
       )}
@@ -499,7 +499,7 @@ export function CatalogDedupPage() {
     [data],
   );
 
-  // Count of cross-namespace groups (immich/ + transfers/ mixed)
+  // Count of cross-namespace groups (immich/ + s3transfers/ mixed)
   const crossNamespaceCount = useMemo(
     () => visibleGroups.filter((g) => g.crossNamespace).length,
     [visibleGroups],
@@ -723,7 +723,7 @@ export function CatalogDedupPage() {
               <span>
                 <strong>{crossNamespaceCount.toLocaleString()} cross-namespace group{crossNamespaceCount !== 1 ? 's' : ''}</strong> —
                 these contain both an <span className="font-mono">immich/</span> copy and a{' '}
-                <span className="font-mono">transfers/</span> copy of the same file.
+                <span className="font-mono">s3transfers/</span> copy of the same file.
                 The <strong>Immich copy is kept</strong> and the transfers copy is marked for deletion.
                 This is safe to proceed with.
               </span>

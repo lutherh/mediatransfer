@@ -624,7 +624,7 @@ export function collectDatePrefixes(entries: Array<{ destinationKey: string }>):
   const prefixes = new Set<string>();
 
   for (const entry of entries) {
-    const match = /^((?:transfers\/)?\d{4}\/\d{2}\/\d{2})\//.exec(entry.destinationKey);
+    const match = /^((?:s3transfers\/)?\d{4}\/\d{2}\/\d{2})\//.exec(entry.destinationKey);
     if (match?.[1]) {
       prefixes.add(`${match[1]}/`);
     }

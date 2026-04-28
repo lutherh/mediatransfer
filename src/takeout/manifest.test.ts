@@ -60,7 +60,7 @@ describe('takeout/manifest', () => {
 
       const [entry] = await buildManifest(path.join(dir, 'Google Photos'));
       expect(entry.datePath).toBe('2025/12/13');
-      expect(entry.destinationKey).toContain('transfers/2025/12/13/');
+      expect(entry.destinationKey).toContain('s3transfers/2025/12/13/');
       expect(entry.sidecarPath).toBe(`${mediaPath}.json`);
     });
   });
@@ -463,18 +463,18 @@ describe('scoreEntryForKeep', () => {
     mtimeMs: 0,
     capturedAt: '2024-01-01T00:00:00.000Z',
     datePath: '2024/01/01',
-    destinationKey: 'transfers/2024/01/01/a.jpg',
+    destinationKey: 's3transfers/2024/01/01/a.jpg',
   };
 
   it('prefers entries with a clean date path', () => {
-    const withDate = { ...base, destinationKey: 'transfers/2024/01/01/a.jpg' };
-    const withoutDate = { ...base, destinationKey: 'transfers/Album_Vacation/a.jpg' };
+    const withDate = { ...base, destinationKey: 's3transfers/2024/01/01/a.jpg' };
+    const withoutDate = { ...base, destinationKey: 's3transfers/Album_Vacation/a.jpg' };
     expect(scoreEntryForKeep(withDate)).toBeGreaterThan(scoreEntryForKeep(withoutDate));
   });
 
   it('penalises deep nesting', () => {
-    const shallow = { ...base, destinationKey: 'transfers/2024/01/01/a.jpg' };
-    const deep = { ...base, destinationKey: 'transfers/2024/01/01/sub/deep/a.jpg' };
+    const shallow = { ...base, destinationKey: 's3transfers/2024/01/01/a.jpg' };
+    const deep = { ...base, destinationKey: 's3transfers/2024/01/01/sub/deep/a.jpg' };
     expect(scoreEntryForKeep(shallow)).toBeGreaterThan(scoreEntryForKeep(deep));
   });
 
@@ -539,7 +539,7 @@ describe('deduplicateManifest', () => {
       mtimeMs: 0,
       capturedAt: '2024-01-01T00:00:00.000Z',
       datePath: '2024/01/01',
-      destinationKey: `transfers/2024/01/01/${path.basename(overrides.sourcePath)}`,
+      destinationKey: `s3transfers/2024/01/01/${path.basename(overrides.sourcePath)}`,
       ...overrides,
     };
   }
@@ -581,13 +581,13 @@ describe('deduplicateManifest', () => {
         entry({
           sourcePath: path.join(dir1, 'IMG_001.jpg'),
           relativePath: 'Photos from 2020/IMG_001.jpg',
-          destinationKey: 'transfers/2020/05/15/Photos_from_2020/IMG_001.jpg',
+          destinationKey: 's3transfers/2020/05/15/Photos_from_2020/IMG_001.jpg',
           size: content.length,
         }),
         entry({
           sourcePath: path.join(dir2, 'IMG_001.jpg'),
           relativePath: 'Vacation/IMG_001.jpg',
-          destinationKey: 'transfers/2020/05/15/Vacation/IMG_001.jpg',
+          destinationKey: 's3transfers/2020/05/15/Vacation/IMG_001.jpg',
           size: content.length,
         }),
       ];
@@ -625,19 +625,19 @@ describe('deduplicateManifest', () => {
       const goodEntry = entry({
         sourcePath: path.join(dir, 'a.jpg'),
         relativePath: 'IMG_001.jpg',
-        destinationKey: 'transfers/2024/01/01/IMG_001.jpg',
+        destinationKey: 's3transfers/2024/01/01/IMG_001.jpg',
         size: content.length,
       });
       const badEntry = entry({
         sourcePath: path.join(dir, 'b.jpg'),
         relativePath: 'Album/Sub/Deep/IMG_001__dup1.jpg',
-        destinationKey: 'transfers/2024/01/01/Album/Sub/Deep/IMG_001__dup1.jpg',
+        destinationKey: 's3transfers/2024/01/01/Album/Sub/Deep/IMG_001__dup1.jpg',
         size: content.length,
       });
 
       const result = await deduplicateManifest([badEntry, goodEntry]);
       expect(result.entries).toHaveLength(1);
-      expect(result.entries[0].destinationKey).toBe('transfers/2024/01/01/IMG_001.jpg');
+      expect(result.entries[0].destinationKey).toBe('s3transfers/2024/01/01/IMG_001.jpg');
     });
   });
 
@@ -653,7 +653,7 @@ describe('deduplicateManifest', () => {
           entry({
             sourcePath: filePath,
             relativePath: `Album${i}/video.mov`,
-            destinationKey: `transfers/2024/01/01/Album${i}/video.mov`,
+            destinationKey: `s3transfers/2024/01/01/Album${i}/video.mov`,
             size: content.length,
           }),
         );
@@ -783,14 +783,14 @@ describe('refineDatesFromMetadata', () => {
   it('does not modify entries with valid dates', () => {
     const entries = [
       makeEntry({
-        destinationKey: 'transfers/2020/07/15/Album/IMG_1234.jpg',
+        destinationKey: 's3transfers/2020/07/15/Album/IMG_1234.jpg',
         capturedAt: '2020-07-15T12:00:00.000Z',
         datePath: '2020/07/15',
       }),
     ];
 
     const metadata = makeMetadata([{
-      destinationKey: 'transfers/2020/07/15/Album/IMG_1234.jpg',
+      destinationKey: 's3transfers/2020/07/15/Album/IMG_1234.jpg',
       relativePath: 'Album/IMG_1234.jpg',
       sizeBytes: 1000,
       capturedAt: '2020-07-15T12:00:00.000Z',
@@ -805,7 +805,7 @@ describe('refineDatesFromMetadata', () => {
   it('resolves date for -edited file from non-edited sidecar', () => {
     const entries = [
       makeEntry({
-        destinationKey: 'transfers/2040/03/15/Album/IMG_1234-edited.jpg',
+        destinationKey: 's3transfers/2040/03/15/Album/IMG_1234-edited.jpg',
         capturedAt: '2040-03-15T00:00:00.000Z',
         datePath: '2040/03/15',
       }),
@@ -813,13 +813,13 @@ describe('refineDatesFromMetadata', () => {
 
     const metadata = makeMetadata([
       {
-        destinationKey: 'transfers/2040/03/15/Album/IMG_1234-edited.jpg',
+        destinationKey: 's3transfers/2040/03/15/Album/IMG_1234-edited.jpg',
         relativePath: 'Album/IMG_1234-edited.jpg',
         sizeBytes: 1000,
         capturedAt: '2040-03-15T00:00:00.000Z',
       },
       {
-        destinationKey: 'transfers/2020/11/25/Album/IMG_1234.jpg',
+        destinationKey: 's3transfers/2020/11/25/Album/IMG_1234.jpg',
         relativePath: 'Album/IMG_1234.jpg',
         sizeBytes: 2000,
         capturedAt: '2020-11-25T10:00:00.000Z',
@@ -831,13 +831,13 @@ describe('refineDatesFromMetadata', () => {
     expect(result.refinedCount).toBe(1);
     expect(result.breakdown.editedToOriginal).toBe(1);
     expect(entries[0].datePath).toBe('2020/11/25');
-    expect(entries[0].destinationKey).toBe('transfers/2020/11/25/Album/IMG_1234-edited.jpg');
+    expect(entries[0].destinationKey).toBe('s3transfers/2020/11/25/Album/IMG_1234-edited.jpg');
   });
 
   it('resolves date via stem cross-extension (MP4 from JPG sidecar)', () => {
     const entries = [
       makeEntry({
-        destinationKey: 'transfers/2040/03/15/Album/IMG_0917.MP4',
+        destinationKey: 's3transfers/2040/03/15/Album/IMG_0917.MP4',
         capturedAt: '2040-03-15T00:00:00.000Z',
         datePath: '2040/03/15',
       }),
@@ -845,13 +845,13 @@ describe('refineDatesFromMetadata', () => {
 
     const metadata = makeMetadata([
       {
-        destinationKey: 'transfers/2040/03/15/Album/IMG_0917.MP4',
+        destinationKey: 's3transfers/2040/03/15/Album/IMG_0917.MP4',
         relativePath: 'Album/IMG_0917.MP4',
         sizeBytes: 50000,
         capturedAt: '2040-03-15T00:00:00.000Z',
       },
       {
-        destinationKey: 'transfers/2022/10/01/Album/IMG_0917.JPG',
+        destinationKey: 's3transfers/2022/10/01/Album/IMG_0917.JPG',
         relativePath: 'Album/IMG_0917.JPG',
         sizeBytes: 3000,
         capturedAt: '2022-10-01T10:10:00.000Z',
@@ -864,14 +864,14 @@ describe('refineDatesFromMetadata', () => {
     expect(result.breakdown.basenameMatch).toBe(0);
     expect(result.breakdown.stemCrossExtension).toBe(1);
     expect(entries[0].datePath).toBe('2022/10/01');
-    expect(entries[0].destinationKey).toBe('transfers/2022/10/01/Album/IMG_0917.MP4');
+    expect(entries[0].destinationKey).toBe('s3transfers/2022/10/01/Album/IMG_0917.MP4');
   });
 
   it('resolves unknown-date entry from a unique basename match with the same file size', () => {
     const entries = [
       makeEntry({
-        destinationKey: 'transfers/unknown-date/Familie_og_venner/IMG_0031.MOV',
-        relativePath: 'Familie og venner/IMG_0031.MOV',
+        destinationKey: 's3transfers/unknown-date/Sample_Album/IMG_0031.MOV',
+        relativePath: 'Sample Album/IMG_0031.MOV',
         capturedAt: '2026-03-15T20:16:02.384Z',
         datePath: 'unknown-date',
         size: 50000,
@@ -880,9 +880,9 @@ describe('refineDatesFromMetadata', () => {
 
     const metadata = makeMetadata([
       {
-        destinationKey: 'transfers/2017/06/04/Pinse_i_Losning/IMG_0031.MOV',
-        relativePath: 'Pinse i Losning/IMG_0031.MOV',
-        album: 'Pinse i Losning',
+        destinationKey: 's3transfers/2017/06/04/Sample_Trip/IMG_0031.MOV',
+        relativePath: 'Sample Trip/IMG_0031.MOV',
+        album: 'Sample Trip',
         sizeBytes: 50000,
         capturedAt: '2017-06-04T08:00:00.000Z',
         sidecar: { photoTakenTime: '4 Jun 2017, 08:00:00 UTC' },
@@ -893,13 +893,13 @@ describe('refineDatesFromMetadata', () => {
     expect(result.refinedCount).toBe(1);
     expect(result.breakdown.basenameMatch).toBe(1);
     expect(entries[0].datePath).toBe('2017/06/04');
-    expect(entries[0].destinationKey).toBe('transfers/2017/06/04/Familie_og_venner/IMG_0031.MOV');
+    expect(entries[0].destinationKey).toBe('s3transfers/2017/06/04/Sample_Album/IMG_0031.MOV');
   });
 
   it('resolves date via album median when no sidecar match', () => {
     const entries = [
       makeEntry({
-        destinationKey: 'transfers/2040/03/15/Vacation/random_file.gif',
+        destinationKey: 's3transfers/2040/03/15/Vacation/random_file.gif',
         relativePath: 'Vacation/random_file.gif',
         capturedAt: '2040-03-15T00:00:00.000Z',
         datePath: '2040/03/15',
@@ -908,14 +908,14 @@ describe('refineDatesFromMetadata', () => {
 
     const metadata = makeMetadata([
       {
-        destinationKey: 'transfers/2040/03/15/Vacation/random_file.gif',
+        destinationKey: 's3transfers/2040/03/15/Vacation/random_file.gif',
         relativePath: 'Vacation/random_file.gif',
         album: 'Vacation',
         sizeBytes: 500,
         capturedAt: '2040-03-15T00:00:00.000Z',
       },
       {
-        destinationKey: 'transfers/2019/08/10/Vacation/IMG_001.jpg',
+        destinationKey: 's3transfers/2019/08/10/Vacation/IMG_001.jpg',
         relativePath: 'Vacation/IMG_001.jpg',
         album: 'Vacation',
         sizeBytes: 2000,
@@ -923,7 +923,7 @@ describe('refineDatesFromMetadata', () => {
         sidecar: { photoTakenTime: '10 Aug 2019, 10:00:00 UTC' },
       },
       {
-        destinationKey: 'transfers/2019/08/12/Vacation/IMG_002.jpg',
+        destinationKey: 's3transfers/2019/08/12/Vacation/IMG_002.jpg',
         relativePath: 'Vacation/IMG_002.jpg',
         album: 'Vacation',
         sizeBytes: 2000,
@@ -931,7 +931,7 @@ describe('refineDatesFromMetadata', () => {
         sidecar: { photoTakenTime: '12 Aug 2019, 14:00:00 UTC' },
       },
       {
-        destinationKey: 'transfers/2019/08/14/Vacation/IMG_003.jpg',
+        destinationKey: 's3transfers/2019/08/14/Vacation/IMG_003.jpg',
         relativePath: 'Vacation/IMG_003.jpg',
         album: 'Vacation',
         sizeBytes: 2000,
@@ -950,7 +950,7 @@ describe('refineDatesFromMetadata', () => {
   it('does not use album median when fewer than 2 dated peers', () => {
     const entries = [
       makeEntry({
-        destinationKey: 'transfers/2040/03/15/Tiny/file.gif',
+        destinationKey: 's3transfers/2040/03/15/Tiny/file.gif',
         relativePath: 'Tiny/file.gif',
         capturedAt: '2040-03-15T00:00:00.000Z',
         datePath: '2040/03/15',
@@ -959,14 +959,14 @@ describe('refineDatesFromMetadata', () => {
 
     const metadata = makeMetadata([
       {
-        destinationKey: 'transfers/2040/03/15/Tiny/file.gif',
+        destinationKey: 's3transfers/2040/03/15/Tiny/file.gif',
         relativePath: 'Tiny/file.gif',
         album: 'Tiny',
         sizeBytes: 500,
         capturedAt: '2040-03-15T00:00:00.000Z',
       },
       {
-        destinationKey: 'transfers/2019/01/01/Tiny/one.jpg',
+        destinationKey: 's3transfers/2019/01/01/Tiny/one.jpg',
         relativePath: 'Tiny/one.jpg',
         album: 'Tiny',
         sizeBytes: 1000,
@@ -982,7 +982,7 @@ describe('refineDatesFromMetadata', () => {
   it('handles unknown-date entries', () => {
     const entries = [
       makeEntry({
-        destinationKey: 'transfers/unknown-date/Album/IMG_5555.MOV',
+        destinationKey: 's3transfers/unknown-date/Album/IMG_5555.MOV',
         capturedAt: '2040-03-15T00:00:00.000Z',
         datePath: 'unknown-date',
       }),
@@ -990,13 +990,13 @@ describe('refineDatesFromMetadata', () => {
 
     const metadata = makeMetadata([
       {
-        destinationKey: 'transfers/unknown-date/Album/IMG_5555.MOV',
+        destinationKey: 's3transfers/unknown-date/Album/IMG_5555.MOV',
         relativePath: 'Album/IMG_5555.MOV',
         sizeBytes: 10000,
         capturedAt: '2040-03-15T00:00:00.000Z',
       },
       {
-        destinationKey: 'transfers/2021/06/15/Album/IMG_5555.JPG',
+        destinationKey: 's3transfers/2021/06/15/Album/IMG_5555.JPG',
         relativePath: 'Album/IMG_5555.JPG',
         sizeBytes: 3000,
         capturedAt: '2021-06-15T00:00:00.000Z',
@@ -1013,7 +1013,7 @@ describe('refineDatesFromMetadata', () => {
   it('prefers edited-to-original over stem cross-extension', () => {
     const entries = [
       makeEntry({
-        destinationKey: 'transfers/2040/03/15/Album/IMG_1234-edited.PNG',
+        destinationKey: 's3transfers/2040/03/15/Album/IMG_1234-edited.PNG',
         capturedAt: '2040-03-15T00:00:00.000Z',
         datePath: '2040/03/15',
       }),
@@ -1021,13 +1021,13 @@ describe('refineDatesFromMetadata', () => {
 
     const metadata = makeMetadata([
       {
-        destinationKey: 'transfers/2040/03/15/Album/IMG_1234-edited.PNG',
+        destinationKey: 's3transfers/2040/03/15/Album/IMG_1234-edited.PNG',
         relativePath: 'Album/IMG_1234-edited.PNG',
         sizeBytes: 1000,
         capturedAt: '2040-03-15T00:00:00.000Z',
       },
       {
-        destinationKey: 'transfers/2020/05/01/Album/IMG_1234.PNG',
+        destinationKey: 's3transfers/2020/05/01/Album/IMG_1234.PNG',
         relativePath: 'Album/IMG_1234.PNG',
         sizeBytes: 2000,
         capturedAt: '2020-05-01T00:00:00.000Z',
@@ -1046,8 +1046,8 @@ describe('refineDatesFromMetadata', () => {
   it('can refine from metadata gathered across multiple archives', () => {
     const entries = [
       makeEntry({
-        destinationKey: 'transfers/unknown-date/Familie_og_venner/IMG_6222.HEIC',
-        relativePath: 'Familie og venner/IMG_6222.HEIC',
+        destinationKey: 's3transfers/unknown-date/Sample_Album/IMG_6222.HEIC',
+        relativePath: 'Sample Album/IMG_6222.HEIC',
         capturedAt: '2026-03-15T20:16:02.384Z',
         datePath: 'unknown-date',
         size: 12345,
@@ -1056,7 +1056,7 @@ describe('refineDatesFromMetadata', () => {
 
     const metadataA = makeMetadata([
       {
-        destinationKey: 'transfers/2016/07/23/Other_Album/IMG_6222.HEIC',
+        destinationKey: 's3transfers/2016/07/23/Other_Album/IMG_6222.HEIC',
         relativePath: 'Other Album/IMG_6222.HEIC',
         album: 'Other Album',
         sizeBytes: 12345,

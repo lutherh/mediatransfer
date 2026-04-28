@@ -1106,7 +1106,7 @@ export type DuplicateGroup = {
   keepKey: string;
   /** Raw S3 keys that are safe to delete. */
   duplicateKeys: string[];
-  /** True when the group spans `immich/` and `transfers/` namespaces. */
+  /** True when the group spans `immich/` and `s3transfers/` namespaces. */
   crossNamespace: boolean;
   /** True when all keys are in `immich/` — must be deduplicated via Immich. */
   immichOnly: boolean;

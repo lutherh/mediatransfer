@@ -98,7 +98,7 @@ describe('scaleway catalog service', () => {
     const send = vi.fn(async () => ({
       Contents: [
         {
-          Key: 'transfers/2022/08/03/Photos_from_2022/68120710305__48F6AE01-7E45-45D1-9DE6-9175E5E32C.JPG',
+          Key: 's3transfers/2022/08/03/Photos_from_2022/68120710305__48F6AE01-7E45-45D1-9DE6-9175E5E32C.JPG',
           Size: 2_600_000,
           LastModified: new Date('2026-03-18T23:31:01.000Z'),
         },
@@ -117,7 +117,7 @@ describe('scaleway catalog service', () => {
     const send = vi.fn(async () => ({
       Contents: [
         { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
-        { Key: 'transfers/unknown-date/b.jpg', Size: 200, LastModified: new Date('2024-01-01') },
+        { Key: 's3transfers/unknown-date/b.jpg', Size: 200, LastModified: new Date('2024-01-01') },
         { Key: '2021/06/15/c.mp4', Size: 300, LastModified: new Date('2021-06-15') },
       ],
       IsTruncated: false,
@@ -137,10 +137,10 @@ describe('scaleway catalog service', () => {
         if (callCount === 1) {
           return {
             Contents: [
-              { Key: 'transfers/2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
-              { Key: 'transfers/2021/06/15/b.jpg', Size: 200, LastModified: new Date('2021-06-15') },
-              { Key: 'transfers/2024/03/10/c.mp4', Size: 300, LastModified: new Date('2024-03-10') },
-              { Key: 'transfers/2025/12/25/d.jpg', Size: 400, LastModified: new Date('2025-12-25') },
+              { Key: 's3transfers/2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
+              { Key: 's3transfers/2021/06/15/b.jpg', Size: 200, LastModified: new Date('2021-06-15') },
+              { Key: 's3transfers/2024/03/10/c.mp4', Size: 300, LastModified: new Date('2024-03-10') },
+              { Key: 's3transfers/2025/12/25/d.jpg', Size: 400, LastModified: new Date('2025-12-25') },
             ],
             IsTruncated: false,
           };
@@ -154,8 +154,8 @@ describe('scaleway catalog service', () => {
       const service = makeDescService();
       const page = await service.listPage({ max: 10, sort: 'desc' });
       expect(page.items).toHaveLength(4);
-      expect(page.items[0]?.key).toBe('transfers/2025/12/25/d.jpg');
-      expect(page.items[3]?.key).toBe('transfers/2020/01/01/a.jpg');
+      expect(page.items[0]?.key).toBe('s3transfers/2025/12/25/d.jpg');
+      expect(page.items[3]?.key).toBe('s3transfers/2020/01/01/a.jpg');
     });
 
     it('paginates with numeric offset tokens', async () => {
@@ -163,11 +163,11 @@ describe('scaleway catalog service', () => {
       const page1 = await service.listPage({ max: 2, sort: 'desc' });
       expect(page1.items).toHaveLength(2);
       expect(page1.nextToken).toBe('2');
-      expect(page1.items[0]?.key).toBe('transfers/2025/12/25/d.jpg');
+      expect(page1.items[0]?.key).toBe('s3transfers/2025/12/25/d.jpg');
 
       const page2 = await service.listPage({ max: 2, token: page1.nextToken, sort: 'desc' });
       expect(page2.items).toHaveLength(2);
-      expect(page2.items[0]?.key).toBe('transfers/2021/06/15/b.jpg');
+      expect(page2.items[0]?.key).toBe('s3transfers/2021/06/15/b.jpg');
       expect(page2.nextToken).toBeUndefined();
     });
 
@@ -175,21 +175,21 @@ describe('scaleway catalog service', () => {
       const service = makeDescService();
       const page = await service.listPage({ max: 10, prefix: '2020', sort: 'desc' });
       expect(page.items).toHaveLength(1);
-      expect(page.items[0]?.key).toBe('transfers/2020/01/01/a.jpg');
+      expect(page.items[0]?.key).toBe('s3transfers/2020/01/01/a.jpg');
     });
 
     it('searches by filename substring when query does not start with a digit', async () => {
       const service = makeDescService();
       const page = await service.listPage({ max: 10, prefix: 'c.mp4', sort: 'desc' });
       expect(page.items).toHaveLength(1);
-      expect(page.items[0]?.key).toBe('transfers/2024/03/10/c.mp4');
+      expect(page.items[0]?.key).toBe('s3transfers/2024/03/10/c.mp4');
     });
 
     it('filename search is case-insensitive', async () => {
       const service = makeDescService();
       const page = await service.listPage({ max: 10, prefix: 'C.MP4', sort: 'desc' });
       expect(page.items).toHaveLength(1);
-      expect(page.items[0]?.key).toBe('transfers/2024/03/10/c.mp4');
+      expect(page.items[0]?.key).toBe('s3transfers/2024/03/10/c.mp4');
     });
 
     it('returns empty for invalid token', async () => {
@@ -299,8 +299,8 @@ describe('scaleway catalog service', () => {
       const send = vi.fn(async () => ({
         Contents: [
           { Key: '2020/01/01/a.jpg', Size: 100, LastModified: new Date('2020-01-01') },
-          { Key: 'transfers/unknown-date/b.jpg', Size: 200, LastModified: new Date('2024-01-01') },
-          { Key: 'transfers/unknown-date/subdir/c.mp4', Size: 300, LastModified: new Date('2024-01-01') },
+          { Key: 's3transfers/unknown-date/b.jpg', Size: 200, LastModified: new Date('2024-01-01') },
+          { Key: 's3transfers/unknown-date/subdir/c.mp4', Size: 300, LastModified: new Date('2024-01-01') },
         ],
         IsTruncated: false,
       }));
@@ -316,8 +316,8 @@ describe('scaleway catalog service', () => {
     it('returns only unknown-date items', async () => {
       const send = vi.fn(async () => ({
         Contents: [
-          { Key: 'transfers/unknown-date/a.jpg', Size: 100, LastModified: new Date('2024-03-01') },
-          { Key: 'transfers/unknown-date/sub/b.mp4', Size: 200, LastModified: new Date('2024-03-02') },
+          { Key: 's3transfers/unknown-date/a.jpg', Size: 100, LastModified: new Date('2024-03-01') },
+          { Key: 's3transfers/unknown-date/sub/b.mp4', Size: 200, LastModified: new Date('2024-03-02') },
         ],
         IsTruncated: false,
       }));
@@ -325,8 +325,8 @@ describe('scaleway catalog service', () => {
       const service = makeService(send);
       const items = await service.listUndated();
       expect(items).toHaveLength(2);
-      expect(items[0]?.key).toBe('transfers/unknown-date/sub/b.mp4');
-      expect(items[1]?.key).toBe('transfers/unknown-date/a.jpg');
+      expect(items[0]?.key).toBe('s3transfers/unknown-date/sub/b.mp4');
+      expect(items[1]?.key).toBe('s3transfers/unknown-date/a.jpg');
     });
 
     it('returns empty list when no undated items', async () => {
@@ -343,8 +343,8 @@ describe('scaleway catalog service', () => {
     it('filters out non-media files', async () => {
       const send = vi.fn(async () => ({
         Contents: [
-          { Key: 'transfers/unknown-date/a.jpg', Size: 100, LastModified: new Date('2024-03-01') },
-          { Key: 'transfers/unknown-date/notes.txt', Size: 50, LastModified: new Date('2024-03-01') },
+          { Key: 's3transfers/unknown-date/a.jpg', Size: 100, LastModified: new Date('2024-03-01') },
+          { Key: 's3transfers/unknown-date/notes.txt', Size: 50, LastModified: new Date('2024-03-01') },
         ],
         IsTruncated: false,
       }));
@@ -352,7 +352,7 @@ describe('scaleway catalog service', () => {
       const service = makeService(send);
       const items = await service.listUndated();
       expect(items).toHaveLength(1);
-      expect(items[0]?.key).toBe('transfers/unknown-date/a.jpg');
+      expect(items[0]?.key).toBe('s3transfers/unknown-date/a.jpg');
     });
   });
 
@@ -575,7 +575,7 @@ describe('scaleway catalog service', () => {
     it('counts files and byte sizes correctly', async () => {
       const send = vi.fn(async (cmd: any) => {
         const prefix = cmd.input?.Prefix ?? '';
-        if (prefix.startsWith('transfers/unknown-date')) {
+        if (prefix.startsWith('s3transfers/unknown-date')) {
           return { Contents: [], IsTruncated: false };
         }
         return {
@@ -601,11 +601,11 @@ describe('scaleway catalog service', () => {
     it('counts undated items separately', async () => {
       const send = vi.fn(async (cmd: any) => {
         const prefix = cmd.input?.Prefix ?? '';
-        if (prefix.startsWith('transfers/unknown-date')) {
+        if (prefix.startsWith('s3transfers/unknown-date')) {
           return {
             Contents: [
-              { Key: 'transfers/unknown-date/x.jpg', Size: 500, LastModified: new Date('2024-06-01') },
-              { Key: 'transfers/unknown-date/y.mp4', Size: 1500, LastModified: new Date('2024-06-02') },
+              { Key: 's3transfers/unknown-date/x.jpg', Size: 500, LastModified: new Date('2024-06-01') },
+              { Key: 's3transfers/unknown-date/y.mp4', Size: 1500, LastModified: new Date('2024-06-02') },
             ],
             IsTruncated: false,
           };
@@ -649,43 +649,43 @@ describe('scaleway catalog service', () => {
   describe('scoreKeyForKeep', () => {
     it('scores immich/library/ highest', () => {
       expect(scoreKeyForKeep('immich/library/admin/2020/2020-03-15/photo.jpg')).toBeGreaterThan(
-        scoreKeyForKeep('transfers/2020/03/15/photo.jpg'),
+        scoreKeyForKeep('s3transfers/2020/03/15/photo.jpg'),
       );
     });
 
-    it('scores immich/upload/ higher than transfers/', () => {
+    it('scores immich/upload/ higher than s3transfers/', () => {
       expect(scoreKeyForKeep('immich/upload/uuid/01/02/file.jpg')).toBeGreaterThan(
-        scoreKeyForKeep('transfers/2020/03/15/photo.jpg'),
+        scoreKeyForKeep('s3transfers/2020/03/15/photo.jpg'),
       );
     });
 
-    it('scores dated transfers/ path higher than undated', () => {
-      const dated = scoreKeyForKeep('transfers/2020/03/15/photo.jpg');
-      const undated = scoreKeyForKeep('transfers/unknown-date/photo.jpg');
+    it('scores dated s3transfers/ path higher than undated', () => {
+      const dated = scoreKeyForKeep('s3transfers/2020/03/15/photo.jpg');
+      const undated = scoreKeyForKeep('s3transfers/unknown-date/photo.jpg');
       expect(dated).toBeGreaterThan(undated);
     });
 
     it('penalises deeply nested keys within same namespace', () => {
-      const shallow = scoreKeyForKeep('transfers/2020/03/15/photo.jpg');
-      const deep = scoreKeyForKeep('transfers/2020/03/15/sub/folder/photo.jpg');
+      const shallow = scoreKeyForKeep('s3transfers/2020/03/15/photo.jpg');
+      const deep = scoreKeyForKeep('s3transfers/2020/03/15/sub/folder/photo.jpg');
       expect(shallow).toBeGreaterThan(deep);
     });
 
     it('returns positive score for dated transfers path', () => {
-      expect(scoreKeyForKeep('transfers/2020/01/01/img.jpg')).toBeGreaterThan(0);
+      expect(scoreKeyForKeep('s3transfers/2020/01/01/img.jpg')).toBeGreaterThan(0);
     });
 
     it('returns lower score for undated paths than dated', () => {
-      expect(scoreKeyForKeep('transfers/unknown-date/img.jpg')).toBeLessThan(
-        scoreKeyForKeep('transfers/2020/01/01/img.jpg'),
+      expect(scoreKeyForKeep('s3transfers/unknown-date/img.jpg')).toBeLessThan(
+        scoreKeyForKeep('s3transfers/2020/01/01/img.jpg'),
       );
     });
 
-    it('immich path with extreme depth (30 slashes) still beats transfers/', () => {
-      // Bonus of +30 for immich/ minus 30 slashes = 0, which is still >= transfers/ scored 4.
+    it('immich path with extreme depth (30 slashes) still beats s3transfers/', () => {
+      // Bonus of +30 for immich/ minus 30 slashes = 0, which is still >= s3transfers/ scored 4.
       // With +50 for immich/library/ the margin is even larger.
       const deepImmich = 'immich/library/' + 'level/'.repeat(14) + 'photo.jpg'; // 16 slashes
-      const transfers = 'transfers/2020/03/15/photo.jpg'; // 4 slashes, score = 4
+      const transfers = 's3transfers/2020/03/15/photo.jpg'; // 4 slashes, score = 4
       expect(scoreKeyForKeep(deepImmich)).toBeGreaterThan(scoreKeyForKeep(transfers));
     });
   });
@@ -693,18 +693,18 @@ describe('scaleway catalog service', () => {
   describe('buildDuplicateGroups', () => {
     it('returns empty array when no duplicates', () => {
       const objects = [
-        { key: 'transfers/2020/01/01/a.jpg', size: 100, etag: 'aaa' },
-        { key: 'transfers/2020/01/02/b.jpg', size: 200, etag: 'bbb' },
-        { key: 'transfers/2020/01/03/c.jpg', size: 300, etag: 'ccc' },
+        { key: 's3transfers/2020/01/01/a.jpg', size: 100, etag: 'aaa' },
+        { key: 's3transfers/2020/01/02/b.jpg', size: 200, etag: 'bbb' },
+        { key: 's3transfers/2020/01/03/c.jpg', size: 300, etag: 'ccc' },
       ];
       expect(buildDuplicateGroups(objects)).toEqual([]);
     });
 
     it('groups duplicates by size + etag', () => {
       const objects = [
-        { key: 'transfers/2020/01/01/a.jpg', size: 100, etag: 'aaa' },
-        { key: 'transfers/2021/06/15/a_copy.jpg', size: 100, etag: 'aaa' },
-        { key: 'transfers/2020/01/02/b.jpg', size: 200, etag: 'bbb' },
+        { key: 's3transfers/2020/01/01/a.jpg', size: 100, etag: 'aaa' },
+        { key: 's3transfers/2021/06/15/a_copy.jpg', size: 100, etag: 'aaa' },
+        { key: 's3transfers/2020/01/02/b.jpg', size: 200, etag: 'bbb' },
       ];
       const groups = buildDuplicateGroups(objects);
       expect(groups).toHaveLength(1);
@@ -713,33 +713,33 @@ describe('scaleway catalog service', () => {
 
     it('keeps the dated transfers copy over the undated copy', () => {
       const objects = [
-        { key: 'transfers/unknown-date/photo.jpg', size: 500, etag: 'eee' },
-        { key: 'transfers/2020/03/15/photo.jpg', size: 500, etag: 'eee' },
+        { key: 's3transfers/unknown-date/photo.jpg', size: 500, etag: 'eee' },
+        { key: 's3transfers/2020/03/15/photo.jpg', size: 500, etag: 'eee' },
       ];
       const groups = buildDuplicateGroups(objects);
       expect(groups).toHaveLength(1);
-      expect(groups[0]!.keepKey).toBe('transfers/2020/03/15/photo.jpg');
-      expect(groups[0]!.duplicateKeys).toEqual(['transfers/unknown-date/photo.jpg']);
+      expect(groups[0]!.keepKey).toBe('s3transfers/2020/03/15/photo.jpg');
+      expect(groups[0]!.duplicateKeys).toEqual(['s3transfers/unknown-date/photo.jpg']);
       expect(groups[0]!.crossNamespace).toBe(false);
       expect(groups[0]!.immichOnly).toBe(false);
     });
 
-    it('cross-namespace: keeps immich/library/ copy over transfers/ copy', () => {
+    it('cross-namespace: keeps immich/library/ copy over s3transfers/ copy', () => {
       const objects = [
-        { key: 'transfers/2019/07/06/20190706_122849.jpg', size: 15_000_000, etag: 'abc' },
+        { key: 's3transfers/2019/07/06/20190706_122849.jpg', size: 15_000_000, etag: 'abc' },
         { key: 'immich/library/admin/2019/2019-07-06/20190706_122849.jpg', size: 15_000_000, etag: 'abc' },
       ];
       const groups = buildDuplicateGroups(objects);
       expect(groups).toHaveLength(1);
       expect(groups[0]!.keepKey).toBe('immich/library/admin/2019/2019-07-06/20190706_122849.jpg');
-      expect(groups[0]!.duplicateKeys).toEqual(['transfers/2019/07/06/20190706_122849.jpg']);
+      expect(groups[0]!.duplicateKeys).toEqual(['s3transfers/2019/07/06/20190706_122849.jpg']);
       expect(groups[0]!.crossNamespace).toBe(true);
       expect(groups[0]!.immichOnly).toBe(false);
     });
 
-    it('cross-namespace: keeps immich/library/ over transfers/unknown-date/', () => {
+    it('cross-namespace: keeps immich/library/ over s3transfers/unknown-date/', () => {
       const objects = [
-        { key: 'transfers/unknown-date/f63d869b-MVI_6667.AVI', size: 229_900_000, etag: 'xyz' },
+        { key: 's3transfers/unknown-date/f63d869b-MVI_6667.AVI', size: 229_900_000, etag: 'xyz' },
         { key: 'immich/upload/765547b1-e737-4815-9244-a6ce3cd6d659/02/83/0283776f.mp4', size: 229_900_000, etag: 'xyz' },
       ];
       const groups = buildDuplicateGroups(objects);
@@ -762,28 +762,28 @@ describe('scaleway catalog service', () => {
 
     it('handles triple duplicates — keeps one, removes two', () => {
       const objects = [
-        { key: 'transfers/unknown-date/photo.jpg', size: 1000, etag: 'fff' },
-        { key: 'transfers/2020/06/01/photo.jpg', size: 1000, etag: 'fff' },
-        { key: 'transfers/2020/06/02/photo_copy.jpg', size: 1000, etag: 'fff' },
+        { key: 's3transfers/unknown-date/photo.jpg', size: 1000, etag: 'fff' },
+        { key: 's3transfers/2020/06/01/photo.jpg', size: 1000, etag: 'fff' },
+        { key: 's3transfers/2020/06/02/photo_copy.jpg', size: 1000, etag: 'fff' },
       ];
       const groups = buildDuplicateGroups(objects);
       expect(groups).toHaveLength(1);
-      expect(groups[0]!.keepKey).toBe('transfers/2020/06/01/photo.jpg');
+      expect(groups[0]!.keepKey).toBe('s3transfers/2020/06/01/photo.jpg');
       expect(groups[0]!.duplicateKeys).toHaveLength(2);
     });
 
     it('does not group items with same size but different etag', () => {
       const objects = [
-        { key: 'transfers/2020/01/01/a.jpg', size: 100, etag: 'aaa' },
-        { key: 'transfers/2020/01/02/b.jpg', size: 100, etag: 'bbb' },
+        { key: 's3transfers/2020/01/01/a.jpg', size: 100, etag: 'aaa' },
+        { key: 's3transfers/2020/01/02/b.jpg', size: 100, etag: 'bbb' },
       ];
       expect(buildDuplicateGroups(objects)).toEqual([]);
     });
 
     it('does not group items with same etag but different size', () => {
       const objects = [
-        { key: 'transfers/2020/01/01/a.jpg', size: 100, etag: 'aaa' },
-        { key: 'transfers/2020/01/02/b.jpg', size: 200, etag: 'aaa' },
+        { key: 's3transfers/2020/01/01/a.jpg', size: 100, etag: 'aaa' },
+        { key: 's3transfers/2020/01/02/b.jpg', size: 200, etag: 'aaa' },
       ];
       expect(buildDuplicateGroups(objects)).toEqual([]);
     });
@@ -791,11 +791,11 @@ describe('scaleway catalog service', () => {
     it('sorts groups by bytes wasted descending', () => {
       const objects = [
         // group A: 1 dup × 100 = 100 bytes wasted
-        { key: 'transfers/2020/01/01/small.jpg', size: 100, etag: 'aaa' },
-        { key: 'transfers/2020/01/02/small_copy.jpg', size: 100, etag: 'aaa' },
+        { key: 's3transfers/2020/01/01/small.jpg', size: 100, etag: 'aaa' },
+        { key: 's3transfers/2020/01/02/small_copy.jpg', size: 100, etag: 'aaa' },
         // group B: 1 dup × 5000 = 5000 bytes wasted
-        { key: 'transfers/2020/01/01/big.mp4', size: 5000, etag: 'bbb' },
-        { key: 'transfers/2020/01/02/big_copy.mp4', size: 5000, etag: 'bbb' },
+        { key: 's3transfers/2020/01/01/big.mp4', size: 5000, etag: 'bbb' },
+        { key: 's3transfers/2020/01/02/big_copy.mp4', size: 5000, etag: 'bbb' },
       ];
       const groups = buildDuplicateGroups(objects);
       expect(groups).toHaveLength(2);
@@ -805,28 +805,28 @@ describe('scaleway catalog service', () => {
 
     it('uses lexicographic order as tiebreaker when scores are equal', () => {
       const objects = [
-        { key: 'transfers/2020/01/01/z_photo.jpg', size: 100, etag: 'aaa' },
-        { key: 'transfers/2020/01/01/a_photo.jpg', size: 100, etag: 'aaa' },
+        { key: 's3transfers/2020/01/01/z_photo.jpg', size: 100, etag: 'aaa' },
+        { key: 's3transfers/2020/01/01/a_photo.jpg', size: 100, etag: 'aaa' },
       ];
       const groups = buildDuplicateGroups(objects);
       expect(groups).toHaveLength(1);
       // Both have same score, so lexicographically smaller key wins
-      expect(groups[0]!.keepKey).toBe('transfers/2020/01/01/a_photo.jpg');
-      expect(groups[0]!.duplicateKeys).toEqual(['transfers/2020/01/01/z_photo.jpg']);
+      expect(groups[0]!.keepKey).toBe('s3transfers/2020/01/01/a_photo.jpg');
+      expect(groups[0]!.duplicateKeys).toEqual(['s3transfers/2020/01/01/z_photo.jpg']);
     });
 
     it('handles multiple independent duplicate groups', () => {
       const objects = [
-        { key: 'transfers/2020/01/01/a.jpg', size: 100, etag: 'aaa' },
-        { key: 'transfers/2020/01/02/a_copy.jpg', size: 100, etag: 'aaa' },
-        { key: 'transfers/2020/03/01/b.mp4', size: 2000, etag: 'bbb' },
-        { key: 'transfers/2020/03/02/b_copy.mp4', size: 2000, etag: 'bbb' },
-        { key: 'transfers/2020/05/01/c.png', size: 500, etag: 'ccc' }, // unique
+        { key: 's3transfers/2020/01/01/a.jpg', size: 100, etag: 'aaa' },
+        { key: 's3transfers/2020/01/02/a_copy.jpg', size: 100, etag: 'aaa' },
+        { key: 's3transfers/2020/03/01/b.mp4', size: 2000, etag: 'bbb' },
+        { key: 's3transfers/2020/03/02/b_copy.mp4', size: 2000, etag: 'bbb' },
+        { key: 's3transfers/2020/05/01/c.png', size: 500, etag: 'ccc' }, // unique
       ];
       const groups = buildDuplicateGroups(objects);
       expect(groups).toHaveLength(2);
       const allDupKeys = groups.flatMap((g) => g.duplicateKeys);
-      expect(allDupKeys).not.toContain('transfers/2020/05/01/c.png');
+      expect(allDupKeys).not.toContain('s3transfers/2020/05/01/c.png');
     });
 
     it('handles empty input', () => {

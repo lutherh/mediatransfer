@@ -94,18 +94,18 @@ export { toDatePath } from '../../src/utils/storage-paths.js';
 /**
  * Rewrite the date portion of an S3 key.
  *
- * Handles both `transfers/YYYY/MM/DD/…` and `transfers/unknown-date/…` layouts.
+ * Handles both `s3transfers/YYYY/MM/DD/…` and `s3transfers/unknown-date/…` layouts.
  */
 export function computeNewKey(oldKey: string, newDatePath: string): string {
   if (oldKey.includes('unknown-date/')) {
     const rest = oldKey.split('unknown-date/')[1];
-    return `transfers/${newDatePath}/${rest}`;
+    return `s3transfers/${newDatePath}/${rest}`;
   }
-  // Standard date path: transfers/YYYY/MM/DD/...
+  // Standard date path: s3transfers/YYYY/MM/DD/...
   const parts = oldKey.split('/');
   // parts[0] = 'transfers', [1] = year, [2] = month, [3] = day, [4+] = rest
   const rest = parts.slice(4).join('/');
-  return `transfers/${newDatePath}/${rest}`;
+  return `s3transfers/${newDatePath}/${rest}`;
 }
 
 /** True when the date falls in the current year or later (likely upload/extraction time). */

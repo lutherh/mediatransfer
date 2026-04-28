@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { inferDateFromFilename, extractExifMetadata, extractVideoCreationDate } from '../utils/exif.js';
 import { isWrongDate, parseSidecarDate } from '../utils/date-repair.js';
-import { UNDATED_PREFIX, toDatePath } from '../utils/storage-paths.js';
+import { UNDATED_PREFIX, S3TRANSFERS_PREFIX, toDatePath } from '../utils/storage-paths.js';
 import { MEDIA_EXTENSIONS } from '../utils/media-extensions.js';
 import type { ArchiveMetadata, MediaItemMetadata } from './archive-metadata.js';
 
@@ -62,7 +62,7 @@ export async function buildManifest(
         const datePath = capturedAtDate
           ? toDatePath(capturedAtDate)
           : UNDATED_PREFIX;
-        const destinationKey = `transfers/${datePath}/${sanitizeRelativePath(relativePath)}`;
+        const destinationKey = `${S3TRANSFERS_PREFIX}/${datePath}/${sanitizeRelativePath(relativePath)}`;
 
         return {
           sourcePath,
@@ -567,7 +567,7 @@ function applyResolvedDate(
     : parts.slice(4).join('/');
   entry.capturedAt = resolvedDate.toISOString();
   entry.datePath = newDatePath;
-  entry.destinationKey = `transfers/${newDatePath}/${albumFile || sanitizeRelativePath(entry.relativePath)}`;
+  entry.destinationKey = `${S3TRANSFERS_PREFIX}/${newDatePath}/${albumFile || sanitizeRelativePath(entry.relativePath)}`;
   breakdown[source] += 1;
 }
 
@@ -686,8 +686,8 @@ export type DeduplicateManifestResult = {
 export function scoreEntryForKeep(entry: ManifestEntry): number {
   let score = 0;
 
-  // Proper date path at the start of the key (after optional transfers/ prefix)
-  if (/^(?:transfers\/)?(?:19|20)\d{2}\/\d{2}\/\d{2}\//.test(entry.destinationKey)) {
+  // Proper date path at the start of the key (after optional s3transfers/ prefix)
+  if (/^(?:s3transfers\/)?(?:19|20)\d{2}\/\d{2}\/\d{2}\//.test(entry.destinationKey)) {
     score += 10;
   }
 

@@ -4,6 +4,7 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import type { CloudProvider } from '../providers/types.js';
 import type { MediaItem, PhotosProvider } from '../providers/photos-types.js';
+import { S3TRANSFERS_PREFIX, UNDATED_KEY_PREFIX } from '../utils/storage-paths.js';
 
 export type GoogleApiPendingItem = {
   id: string;
@@ -340,13 +341,13 @@ function buildDestinationKey(item: GoogleApiPendingItem): string {
   const dateValue = Number.isNaN(date.getTime()) ? undefined : date;
   if (!dateValue) {
     const safeName = sanitizeFileName(item.filename);
-    return `transfers/unknown-date/${item.id}-${safeName}`;
+    return `${UNDATED_KEY_PREFIX}/${item.id}-${safeName}`;
   }
   const year = dateValue.getUTCFullYear();
   const month = String(dateValue.getUTCMonth() + 1).padStart(2, '0');
   const day = String(dateValue.getUTCDate()).padStart(2, '0');
   const safeName = sanitizeFileName(item.filename);
-  return `transfers/${year}/${month}/${day}/${item.id}-${safeName}`;
+  return `${S3TRANSFERS_PREFIX}/${year}/${month}/${day}/${item.id}-${safeName}`;
 }
 
 function sanitizeFileName(name: string): string {

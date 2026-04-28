@@ -8,7 +8,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { extractExifMetadata, extractVideoCreationDate, inferDateFromFilename } from '../../utils/exif.js';
 import { isWrongDate } from '../../utils/date-repair.js';
-import { UNDATED_PREFIX } from '../../utils/storage-paths.js';
+import { UNDATED_PREFIX, S3TRANSFERS_PREFIX } from '../../utils/storage-paths.js';
 import { VIDEO_EXTENSIONS } from '../../utils/media-extensions.js';
 import type { UploadService } from '../types.js';
 import { apiError } from '../errors.js';
@@ -104,7 +104,7 @@ export async function registerUploadRoutes(
           : UNDATED_PREFIX;
         const sanitized = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
         const uniquePrefix = digest.slice(0, 8);
-        const s3Key = `transfers/${datePath}/${uniquePrefix}-${sanitized}`;
+        const s3Key = `${S3TRANSFERS_PREFIX}/${datePath}/${uniquePrefix}-${sanitized}`;
 
         // Upload to storage
         const stream = createReadStream(tempFilePath);
