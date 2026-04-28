@@ -1338,7 +1338,25 @@ export type ImmichSettingsResponse = {
   apiKey?: string;
 };
 
-export type TestResult = { ok: boolean; error?: string; serverVersion?: string };
+export type ValidationIssue = { path: (string | number)[]; message: string };
+
+export class SettingsValidationError extends Error {
+  constructor(message: string, public readonly issues: ValidationIssue[] = []) {
+    super(message);
+    this.name = 'SettingsValidationError';
+  }
+}
+
+async function throwSettingsError(res: Response, fallback: string): Promise<never> {
+  const body = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    issues?: ValidationIssue[];
+  };
+  const message = body.error ?? fallback;
+  throw new SettingsValidationError(message, body.issues ?? []);
+}
+
+export type TestResult = { ok: boolean; error?: string; serverVersion?: string; issues?: ValidationIssue[] };
 
 export async function fetchBootstrapStatus(): Promise<BootstrapStatus> {
   const res = await fetch(`${API_BASE_URL}/setup/bootstrap-status`, {
@@ -1391,13 +1409,26 @@ export async function saveScalewaySettings(body: {
     signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({})) as { error?: string };
-    throw new Error(err.error ?? `Save failed (${res.status})`);
+    await throwSettingsError(res, `Save failed (${res.status})`);
   }
 }
 
 export async function fetchGoogleSettings(): Promise<GoogleSettingsResponse> {
   const res = await apiFetch(`${API_BASE_URL}/settings/google`);
+  return res.json();
+}
+
+export async function testGoogleSettings(body: {
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+}): Promise<TestResult> {
+  const res = await apiFetch(`${API_BASE_URL}/settings/google/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15_000),
+  });
   return res.json();
 }
 
@@ -1410,10 +1441,10 @@ export async function saveGoogleSettings(body: {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({})) as { error?: string };
-    throw new Error(err.error ?? `Save failed (${res.status})`);
+    await throwSettingsError(res, `Save failed (${res.status})`);
   }
 }
 
@@ -1445,14 +1476,14 @@ export async function saveImmichSettings(body: {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({})) as { error?: string };
-    throw new Error(err.error ?? `Save failed (${res.status})`);
+    await throwSettingsError(res, `Save failed (${res.status})`);
   }
 }
 
 export async function checkImmichReachable(url: string): Promise<{
   ok: boolean;
   status?: number;
+  reason?: 'unauthorized';
   error?: string;
 }> {
   const res = await apiFetch(

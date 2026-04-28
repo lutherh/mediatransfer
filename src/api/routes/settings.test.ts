@@ -341,9 +341,17 @@ describe('GET /settings/google', () => {
 describe('PUT /settings/google', () => {
   afterEach(() => {
     vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
-  it('saves config and returns 204', async () => {
+  it('saves config and returns 204 when credential test passes', async () => {
+    // Google responds with `invalid_grant` for the bogus probe code → creds valid.
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      json: async () => ({ error: 'invalid_grant' }),
+    })));
     mockGet.mockResolvedValue(null);
     const { app, register } = buildApp();
     await register();
@@ -360,6 +368,26 @@ describe('PUT /settings/google', () => {
     });
   });
 
+  it('returns 400 and does not save when Google rejects the client (invalid_client)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      json: async () => ({ error: 'invalid_client' }),
+    })));
+    mockGet.mockResolvedValue(null);
+    const { app, register } = buildApp();
+    await register();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/settings/google',
+      payload: { clientId: 'bad', clientSecret: 'bad', redirectUri: 'http://localhost:5173/auth/google/callback' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(mockSet).not.toHaveBeenCalled();
+    expect(res.json().error).toMatch(/Invalid client ID or client secret/);
+  });
+
   it('returns 400 for missing redirectUri', async () => {
     const { app, register } = buildApp();
     await register();
@@ -370,6 +398,101 @@ describe('PUT /settings/google', () => {
     });
     expect(res.statusCode).toBe(400);
     expect(mockSet).not.toHaveBeenCalled();
+    // B4: Aggregated issues array
+    const body = res.json();
+    expect(Array.isArray(body.issues)).toBe(true);
+    expect(body.issues.length).toBeGreaterThan(0);
+    expect(body.issues[0].path).toContain('redirectUri');
+  });
+});
+
+describe('POST /settings/google/test', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  it('returns ok: true when Google rejects only the probe code (invalid_grant)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      json: async () => ({ error: 'invalid_grant' }),
+    })));
+    const { app, register } = buildApp();
+    await register();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/settings/google/test',
+      payload: { clientId: 'id', clientSecret: 'sec', redirectUri: 'http://localhost:5173/auth/google/callback' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
+  });
+
+  it('returns 400 with helpful error when client credentials are bad (invalid_client)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      json: async () => ({ error: 'invalid_client' }),
+    })));
+    const { app, register } = buildApp();
+    await register();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/settings/google/test',
+      payload: { clientId: 'bad', clientSecret: 'bad', redirectUri: 'http://localhost:5173/auth/google/callback' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().ok).toBe(false);
+    expect(res.json().error).toMatch(/Invalid client ID or client secret/);
+  });
+
+  it('returns 400 with helpful error when redirect URI is not registered', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      json: async () => ({ error: 'redirect_uri_mismatch' }),
+    })));
+    const { app, register } = buildApp();
+    await register();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/settings/google/test',
+      payload: { clientId: 'id', clientSecret: 'sec', redirectUri: 'http://localhost:9999/cb' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/Redirect URI/);
+  });
+
+  it('returns 400 when fetch throws (network error)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ENETUNREACH'); }));
+    const { app, register } = buildApp();
+    await register();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/settings/google/test',
+      payload: { clientId: 'id', clientSecret: 'sec', redirectUri: 'http://localhost:5173/auth/google/callback' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('ENETUNREACH');
+  });
+
+  it('returns 400 with aggregated issues when body is invalid', async () => {
+    const { app, register } = buildApp();
+    await register();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/settings/google/test',
+      payload: { clientId: '', clientSecret: '', redirectUri: 'not-a-url' },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.ok).toBe(false);
+    expect(Array.isArray(body.issues)).toBe(true);
+    expect(body.issues.length).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -547,5 +670,131 @@ describe('PUT /settings/immich', () => {
     });
     expect(res.statusCode).toBe(400);
     expect(mockSet).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /settings/immich/reachable', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  it('returns ok: true with status when the server responds 2xx', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200 })));
+    const { app, register } = buildApp();
+    await register();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/settings/immich/reachable?url=' + encodeURIComponent('http://immich.local'),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, status: 200 });
+  });
+
+  it('returns ok: false with reason: unauthorized when the server responds 401', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401 })));
+    const { app, register } = buildApp();
+    await register();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/settings/immich/reachable?url=' + encodeURIComponent('http://immich.local'),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: false, reason: 'unauthorized', status: 401 });
+  });
+
+  it('returns ok: false with reason: unauthorized when the server responds 403', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403 })));
+    const { app, register } = buildApp();
+    await register();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/settings/immich/reachable?url=' + encodeURIComponent('http://immich.local'),
+    });
+    expect(res.json()).toEqual({ ok: false, reason: 'unauthorized', status: 403 });
+  });
+
+  it('returns ok: false with error message when fetch throws (host unreachable)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNREFUSED'); }));
+    const { app, register } = buildApp();
+    await register();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/settings/immich/reachable?url=' + encodeURIComponent('http://immich.local'),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.ok).toBe(false);
+    expect(body.reason).toBeUndefined();
+    expect(body.error).toContain('ECONNREFUSED');
+  });
+
+  it('still treats other non-2xx (e.g. 500) as reachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500 })));
+    const { app, register } = buildApp();
+    await register();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/settings/immich/reachable?url=' + encodeURIComponent('http://immich.local'),
+    });
+    expect(res.json()).toEqual({ ok: true, status: 500 });
+  });
+});
+
+describe('PUT /settings/scaleway — field-level validation (B3/B4)', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it('returns issues identifying both missing keys when neither is provided on first save', async () => {
+    mockGet.mockResolvedValue(null);
+    vi.stubEnv('SCW_ACCESS_KEY', '');
+    vi.stubEnv('SCW_SECRET_KEY', '');
+    vi.stubEnv('SCW_BUCKET', '');
+    const { app, register } = buildApp();
+    await register();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/settings/scaleway',
+      payload: { region: 'fr-par', bucket: 'b' },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(Array.isArray(body.issues)).toBe(true);
+    const paths = body.issues.map((i: { path: string[] }) => i.path[0]);
+    expect(paths).toContain('accessKey');
+    expect(paths).toContain('secretKey');
+  });
+
+  it('identifies only the missing field when the other is provided', async () => {
+    mockGet.mockResolvedValue(null);
+    vi.stubEnv('SCW_ACCESS_KEY', '');
+    vi.stubEnv('SCW_SECRET_KEY', '');
+    const { app, register } = buildApp();
+    await register();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/settings/scaleway',
+      payload: { accessKey: 'k', region: 'fr-par', bucket: 'b' },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    const paths = body.issues.map((i: { path: string[] }) => i.path[0]);
+    expect(paths).toEqual(['secretKey']);
+  });
+
+  it('returns aggregated issues array when zod schema validation fails', async () => {
+    const { app, register } = buildApp();
+    await register();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/settings/scaleway',
+      payload: { region: '', bucket: '', endpoint: 'not-a-url' },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(Array.isArray(body.issues)).toBe(true);
+    expect(body.issues.length).toBeGreaterThanOrEqual(2);
   });
 });

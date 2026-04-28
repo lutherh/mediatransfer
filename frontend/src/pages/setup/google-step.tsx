@@ -4,9 +4,13 @@ import { Button } from '@/components/ui/button';
 import {
   fetchGoogleSettings,
   saveGoogleSettings,
+  testGoogleSettings,
+  SettingsValidationError,
   API_BASE_URL,
   type GoogleSettingsResponse,
+  type ValidationIssue,
 } from '@/lib/api';
+import { ValidationIssues } from './validation-issues';
 
 type Props = {
   onSaved?: () => void;
@@ -19,17 +23,39 @@ type FormState = {
   redirectUri: string;
 };
 
+/**
+ * Compute the redirect URI we'd recommend based on the page's origin. This is
+ * the URI that should be registered in Google Cloud Console for the OAuth
+ * client. Note: the OAuth callback is served by the *backend* (port 3000) for
+ * the dev workflow, but the OAuth flow can also be terminated at the SPA's
+ * own callback (e.g. http://localhost:5173/auth/google/callback). We default
+ * to the SPA origin so that whatever port the user is currently using is
+ * registered, and let them edit if they need otherwise.
+ */
+function detectRedirectUri(): string {
+  if (typeof window === 'undefined') return '';
+  return `${window.location.origin}/auth/google/callback`;
+}
+
+const STANDARD_PORTS = new Set(['', '80', '443', '5173', '3000']);
+
 export function GoogleStep({ onSaved, compact }: Props) {
   const [existing, setExisting] = useState<GoogleSettingsResponse | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const detectedRedirectUri = detectRedirectUri();
   const [form, setForm] = useState<FormState>({
     clientId: '',
     clientSecret: '',
-    redirectUri: `${window.location.protocol}//${window.location.hostname}:5173/auth/google/callback`,
+    redirectUri: detectedRedirectUri,
   });
+  const [testResult, setTestResult] = useState<
+    { ok: boolean; error?: string; issues?: ValidationIssue[] } | null
+  >(null);
+  const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [saveIssues, setSaveIssues] = useState<ValidationIssue[]>([]);
+  const [savedOk, setSavedOk] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
 
   useEffect(() => {
@@ -44,13 +70,47 @@ export function GoogleStep({ onSaved, compact }: Props) {
 
   function set(field: keyof FormState, value: string) {
     setForm((f) => ({ ...f, [field]: value }));
+    setTestResult(null);
     setSaveError(null);
-    setSaved(false);
+    setSaveIssues([]);
+    setSavedOk(false);
+  }
+
+  /** Detect a non-standard port in the current redirect URI for an inline warning. */
+  const redirectPortWarning = (() => {
+    try {
+      const u = new URL(form.redirectUri);
+      if (!STANDARD_PORTS.has(u.port)) {
+        return `The redirect URI uses port :${u.port}, which isn't a typical dev/prod port. Make sure you registered this exact URI in Google Cloud Console.`;
+      }
+    } catch {
+      // Ignore — Zod on the server will validate the URL on save/test.
+    }
+    return null;
+  })();
+
+  async function handleTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await testGoogleSettings({
+        clientId: form.clientId,
+        clientSecret: form.clientSecret,
+        redirectUri: form.redirectUri,
+      });
+      setTestResult(result);
+    } catch (e) {
+      setTestResult({ ok: false, error: String(e) });
+    } finally {
+      setTesting(false);
+    }
   }
 
   async function handleSave() {
     setSaving(true);
     setSaveError(null);
+    setSaveIssues([]);
+    setSavedOk(false);
     try {
       await saveGoogleSettings({
         clientId: form.clientId,
@@ -60,10 +120,16 @@ export function GoogleStep({ onSaved, compact }: Props) {
       const updated = await fetchGoogleSettings();
       setExisting(updated);
       setForm((f) => ({ ...f, clientId: '', clientSecret: '' }));
-      setSaved(true);
+      setTestResult(null);
+      setSavedOk(true);
       onSaved?.();
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
+      if (e instanceof SettingsValidationError) {
+        setSaveError(e.message);
+        setSaveIssues(e.issues);
+      } else {
+        setSaveError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
       setSaving(false);
     }
@@ -71,6 +137,10 @@ export function GoogleStep({ onSaved, compact }: Props) {
 
   function handleConnectGoogle() {
     window.location.href = `${API_BASE_URL}/auth/google/url`;
+  }
+
+  function handleResetRedirectUri() {
+    set('redirectUri', detectedRedirectUri);
   }
 
   const secretPlaceholder = existing?.configured ? 'already set — leave blank to keep' : '';
@@ -148,10 +218,22 @@ export function GoogleStep({ onSaved, compact }: Props) {
           />
         </div>
         <div className="sm:col-span-2">
-          <label className="block text-xs font-medium text-slate-700 mb-1">
-            Redirect URI
-            <span className="text-slate-500 font-normal"> — where Google sends you after login</span>
-          </label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-xs font-medium text-slate-700">
+              Redirect URI
+              <span className="text-slate-500 font-normal"> — where Google sends you after login</span>
+            </label>
+            {form.redirectUri !== detectedRedirectUri && (
+              <button
+                type="button"
+                className="text-xs text-blue-600 underline"
+                onClick={handleResetRedirectUri}
+                title={`Reset to ${detectedRedirectUri}`}
+              >
+                Reset to detected
+              </button>
+            )}
+          </div>
           <input
             type="text"
             className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
@@ -159,24 +241,50 @@ export function GoogleStep({ onSaved, compact }: Props) {
             onChange={(e) => set('redirectUri', e.target.value)}
           />
           <p className="text-xs text-slate-500 mt-1">Copy this exact URI into Google Cloud Console under &ldquo;Authorized redirect URIs&rdquo;</p>
+          {redirectPortWarning && (
+            <p className="text-xs text-amber-600 mt-1">{redirectPortWarning}</p>
+          )}
         </div>
       </div>
 
-      {saved && (
-        <Alert variant="success" className="mt-3">Saved successfully.</Alert>
+      {testResult && testResult.ok && (
+        <Alert variant="success" className="mt-3">
+          Credentials look valid — Google accepted the OAuth client.
+        </Alert>
       )}
-      {saveError && (
-        <Alert variant="error" className="mt-3">{saveError}</Alert>
+      {testResult && !testResult.ok && (
+        <ValidationIssues
+          message={`Test failed: ${testResult.error}`}
+          issues={testResult.issues}
+        />
       )}
+      {savedOk && (
+        <Alert variant="success" className="mt-3">Settings saved successfully.</Alert>
+      )}
+      <ValidationIssues message={saveError} issues={saveIssues} />
 
-      <div className="flex gap-2 mt-4">
+      <div className="flex gap-2 mt-4 items-start">
         <Button
           type="button"
-          onClick={handleSave}
-          disabled={saving || (!form.clientId && !existing?.configured)}
+          onClick={handleTest}
+          disabled={testing || !form.clientId || !form.clientSecret || !form.redirectUri}
+          className="bg-slate-600 hover:bg-slate-500"
         >
-          {saving ? 'Saving…' : 'Save'}
+          {testing ? 'Testing…' : 'Test credentials'}
         </Button>
+        <div>
+          <Button
+            type="button"
+            onClick={handleSave}
+            disabled={saving || !testResult?.ok}
+            title={!testResult?.ok ? 'Run a successful test first' : undefined}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+          {!testResult?.ok && (
+            <p className="text-xs text-amber-600 mt-1">Test credentials first to validate them</p>
+          )}
+        </div>
         {existing?.configured && (
           <Button
             type="button"
