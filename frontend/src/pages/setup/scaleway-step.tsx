@@ -5,8 +5,11 @@ import {
   fetchScalewaySettings,
   testScalewaySettings,
   saveScalewaySettings,
+  SettingsValidationError,
   type ScalewaySettingsResponse,
+  type ValidationIssue,
 } from '@/lib/api';
+import { ValidationIssues } from './validation-issues';
 
 type Props = {
   onSaved?: () => void;
@@ -27,6 +30,16 @@ type FormState = {
 
 const MASK = '••••••••';
 
+const KNOWN_STORAGE_CLASSES = [
+  'STANDARD',
+  'STANDARD_IA',
+  'ONEZONE_IA',
+  'GLACIER',
+  'DEEP_ARCHIVE',
+  'INTELLIGENT_TIERING',
+] as const;
+const CUSTOM_STORAGE_CLASS = '__custom__';
+
 export function ScalewayStep({ onSaved, compact }: Props) {
   const [existing, setExisting] = useState<ScalewaySettingsResponse | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -40,25 +53,33 @@ export function ScalewayStep({ onSaved, compact }: Props) {
     endpoint: '',
     forcePathStyle: true,
   });
-  const [testResult, setTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
+  /** Whether the user picked the Custom escape-hatch option for Storage Class. */
+  const [customStorageClass, setCustomStorageClass] = useState(false);
+  const [testResult, setTestResult] = useState<
+    { ok: boolean; error?: string; issues?: ValidationIssue[] } | null
+  >(null);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveIssues, setSaveIssues] = useState<ValidationIssue[]>([]);
+  const [savedOk, setSavedOk] = useState(false);
 
   // Load existing config once on mount
   useEffect(() => {
     fetchScalewaySettings().then((cfg) => {
       setExisting(cfg);
       if (cfg.configured) {
+        const sc = cfg.storageClass ?? 'ONEZONE_IA';
         setForm((f) => ({
           ...f,
           region: cfg.region ?? '',
           bucket: cfg.bucket ?? '',
           prefix: cfg.prefix ?? '',
-          storageClass: cfg.storageClass ?? 'ONEZONE_IA',
+          storageClass: sc,
           endpoint: cfg.endpoint ?? '',
           forcePathStyle: cfg.forcePathStyle ?? true,
         }));
+        setCustomStorageClass(!KNOWN_STORAGE_CLASSES.includes(sc as typeof KNOWN_STORAGE_CLASSES[number]));
       }
       setLoaded(true);
     }).catch(() => setLoaded(true));
@@ -68,6 +89,21 @@ export function ScalewayStep({ onSaved, compact }: Props) {
     setForm((f) => ({ ...f, [field]: value }));
     setTestResult(null);
     setSaveError(null);
+    setSaveIssues([]);
+    setSavedOk(false);
+  }
+
+  function handleStorageClassSelect(value: string) {
+    if (value === CUSTOM_STORAGE_CLASS) {
+      setCustomStorageClass(true);
+      // Keep current storageClass if it's already non-standard; otherwise clear.
+      if (KNOWN_STORAGE_CLASSES.includes(form.storageClass as typeof KNOWN_STORAGE_CLASSES[number])) {
+        set('storageClass', '');
+      }
+    } else {
+      setCustomStorageClass(false);
+      set('storageClass', value);
+    }
   }
 
   async function handleTest() {
@@ -93,6 +129,8 @@ export function ScalewayStep({ onSaved, compact }: Props) {
   async function handleSave() {
     setSaving(true);
     setSaveError(null);
+    setSaveIssues([]);
+    setSavedOk(false);
     try {
       await saveScalewaySettings({
         accessKey: form.accessKey || undefined,
@@ -109,15 +147,22 @@ export function ScalewayStep({ onSaved, compact }: Props) {
       setExisting(updated);
       setForm((f) => ({ ...f, accessKey: '', secretKey: '' }));
       setTestResult(null);
+      setSavedOk(true);
       onSaved?.();
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
+      if (e instanceof SettingsValidationError) {
+        setSaveError(e.message);
+        setSaveIssues(e.issues);
+      } else {
+        setSaveError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
       setSaving(false);
     }
   }
 
   const secretPlaceholder = existing?.configured ? 'already set — leave blank to keep' : '';
+  const storageClassSelectValue = customStorageClass ? CUSTOM_STORAGE_CLASS : form.storageClass;
 
   if (!loaded) {
     return <p className="text-sm text-slate-500">Loading…</p>;
@@ -194,22 +239,25 @@ export function ScalewayStep({ onSaved, compact }: Props) {
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-700 mb-1">Storage Class</label>
-          <input
-            type="text"
-            list="storage-class-options"
-            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
-            value={form.storageClass}
-            onChange={(e) => set('storageClass', e.target.value)}
-            placeholder="e.g. STANDARD, STANDARD_IA, ONEZONE_IA"
-          />
-          <datalist id="storage-class-options">
-            <option value="STANDARD" />
-            <option value="STANDARD_IA" />
-            <option value="ONEZONE_IA" />
-            <option value="GLACIER" />
-            <option value="DEEP_ARCHIVE" />
-            <option value="INTELLIGENT_TIERING" />
-          </datalist>
+          <select
+            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm bg-white"
+            value={storageClassSelectValue}
+            onChange={(e) => handleStorageClassSelect(e.target.value)}
+          >
+            {KNOWN_STORAGE_CLASSES.map((sc) => (
+              <option key={sc} value={sc}>{sc}</option>
+            ))}
+            <option value={CUSTOM_STORAGE_CLASS}>Custom…</option>
+          </select>
+          {customStorageClass && (
+            <input
+              type="text"
+              className="mt-2 w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+              value={form.storageClass}
+              onChange={(e) => set('storageClass', e.target.value)}
+              placeholder="Enter custom storage class (e.g. provider-specific)"
+            />
+          )}
         </div>
         <div className="sm:col-span-2">
           <label className="block text-xs font-medium text-slate-700 mb-1">Endpoint URL <span className="font-normal text-slate-400">(optional — leave blank for Scaleway auto-detect)</span></label>
@@ -235,14 +283,16 @@ export function ScalewayStep({ onSaved, compact }: Props) {
         </div>
       </div>
 
-      {testResult && (
-        <Alert variant={testResult.ok ? 'success' : 'error'} className="mt-3">
-          {testResult.ok ? 'Connection successful.' : `Test failed: ${testResult.error}`}
-        </Alert>
+      {testResult && testResult.ok && (
+        <Alert variant="success" className="mt-3">Connection successful.</Alert>
       )}
-      {saveError && (
-        <Alert variant="error" className="mt-3">{saveError}</Alert>
+      {testResult && !testResult.ok && (
+        <ValidationIssues message={`Test failed: ${testResult.error}`} issues={testResult.issues} />
       )}
+      {savedOk && (
+        <Alert variant="success" className="mt-3">Settings saved successfully.</Alert>
+      )}
+      <ValidationIssues message={saveError} issues={saveIssues} />
 
       <div className="flex gap-2 mt-4 items-start">
         <Button
