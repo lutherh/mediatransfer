@@ -51,9 +51,9 @@ await test('3. List immich/ prefix (mount target)', async () => {
   console.log(`  OK — ${res.KeyCount} objects under immich/`);
 });
 
-await test('4. List transfers/ prefix (existing data)', async () => {
-  const res = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: 'transfers/', MaxKeys: 3 }));
-  console.log(`  OK — ${res.KeyCount} objects under transfers/`);
+await test('4. List s3transfers/ prefix (existing data)', async () => {
+  const res = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: 's3transfers/', MaxKeys: 3 }));
+  console.log(`  OK — ${res.KeyCount} objects under s3transfers/`);
 });
 
 console.log('');

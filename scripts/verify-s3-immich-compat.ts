@@ -174,27 +174,29 @@ for (const subdir of IMMICH_SUBDIRS) {
 
 // ── Check 5: Cross-check with MediaTransfer prefix ──────────────
 
-log('INFO', '── Check 5: MediaTransfer namespace isolation ──');
+log('INFO', '── Check 5: MediaTransfer co-location under Immich prefix ──');
 
 const mtPrefix = process.env.SCW_PREFIX || '';
-const mtTransfers = mtPrefix ? `${mtPrefix}/transfers/` : 'transfers/';
+const mtTransfers = mtPrefix ? `${mtPrefix}/s3transfers/` : 's3transfers/';
 const mtThumbs = mtPrefix ? `${mtPrefix}/_thumbs/` : '_thumbs/';
 
-// Verify MediaTransfer paths DON'T start with immich prefix
-if (mtTransfers.startsWith(`${rclonePrefix}/`) || `${rclonePrefix}/`.startsWith(mtTransfers)) {
-  log('ERROR', `MediaTransfer prefix "${mtTransfers}" overlaps with Immich prefix "${rclonePrefix}/".`);
-  log('ERROR', 'Files from both systems would be mixed — this WILL cause data corruption.');
-  errors++;
+// Unified layout: MediaTransfer writes MUST live under the Immich rclone prefix
+// (e.g. SCW_PREFIX=immich → mtTransfers=immich/s3transfers/ inside immich/).
+// This prevents the historic split-brain where transfers/ at bucket root was
+// invisible to Immich.
+if (mtTransfers.startsWith(`${rclonePrefix}/`)) {
+  log('OK', `MediaTransfer "${mtTransfers}" is co-located under Immich prefix "${rclonePrefix}/".`);
 } else {
-  log('OK', `MediaTransfer "${mtTransfers}" and Immich "${rclonePrefix}/" are isolated.`);
+  log('ERROR', `MediaTransfer prefix "${mtTransfers}" is NOT under Immich prefix "${rclonePrefix}/".`);
+  log('ERROR', 'Set SCW_PREFIX to match RCLONE_PREFIX (typically "immich") to unify the layout.');
+  errors++;
 }
 
-// Verify _thumbs doesn't collide
-if (mtThumbs.startsWith(`${rclonePrefix}/`) || `${rclonePrefix}/`.startsWith(mtThumbs)) {
-  log('WARN', `MediaTransfer thumbs "${mtThumbs}" overlaps with Immich prefix.`);
-  warnings++;
+if (mtThumbs.startsWith(`${rclonePrefix}/`)) {
+  log('OK', `MediaTransfer thumbs "${mtThumbs}" is co-located under Immich prefix.`);
 } else {
-  log('OK', `MediaTransfer thumbs "${mtThumbs}" and Immich prefix are isolated.`);
+  log('WARN', `MediaTransfer thumbs "${mtThumbs}" is not under Immich prefix "${rclonePrefix}/".`);
+  warnings++;
 }
 
 // ── Check 6: Existing local Immich data ─────────────────────────
@@ -263,12 +265,12 @@ if (errors > 0) {
 
 log('INFO', '');
 log('INFO', 'Namespace layout after enabling mount:');
-log('INFO', `  s3://${rcloneBucket}/transfers/...         ← MediaTransfer uploads`);
-log('INFO', `  s3://${rcloneBucket}/_thumbs/...           ← MediaTransfer catalog thumbs`);
-log('INFO', `  s3://${rcloneBucket}/${rclonePrefix}/library/...     ← Immich originals`);
-log('INFO', `  s3://${rcloneBucket}/${rclonePrefix}/upload/...      ← Immich incoming`);
-log('INFO', `  s3://${rcloneBucket}/${rclonePrefix}/thumbs/...      ← (local override, not on S3)`);
-log('INFO', `  s3://${rcloneBucket}/${rclonePrefix}/encoded-video/  ← (local override, not on S3)`);
+log('INFO', `  s3://${rcloneBucket}/${rclonePrefix}/s3transfers/...     ← MediaTransfer uploads`);
+log('INFO', `  s3://${rcloneBucket}/${rclonePrefix}/_thumbs/...        ← MediaTransfer catalog thumbs`);
+log('INFO', `  s3://${rcloneBucket}/${rclonePrefix}/library/...        ← Immich originals`);
+log('INFO', `  s3://${rcloneBucket}/${rclonePrefix}/upload/...         ← Immich incoming`);
+log('INFO', `  s3://${rcloneBucket}/${rclonePrefix}/thumbs/...         ← (local override, not on S3)`);
+log('INFO', `  s3://${rcloneBucket}/${rclonePrefix}/encoded-video/     ← (local override, not on S3)`);
 log('INFO', '');
 
 if (errors > 0) process.exit(1);

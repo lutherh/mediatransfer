@@ -84,7 +84,9 @@ When in doubt, delegate to the agent whose description matches the task.
 
 ## Things that bite
 
-- **S3 path namespaces:** MediaTransfer owns `transfers/**` and `_thumbs/**`. Immich owns its own prefix. See `s3-immich-path-verifier` agent before touching either.
+- **S3 path namespaces:** MediaTransfer historically wrote to `transfers/**` (bucket root) while Immich expects everything under `immich/**`. As of 2026-04 the canonical layout is `photosync/immich/{library,upload,s3transfers}/...` — see [.github/agents/s3-immich-path-verifier.agent.md](.github/agents/s3-immich-path-verifier.agent.md) and the repo memory note `s3-immich-layout.md`.
+- **macOS S3 mount:** Use the Mac-native NFS mount (`scripts/mount-s3.sh` → `data/immich-s3`) as the single source of truth. The in-container FUSE sidecar (`immich_rclone_s3` → `data/s3-mount`) cannot propagate back through OrbStack on macOS — never bind `data/s3-mount` over an Immich subpath, it will silently shadow real files with an empty directory.
 - **Takeout state files** in `data/takeout/state*.json` are append-only from the agent's perspective — never rewrite them without an explicit plan and a `.bak` snapshot.
 - **HEIC conversion** uses `heic-convert` (pure JS) rather than libvips/sharp HEIC, because Sharp's HEIC support is licensing-restricted.
 - **Immich containers** are managed by `docker-compose.immich.yml` (separate from the main `docker-compose.yml`).
+- **Unknown-date assets** flood the "recent" timeline because their `fileCreatedAt` defaults to upload time. Run [scripts/immich-sink-unknown-date.sh](scripts/immich-sink-unknown-date.sh) after every MediaTransfer import to backdate them to epoch.

@@ -69,15 +69,15 @@ try {
   throw new Error(`Could not read upload state: ${(err as Error).message}`);
 }
 
-// All items currently under transfers/2026/
+// All items currently under s3transfers/2026/
 const wrongDateEntries = new Map<string, { status: string }>();
 for (const [key, item] of Object.entries(uploadState.items)) {
-  if (key.startsWith('transfers/2026/') && item.status === 'uploaded') {
+  if (key.startsWith('s3transfers/2026/') && item.status === 'uploaded') {
     wrongDateEntries.set(key, item);
   }
 }
 
-console.log(`📊 Found ${wrongDateEntries.size} files under transfers/2026/ to check`);
+console.log(`📊 Found ${wrongDateEntries.size} files under s3transfers/2026/ to check`);
 
 if (wrongDateEntries.size === 0) {
   console.log('✅ Nothing to repair!');
@@ -85,7 +85,7 @@ if (wrongDateEntries.size === 0) {
 }
 
 // Build a reverse lookup: the path suffix after the date portion → current S3 key
-// For "transfers/2026/03/15/AlbumName/IMG_1234.JPG" the suffix is "AlbumName/IMG_1234.JPG"
+// For "s3transfers/2026/03/15/AlbumName/IMG_1234.JPG" the suffix is "AlbumName/IMG_1234.JPG"
 const suffixToKey = new Map<string, string>();
 for (const key of wrongDateEntries.keys()) {
   const parts = key.split('/');
@@ -188,7 +188,7 @@ for (let i = startAt; i < archiveFiles.length; i++) {
       // the original upload and the new computation
       const parts = entry.destinationKey.split('/');
       // parts[0] = 'transfers', [1+] = datePath + rest
-      // For "transfers/2020/07/15/Album/IMG.jpg" → suffix is "Album/IMG.jpg"
+      // For "s3transfers/2020/07/15/Album/IMG.jpg" → suffix is "Album/IMG.jpg"
       const suffix = parts.slice(4).join('/');
 
       const currentS3Key = suffixToKey.get(suffix);
@@ -210,7 +210,7 @@ for (let i = startAt; i < archiveFiles.length; i++) {
       }
 
       // We have a proper date! Generate a move operation
-      const newKey = `transfers/${entry.datePath}/${suffix}`;
+      const newKey = `s3transfers/${entry.datePath}/${suffix}`;
       if (newKey !== currentS3Key) {
         allMoves.push({
           oldKey: currentS3Key,

@@ -81,7 +81,7 @@ else
   SIGNING_REGION="$REGION"
 fi
 
-S3_SOURCE=":s3:${BUCKET}/transfers"
+S3_SOURCE=":s3:${BUCKET}/immich/s3transfers"
 S3_FLAGS=(
   --s3-provider Scaleway
   --s3-access-key-id "$ACCESS_KEY"

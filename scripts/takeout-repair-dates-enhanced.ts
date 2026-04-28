@@ -145,8 +145,8 @@ try {
 }
 
 const filterPrefix = prefixFilter
-  ? `transfers/${prefixFilter}`
-  : 'transfers/2026/';
+  ? `s3transfers/${prefixFilter}`
+  : 's3transfers/2026/';
 
 const wrongDateKeys = Object.entries(uploadState.items)
   .filter(([key, item]) => key.startsWith(filterPrefix) && item.status === 'uploaded')
