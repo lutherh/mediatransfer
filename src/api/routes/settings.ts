@@ -162,6 +162,85 @@ async function testImmichConnection(cfg: {
   }
 }
 
+/**
+ * Test Google OAuth client credentials by attempting a token exchange with a
+ * deliberately invalid authorization code. Google's response distinguishes
+ * "bad client" from "bad code", which lets us validate clientId/clientSecret
+ * without a real OAuth round-trip:
+ *  - HTTP 401 + `error: invalid_client` → clientId/clientSecret are wrong.
+ *  - HTTP 400 + `error: invalid_grant`/`invalid_request` → client accepted, code rejected (= creds valid).
+ *  - HTTP 400 + `error: redirect_uri_mismatch` → registered redirect URIs don't include this one.
+ */
+async function testGoogleConnection(cfg: {
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const params = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: 'mediatransfer-credential-validation-probe',
+      client_id: cfg.clientId,
+      client_secret: cfg.clientSecret,
+      redirect_uri: cfg.redirectUri,
+    });
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      error_description?: string;
+    };
+    // Unexpected success (Google should never accept this fake code) — treat as ok.
+    if (res.ok) return { ok: true };
+
+    const code = json.error ?? '';
+    const desc = json.error_description ?? '';
+    if (code === 'invalid_client') {
+      return { ok: false, error: 'Invalid client ID or client secret' };
+    }
+    if (code === 'redirect_uri_mismatch') {
+      return {
+        ok: false,
+        error: 'Redirect URI is not registered in Google Cloud Console for this client',
+      };
+    }
+    if (code === 'invalid_grant' || code === 'invalid_request') {
+      // Client credentials were accepted; only the bogus code/grant was rejected.
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      error: desc || code || `HTTP ${res.status} ${res.statusText}`,
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// ── Validation helpers ──────────────────────────────────────────
+
+type ValidationIssue = { path: PropertyKey[]; message: string };
+
+/** Build a uniform 400 response body containing both legacy `error` and an `issues` array. */
+function validationError(issues: ValidationIssue[]): {
+  error: string;
+  issues: ValidationIssue[];
+} {
+  return {
+    error: issues[0]?.message ?? 'Invalid request',
+    issues,
+  };
+}
+
+/** Convert a Zod error into our uniform issues array. */
+function zodIssues(err: z.ZodError): ValidationIssue[] {
+  return err.issues.map((i) => ({ path: [...i.path], message: i.message }));
+}
+
 // ── Route registration ──────────────────────────────────────────
 
 export async function registerSettingsRoutes(app: FastifyInstance): Promise<void> {
@@ -210,7 +289,12 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const parsed = scalewayTestSchema.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message });
+    if (!parsed.success) {
+      return reply.code(400).send({
+        ok: false,
+        ...validationError(zodIssues(parsed.error)),
+      });
+    }
     const body = parsed.data;
 
     // Resolve credentials: use body values if provided, else fall back to saved
@@ -218,13 +302,16 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     const accessKey = body.accessKey?.trim() || saved?.accessKey;
     const secretKey = body.secretKey?.trim() || saved?.secretKey;
 
-    if (!accessKey || !secretKey) {
-      return reply.code(400).send({ ok: false, error: 'Access key and secret key are required' });
+    const missing: ValidationIssue[] = [];
+    if (!accessKey) missing.push({ path: ['accessKey'], message: 'Access key is required' });
+    if (!secretKey) missing.push({ path: ['secretKey'], message: 'Secret key is required' });
+    if (missing.length) {
+      return reply.code(400).send({ ok: false, ...validationError(missing) });
     }
 
     const result = await testScalewayConnection({
-      accessKey,
-      secretKey,
+      accessKey: accessKey!,
+      secretKey: secretKey!,
       region: body.region,
       bucket: body.bucket,
       endpoint: body.endpoint,
@@ -241,7 +328,9 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const parsed = scalewayPutSchema.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message });
+    if (!parsed.success) {
+      return reply.code(400).send(validationError(zodIssues(parsed.error)));
+    }
     const body = parsed.data;
 
     // Resolve credentials — blank means keep existing
@@ -249,14 +338,17 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     const accessKey = body.accessKey?.trim() || saved?.accessKey;
     const secretKey = body.secretKey?.trim() || saved?.secretKey;
 
-    if (!accessKey || !secretKey) {
-      return reply.code(400).send({ error: 'Access key and secret key are required' });
+    const missing: ValidationIssue[] = [];
+    if (!accessKey) missing.push({ path: ['accessKey'], message: 'Access key is required' });
+    if (!secretKey) missing.push({ path: ['secretKey'], message: 'Secret key is required' });
+    if (missing.length) {
+      return reply.code(400).send(validationError(missing));
     }
 
     // Test before saving
     const test = await testScalewayConnection({
-      accessKey,
-      secretKey,
+      accessKey: accessKey!,
+      secretKey: secretKey!,
       region: body.region,
       bucket: body.bucket,
       endpoint: body.endpoint,
@@ -267,8 +359,8 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     }
 
     await setRuntimeSettings<ScalewayStoredConfig>(KEY_SCALEWAY, {
-      accessKey,
-      secretKey,
+      accessKey: accessKey!,
+      secretKey: secretKey!,
       region: body.region,
       bucket: body.bucket,
       prefix: body.prefix,
@@ -310,12 +402,38 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     return { configured: false, redirectUri: defaultRedirectUri };
   });
 
+  app.post('/settings/google/test', {
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const parsed = googlePutSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        ok: false,
+        ...validationError(zodIssues(parsed.error)),
+      });
+    }
+    const result = await testGoogleConnection(parsed.data);
+    if (!result.ok) {
+      return reply.code(400).send(result);
+    }
+    return result;
+  });
+
   app.put('/settings/google', {
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const parsed = googlePutSchema.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message });
+    if (!parsed.success) {
+      return reply.code(400).send(validationError(zodIssues(parsed.error)));
+    }
     const body = parsed.data;
+
+    // Test before saving so invalid credentials don't get persisted (parity with Scaleway/Immich).
+    const test = await testGoogleConnection(body);
+    if (!test.ok) {
+      return reply.code(400).send({ error: `Credential check failed: ${test.error}` });
+    }
+
     await setRuntimeSettings<GoogleStoredConfig>(KEY_GOOGLE, {
       clientId: body.clientId,
       clientSecret: body.clientSecret,
@@ -346,7 +464,12 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const parsed = immichTestSchema.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message });
+    if (!parsed.success) {
+      return reply.code(400).send({
+        ok: false,
+        ...validationError(zodIssues(parsed.error)),
+      });
+    }
     const body = parsed.data;
 
     // Resolve apiKey — blank means fall back to saved config or env var
@@ -355,7 +478,10 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       || process.env.IMMICH_API_KEY?.trim();
 
     if (!apiKey) {
-      return reply.code(400).send({ ok: false, error: 'API key is required' });
+      return reply.code(400).send({
+        ok: false,
+        ...validationError([{ path: ['apiKey'], message: 'API key is required' }]),
+      });
     }
 
     const result = await testImmichConnection({ url: body.url, apiKey });
@@ -369,7 +495,9 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const parsed = immichPutSchema.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message });
+    if (!parsed.success) {
+      return reply.code(400).send(validationError(zodIssues(parsed.error)));
+    }
     const body = parsed.data;
 
     // Resolve apiKey — blank means keep existing
@@ -378,7 +506,9 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       || process.env.IMMICH_API_KEY?.trim();
 
     if (!apiKey) {
-      return reply.code(400).send({ error: 'API key is required' });
+      return reply.code(400).send(
+        validationError([{ path: ['apiKey'], message: 'API key is required' }]),
+      );
     }
 
     // Test before saving
@@ -396,9 +526,13 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
   });
 
   // ── Immich reachability check (no auth) ─────────────────────
-  // Probes the Immich URL to see if the service is up. Does NOT validate
-  // the API key — it only checks that the host is reachable. Useful in
-  // the setup UI to tell users "Immich isn't running yet".
+  // Probes the Immich URL to see if the service is up. Distinguishes:
+  //   - 2xx/3xx → server reachable                  → { ok: true, status }
+  //   - 401/403 → server reachable but rejected auth → { ok: false, reason: 'unauthorized', status }
+  //   - other status → server replied (still up)    → { ok: true, status }
+  //   - network error → host unreachable            → { ok: false, error }
+  // Useful in the setup UI to tell users whether Immich is running and (separately)
+  // whether the URL is responding with an auth challenge.
   app.get('/settings/immich/reachable', {
     config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
   }, async (req, reply) => {
@@ -409,13 +543,14 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     }
     const base = parsed.data.url.replace(/\/$/, '');
     try {
-      // Hit the home page — any HTTP response (even 401/403) means the
-      // server is up. Network/connection errors mean it's not.
       const res = await fetch(base, {
         method: 'GET',
         signal: AbortSignal.timeout(3_000),
         redirect: 'manual',
       });
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, reason: 'unauthorized' as const, status: res.status };
+      }
       return { ok: true, status: res.status };
     } catch (err) {
       return reply.code(200).send({
