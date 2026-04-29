@@ -30,18 +30,6 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-
-# rclone rc Unix domain socket — must match RC_SOCK in mount-s3.sh.
-RC_SOCK="$ROOT_DIR/data/rclone-rc.sock"
-
-# ── Helper: read a key from a .env file (kept in sync with mount-s3.sh) ──
-read_env_val() {
-  local file="$1" key="$2" default="${3:-}"
-  local val
-  val=$(grep -E "^\s*${key}\s*=" "$file" 2>/dev/null | head -1 | sed "s/^[^=]*=\s*//" | sed "s/^[\"']//;s/[\"']\s*$//" | tr -d '\r')
-  echo "${val:-$default}"
-}
-
 LABEL_MOUNT="uk.4to.mediatransfer.s3mount"
 LABEL_STACK="uk.4to.mediatransfer.stack"
 PLIST_MOUNT="$HOME/Library/LaunchAgents/${LABEL_MOUNT}.plist"
@@ -61,32 +49,18 @@ BIN_DIR_RCLONE="$(dirname "$RCLONE_BIN")"
 BIN_DIR_DOCKER="${DOCKER_BIN:+$(dirname "$DOCKER_BIN"):}"
 
 flush_mount() {
-  # Drain the vfs writeback cache before letting launchctl SIGTERM rclone.
+  # Drain the rv writeback cache before letting launchctl SIGTERM rclone.
   # Without this, in-flight writes (--vfs-cache-mode writes) are lost on
   # kill and the bytes never reach S3 -- this is how ~740 assets went
   # missing in the Apr 2026 incident.
-  #
-  # Skip entirely on first install when no mount yet exists, otherwise we
-  # log a spurious "rc unreachable" warning.
-  if ! mount | grep -Fq " $ROOT_DIR/data/immich-s3 "; then
-    return 0
-  fi
-  # RCLONE_RC_PORT is read for legacy/fallback parity with mount-s3.sh,
-  # but the rc client now talks over the Unix domain socket (RC_SOCK).
   local rc_port
-  rc_port=$(read_env_val "$ROOT_DIR/.env.immich" RCLONE_RC_PORT 5573)
-  : "${rc_port}"  # silence unused-var linters
-  if ! command -v rclone &>/dev/null; then
-    return 0
+  rc_port=$(awk -F= '/^RCLONE_RC_PORT=/ {print $2}' "$ROOT_DIR/.env.immich" 2>/dev/null | tr -d ' "')
+  rc_port=${rc_port:-5573}
+  if command -v rclone &>/dev/null; then
+    echo "Flushing rclone vfs cache via rc on 127.0.0.1:${rc_port} ..."
+    rclone rc vfs/sync --rc-addr "127.0.0.1:${rc_port}" 2>/dev/null || true
+    sleep 2
   fi
-  # Probe rc/noopauth: if the rc server isn't there, vfs/sync would just
-  # hang or fail — fail loudly instead so a hardening regression is visible.
-  if ! rclone rc rc/noopauth --unix-socket "$RC_SOCK" --timeout 3s &>/dev/null; then
-    echo "WARN: rclone rc unreachable at $RC_SOCK — skipping vfs/sync (writeback cache may not be flushed)" >&2
-    return 0
-  fi
-  echo "Flushing rclone vfs cache via rc on $RC_SOCK ..."
-  rclone rc vfs/sync --unix-socket "$RC_SOCK" --timeout 120s 2>/dev/null || true
 }
 
 uninstall() {
@@ -98,7 +72,7 @@ uninstall() {
     fi
     rm -f "$HOME/Library/LaunchAgents/${label}.plist"
   done
-  if mount | grep -Fq " $ROOT_DIR/data/immich-s3 "; then
+  if mount | grep -q "$ROOT_DIR/data/immich-s3"; then
     echo "Unmounting NFS mount..."
     "$MOUNT_SCRIPT" --unmount || true
   fi
@@ -151,7 +125,7 @@ for label in "$LABEL_STACK" "$LABEL_MOUNT"; do
 done
 
 # If a manual mount is up from `mount-s3.sh --background`, hand over to launchd.
-if mount | grep -Fq " $ROOT_DIR/data/immich-s3 "; then
+if mount | grep -q "$ROOT_DIR/data/immich-s3"; then
   echo "Found existing manual mount — unmounting before launchd takes over..."
   "$MOUNT_SCRIPT" --unmount || true
 fi
@@ -196,10 +170,11 @@ cat > "$PLIST_MOUNT" <<PLIST_EOF
   <key>ThrottleInterval</key>
   <integer>10</integer>
 
-  <!-- ExitTimeOut: 15 minutes — gives rclone enough time to flush multi-GB
-       writeback cache to Scaleway over slow uplinks. Default 20s loses data. -->
+  <!-- Give rclone up to 5 minutes to flush its vfs writeback cache when
+       launchd sends SIGTERM. Default is 20s, which is not enough to push
+       multi-GB pending writes back to Scaleway and causes silent data loss. -->
   <key>ExitTimeOut</key>
-  <integer>900</integer>
+  <integer>300</integer>
 
   <key>StandardOutPath</key>
   <string>${LOG_DIR}/s3mount.out.log</string>
@@ -233,10 +208,10 @@ done
 docker info >/dev/null 2>&1 || { echo "Docker never came up" >&2; exit 1; }
 # Wait up to 2 minutes for the S3 mount to be live.
 for i in \$(seq 1 24); do
-  if mount | grep -Fq ' ${ROOT_DIR}/data/immich-s3 '; then break; fi
+  if mount | grep -q '${ROOT_DIR}/data/immich-s3'; then break; fi
   sleep 5
 done
-mount | grep -Fq ' ${ROOT_DIR}/data/immich-s3 ' || { echo "S3 mount never came up" >&2; exit 1; }
+mount | grep -q '${ROOT_DIR}/data/immich-s3' || { echo "S3 mount never came up" >&2; exit 1; }
 exec '${START_SCRIPT}' up</string>
   </array>
 
