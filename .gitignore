@@ -24,6 +24,7 @@ debug-output.txt
 log_dump.txt
 test-output.txt
 data/query.sql
+data/logs/
 google_photos_inspiration.html
 archive_browser.html
 data/takeout/state.json.pre-exif-repair.bak
