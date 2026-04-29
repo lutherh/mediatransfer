@@ -6,6 +6,7 @@ import { inferDateFromFilename, extractExifMetadata, extractVideoCreationDate } 
 import { isWrongDate, parseSidecarDate } from '../utils/date-repair.js';
 import { UNDATED_PREFIX, S3TRANSFERS_PREFIX, toDatePath } from '../utils/storage-paths.js';
 import { MEDIA_EXTENSIONS } from '../utils/media-extensions.js';
+import { writeFileAtomic } from '../utils/fs-atomic.js';
 import { getLogger } from '../utils/logger.js';
 import type { ArchiveMetadata, MediaItemMetadata } from './archive-metadata.js';
 
@@ -97,9 +98,11 @@ export async function persistManifestJsonl(
   entries: ManifestEntry[],
   manifestPath: string,
 ): Promise<void> {
-  await fs.mkdir(path.dirname(manifestPath), { recursive: true });
   const lines = entries.map((entry) => JSON.stringify(entry));
-  await fs.writeFile(manifestPath, `${lines.join('\n')}\n`, 'utf8');
+  // Atomic write — a SIGKILL or power loss mid-write previously truncated
+  // the manifest; subsequent runs then silently skipped real entries via
+  // `loadManifestJsonl`'s tolerant malformed-line handling.
+  await writeFileAtomic(manifestPath, `${lines.join('\n')}\n`);
 }
 
 export async function loadManifestJsonl(manifestPath: string): Promise<ManifestEntry[]> {
@@ -434,11 +437,35 @@ function getNestedString(obj: Record<string, unknown>, pathParts: string[]): str
 
 
 
-function sanitizeRelativePath(relativePath: string): string {
+/**
+ * Sanitize a relative filesystem path into an S3-safe key tail.
+ *
+ * Guarantees:
+ * - Unicode is NFC-normalized so macOS-NFD vs Linux-NFC inputs produce the
+ *   same key for the same source file (prevents silent duplicate uploads
+ *   when a backup extracted on Linux is re-imported on macOS, or vice
+ *   versa).
+ * - `.`, `..` and empty segments are replaced with `_` to neutralize any
+ *   path-traversal latent in upstream input even though the current call
+ *   site (`path.relative`) cannot synthesize them.
+ * - The per-character `[^a-zA-Z0-9._-] -> _` substitution is preserved
+ *   verbatim. This is intentionally backwards-compatible: existing S3
+ *   keys already use this shape, and a re-import must produce the same
+ *   destination keys to dedup against them via `HeadObject`.
+ */
+export function sanitizeRelativePath(relativePath: string): string {
   return toPosix(relativePath)
+    .normalize('NFC')
     .split('/')
-    .map((segment) => segment.replace(/[^a-zA-Z0-9._-]/g, '_'))
+    .map((segment) => sanitizeSegment(segment))
     .join('/');
+}
+
+function sanitizeSegment(segment: string): string {
+  if (segment === '' || segment === '.' || segment === '..') {
+    return '_';
+  }
+  return segment.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
 function toPosix(input: string): string {

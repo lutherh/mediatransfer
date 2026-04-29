@@ -339,10 +339,35 @@ export async function runTakeoutScan(
 
   // Dedup by destinationKey (no file I/O needed — files are deleted)
   const dedupMap = new Map<string, ManifestEntry>();
+  let collisionCount = 0;
+  const sampleCollisions: Array<{ destinationKey: string; kept: string; dropped: string }> = [];
   for (const entry of allEntries) {
-    if (!dedupMap.has(entry.destinationKey)) {
+    const existing = dedupMap.get(entry.destinationKey);
+    if (!existing) {
       dedupMap.set(entry.destinationKey, entry);
+      continue;
     }
+    // Two distinct relative paths sanitized to the same destination key.
+    // Common cause: spaces vs underscores in album names ("Album One" vs
+    // "Album_One"), or unicode chars that all collapse to `_`. Surface the
+    // collision so the operator can investigate; we still keep the first
+    // entry (existing behaviour) to avoid silently churning re-imports.
+    if (existing.relativePath !== entry.relativePath) {
+      collisionCount += 1;
+      if (sampleCollisions.length < 10) {
+        sampleCollisions.push({
+          destinationKey: entry.destinationKey,
+          kept: existing.relativePath,
+          dropped: entry.relativePath,
+        });
+      }
+    }
+  }
+  if (collisionCount > 0) {
+    log.warn(
+      { collisionCount, samples: sampleCollisions },
+      '[takeout/runner] destinationKey collisions detected — distinct source files mapped to the same S3 key after sanitization. The first entry per key was kept; later entries were dropped.',
+    );
   }
   const entries = [...dedupMap.values()].sort((a, b) =>
     a.destinationKey.localeCompare(b.destinationKey),

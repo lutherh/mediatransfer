@@ -27,6 +27,30 @@
 
 ---
 
+## 0a. Pre-reimport bug fixes landed 2026-04-29
+
+The following bugs in the takeout pipeline were found by parallel agent
+review and fixed before this plan was first executed. All four ship with a
+shared regression test at
+[src/regression/takeout-pipeline-bugs.test.ts](../src/regression/takeout-pipeline-bugs.test.ts).
+
+| # | Bug | Fix |
+|---|-----|-----|
+| B1 | `objectExists()` used `list({maxResults: 20})` \u2014 false-negative on dense prefixes (\u226520 sibling keys lex-below the target) | `ScalewayProvider.head()` exact-key `HeadObject` probe; `list()` widened to `maxResults: 1000` as fallback. See [src/providers/scaleway.ts](../src/providers/scaleway.ts), [src/takeout/uploader.ts](../src/takeout/uploader.ts). |
+| B2 | `persistManifestJsonl` was a non-atomic `fs.writeFile` \u2014 a crash mid-write would leave a truncated manifest. The `StateCheckpointManager` flush also wiped the dirty flag *after* the in-flight write, silently dropping markDirty calls that arrived during persist. | Shared [src/utils/fs-atomic.ts](../src/utils/fs-atomic.ts) helper with unique tmp suffixes; `enqueueFlush` now snapshots-and-clears `dirty` synchronously so concurrent markDirty calls correctly trigger a follow-up write. |
+| B3 | Sanitiser did not NFC-normalise \u2014 macOS NFD filenames (`e + combining acute`) and Linux NFC (`\u00e9`) produced different keys for the same logical file, leading to silent duplicates. | `sanitizeRelativePath` now `.normalize('NFC')` before per-segment processing. |
+| B4 | Sanitiser allowed `.` and `..` segments and empty segments through \u2014 latent path-traversal class. | Reject `.`, `..`, and empty segments; replace with `_`. Runner also logs a warning when distinct relative paths collide on the same destination key. |
+
+**Backwards-compatibility note:** the per-character ASCII allow-list
+`[^a-zA-Z0-9._-] \u2192 _` was deliberately preserved. Widening to
+`\\p{L}\\p{N}` would have produced different keys for non-ASCII filenames
+and broken dedup against the ~46k objects already in S3 under
+ASCII-mangled names. The existing test asserts
+`'My File (1).jpg' \u2192 'My_File__1_.jpg'` (double underscore) to pin this
+shape.
+
+---
+
 ## 1. Preconditions checklist
 
 Before kicking off the upload, verify all of these. **Do not skip — each guards
@@ -47,14 +71,31 @@ rclone rc --unix-socket data/rclone-rc.sock vfs/stats | jq '.uploadsInProgress, 
 curl -sS --max-time 5 http://localhost:2283/api/server-info/ping
 # expect {"res":"pong"}
 
-# (d) Snapshot state files (idempotency safety net)
-cp data/takeout/state.json   data/takeout/state.json.pre-reimport-$(date +%s).bak
-cp data/takeout/auto-upload.json data/takeout/auto-upload.json.pre-reimport-$(date +%s).bak 2>/dev/null || true
+# (d) Snapshot state files (idempotency safety net) — snapshot ALL pipeline
+#     state, not just state.json. archive-state.json + manifest.jsonl are
+#     equally critical for resume.
+TS=$(date +%s)
+cp data/takeout/state.json                        data/takeout/state.json.pre-reimport-${TS}.bak
+cp data/takeout/auto-upload.json                  data/takeout/auto-upload.json.pre-reimport-${TS}.bak 2>/dev/null || true
+cp data/takeout/work/archive-state.json           data/takeout/work/archive-state.json.pre-reimport-${TS}.bak 2>/dev/null || true
+cp data/takeout/work/manifest.jsonl               data/takeout/work/manifest.jsonl.pre-reimport-${TS}.bak 2>/dev/null || true
+cp data/takeout/google-api-state.json             data/takeout/google-api-state.json.pre-reimport-${TS}.bak 2>/dev/null || true
 
-# (e) Make sure tsx + deps are installed
+# (e) Bucket versioning precheck — re-uploading over existing keys with
+#     versioning OFF will overwrite irrecoverably. Confirm state matches
+#     your expectation before proceeding.
+AWS_ACCESS_KEY_ID=$(grep -E '^SCW_ACCESS_KEY=' .env | cut -d= -f2-) \
+AWS_SECRET_ACCESS_KEY=$(grep -E '^SCW_SECRET_KEY=' .env | cut -d= -f2-) \
+  aws --endpoint-url "$(grep -E '^SCW_ENDPOINT=' .env | cut -d= -f2-)" \
+      s3api get-bucket-versioning --bucket "$(grep -E '^S3_BUCKET=' .env | cut -d= -f2-)"
+# Expected: {"Status": "Enabled"} or empty (= unversioned). The dedup logic
+# below means we should never *overwrite* an existing key in the happy path,
+# but record the result for the run log.
+
+# (f) Make sure tsx + deps are installed
 npm ci
 
-# (f) Lint + tests still pass on this branch (per LLM_INSTRUCTIONS.md)
+# (g) Lint + tests still pass on this branch (per LLM_INSTRUCTIONS.md)
 npm run lint
 npx vitest run
 ```
@@ -88,6 +129,84 @@ find "$INPUT_DIR" -maxdepth 1 -name 'takeout-*.tgz' | wc -l   # >0
 du -sh "$INPUT_DIR"
 ```
 
+### 2a. External HDD source (slow disk, limited local space)
+
+When `INPUT_DIR` lives on a slow external HDD (e.g.
+`/Volumes/Data/archive-already-uploaded`) and there is **not** enough local
+space to extract every archive at once, you must rely on the
+*incremental* runner — never the one-shot scan. The incremental flow only
+keeps **one extracted archive on disk at a time** and deletes it after a
+clean upload (see
+[src/takeout/incremental.ts](../src/takeout/incremental.ts)).
+
+**Hard rules for this layout:**
+
+1. `TAKEOUT_WORK_DIR` MUST be on the local SSD, never on the HDD. Random
+   fs reads during manifest build + multipart upload destroy HDD throughput
+   (and shorten its life). The `.tgz` files on the HDD are read **once,
+   sequentially** during extract — that is the HDD's best case.
+2. Free space on the SSD must exceed the largest individual `.tgz`
+   uncompressed (typically ~10–50 GB for a Takeout slice). Verify before
+   starting:
+   ```bash
+   df -h "$(pwd)/data/takeout/work"
+   # Largest archive uncompressed estimate (sum of compressed × ~1.05 for media):
+   ls -lhS "$INPUT_DIR" | head -5
+   ```
+   Recommend ≥ 60 GB free.
+3. **Do NOT pass `--delete-archive` or `--move-archive`.** The HDD is your
+   only backup copy — the runner default leaves the source `.tgz` files
+   untouched.
+4. If the Mac thermal-throttles during HEIC conversion or the HDD bus
+   saturates, drop concurrency: `--concurrency 2`. Default `4` is fine on
+   most machines.
+
+**Recommended invocation:**
+```bash
+INPUT_DIR=/Volumes/Data/archive-already-uploaded
+
+npx tsx scripts/takeout-process.ts \
+  --input-dir "$INPUT_DIR" \
+  --work-dir "$(pwd)/data/takeout/work" \
+  --concurrency 4 \
+  2>&1 | tee data/logs/takeout-reimport-$(date +%Y%m%d-%H%M).log
+```
+
+Per-archive cycle (verified in
+[src/takeout/incremental.ts](../src/takeout/incremental.ts) lines 230–342):
+
+1. Extract one `.tgz` from the HDD into `${workDir}/temp-extract` (SSD).
+2. Build manifest, persist archive metadata under
+   `${workDir}/metadata/<archive>.json`.
+3. Upload via Scaleway SDK at `UPLOAD_CONCURRENCY` parallelism. Each entry
+   passes through the B1-fixed dedup probe
+   (`state.json` → `provider.head()` → list fallback) before any bytes
+   leave the SSD.
+4. On `failed === 0`, `cleanupDir(extractDir)` wipes the SSD scratch.
+   On any failure the extract is preserved for inspection and the archive
+   is marked `failed` in `archive-state.json`. Re-running resumes from
+   `pending` archives only.
+
+**Network sanity check before starting** (HDD throughput is rarely the
+bottleneck — Scaleway egress is):
+```bash
+curl -sS -o /dev/null -w 'TTFB %{time_starttransfer}s  total %{time_total}s  speed %{speed_download} B/s\n' \
+  "https://s3.${SCW_REGION:-nl-ams}.scw.cloud"
+```
+
+**Multipart hygiene (HDD runs are long → more chance of Ctrl-C):**
+```bash
+# Before the run — establish baseline
+AWS_ACCESS_KEY_ID=$(grep -E '^SCW_ACCESS_KEY=' .env | cut -d= -f2-) \
+AWS_SECRET_ACCESS_KEY=$(grep -E '^SCW_SECRET_KEY=' .env | cut -d= -f2-) \
+  aws --endpoint-url "$(grep -E '^SCW_ENDPOINT=' .env | cut -d= -f2-)" \
+      s3api list-multipart-uploads --bucket "$(grep -E '^S3_BUCKET=' .env | cut -d= -f2-)" \
+      > /tmp/mpu-before.json
+
+# After the run — abort anything older than the run start, since the
+# uploader has no SIGINT handler and orphans cost storage.
+```
+
 ---
 
 ## 3. Decide on `state.json` strategy
@@ -105,9 +224,12 @@ Three modes, in order of preference:
    S3 existence is checked anyway as a fallback.
 
 3. **Discard `state.json` (slowest, fully correct).**
-   Forces every file to be re-checked against S3 via `HeadObject`. Use only
-   if the catalog is suspected corrupt. With ~46k existing keys this adds
-   ~46k HEADs (~2-5 minutes against Scaleway).
+   Forces every file to be re-checked against S3. The current uploader
+   (post-2026-04 fix) prefers an exact-key `HeadObject` probe via
+   `ScalewayProvider.head()` and falls back to a bulk `ListObjectsV2`
+   prefix preload, then per-key `head()`. Cost ≈ ~46k HEADs (~2-5 minutes
+   against Scaleway, mostly hidden by the prefix preload coalescing
+   sibling lookups). Use only if the catalog is suspected corrupt.
    ```bash
    mv data/takeout/state.json data/takeout/state.json.discarded-$(date +%s).bak
    ```
@@ -160,9 +282,24 @@ Behavioural guarantees from the code (verified 2026-04-29):
 - Skip rules:
   - `state.json[key].status === 'uploaded'` → skip with reason
     `already_uploaded_in_state`.
-  - else `HeadObject(key)` succeeds → skip with reason
+  - else exact-key `HeadObject(key)` returns 200 (preferred) or the bulk
+    prefix preload contains the key → skip with reason
     `already_exists_in_destination`.
-- Single-threaded by design. Resume-safe ([takeout-resume.ts](../scripts/takeout-resume.ts)).
+- **Concurrency:** controlled by `UPLOAD_CONCURRENCY` (default `4` in
+  [.env](../.env), see [src/takeout/uploader.ts](../src/takeout/uploader.ts)).
+  Set to `1` if you need strict serialisation. Resume-safe
+  ([takeout-resume.ts](../scripts/takeout-resume.ts)).
+- **Do NOT pass `--move-archives` or `--delete-archives`.** This is a
+  re-import from a backup; the source archives are the recovery copy.
+  Moving/deleting them risks losing the only good copy if the run aborts
+  mid-stream and we need to retry from scratch.
+- **No SIGINT handler.** Ctrl-C during a multipart upload may leave
+  orphaned upload IDs in the bucket. Prefer letting the run finish; if you
+  must abort, follow up with:
+  ```bash
+  aws --endpoint-url "$SCW_ENDPOINT" s3api list-multipart-uploads --bucket "$S3_BUCKET"
+  ```
+  and abort any uploads older than the run start time.
 
 If the run is interrupted:
 ```bash

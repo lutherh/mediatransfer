@@ -5,6 +5,7 @@ import { Transform, type Readable } from 'node:stream';
 import type { CloudProvider } from '../providers/types.js';
 import type { ManifestEntry } from './manifest.js';
 import { toErrorMessage } from '../utils/errors.js';
+import { writeFileAtomic } from '../utils/fs-atomic.js';
 import { getLogger } from '../utils/logger.js';
 
 const log = getLogger().child({ module: 'uploader' });
@@ -521,36 +522,7 @@ export async function persistUploadState(
   state: UploadState,
 ): Promise<void> {
   state.updatedAt = new Date().toISOString();
-  const dir = path.dirname(statePath);
-  await fs.mkdir(dir, { recursive: true });
-  const tmpPath = `${statePath}.tmp`;
-  await fs.writeFile(tmpPath, JSON.stringify(state, null, 2), 'utf8');
-
-  // On Windows the target file can be momentarily locked by antivirus or
-  // indexing services, causing EPERM on rename.  Retry a few times with a
-  // short back-off before giving up.
-  const MAX_RENAME_RETRIES = 5;
-  for (let attempt = 0; attempt < MAX_RENAME_RETRIES; attempt++) {
-    try {
-      await fs.rename(tmpPath, statePath);
-      return;
-    } catch (err: unknown) {
-      const isRetryable =
-        err instanceof Error &&
-        'code' in err &&
-        ((err as NodeJS.ErrnoException).code === 'EPERM' ||
-          (err as NodeJS.ErrnoException).code === 'EACCES');
-      if (!isRetryable || attempt === MAX_RENAME_RETRIES - 1) {
-        throw err;
-      }
-      const delayMs = 200 * (attempt + 1);
-      log.warn(
-        { delayMs, attempt: attempt + 1, maxRetries: MAX_RENAME_RETRIES },
-        '[uploader] rename EPERM/EACCES, retrying',
-      );
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-  }
+  await writeFileAtomic(statePath, JSON.stringify(state, null, 2));
 }
 
 export function createEmptyState(): UploadState {
@@ -562,7 +534,22 @@ export function createEmptyState(): UploadState {
 }
 
 async function objectExists(provider: CloudProvider, key: string): Promise<boolean> {
-  const items = await provider.list({ prefix: key, maxResults: 20 });
+  // Prefer an exact-key HeadObject probe when the provider supports it.
+  // The previous list-based check (`list({prefix: key, maxResults: 20})`) was
+  // a false-negative trap: S3's `Prefix` is a startsWith match, so any 20+
+  // sibling keys lexicographically below the target shadowed the exact key
+  // and we re-uploaded over the existing object.
+  if (typeof provider.head === 'function') {
+    const info = await provider.head(key);
+    return info !== null;
+  }
+
+  // Fallback for providers without a `head()` implementation: page the
+  // listing for the exact key. We bound the scan to a small window because
+  // an exact match (if present) sorts at-or-after every prefix-shared key
+  // and either appears within the first page or not at all for any
+  // realistic dataset. Still a heuristic — implement `head()` for safety.
+  const items = await provider.list({ prefix: key, maxResults: 1000 });
   return items.some((item) => item.key === key);
 }
 
@@ -675,17 +662,25 @@ class StateCheckpointManager {
   }
 
   private enqueueFlush(): void {
+    // Snapshot-and-clear synchronously so that any markDirty() calls that
+    // arrive while the in-flight persist is awaiting I/O re-set `dirty`
+    // and trigger a follow-up flush. The previous shape cleared `dirty`
+    // *after* the await, which silently wiped the dirty flag set by all
+    // markDirty() calls made during the in-flight write — leaving every
+    // subsequent chain link to skip with `dirty === false`, even though
+    // newer state had not yet been persisted.
+    if (!this.dirty) {
+      return;
+    }
+    this.dirty = false;
     this.dirtyUpdates = 0;
-    this.writeChain = this.writeChain.then(async () => {
-      if (!this.dirty) {
-        return;
-      }
-
-      await persistUploadState(this.statePath, this.state);
-      this.dirty = false;
-    }).catch((error) => {
-      this.flushError = error;
-    });
+    this.writeChain = this.writeChain
+      .then(() => persistUploadState(this.statePath, this.state))
+      .catch((error) => {
+        // Re-mark dirty so a future flush retries this state.
+        this.dirty = true;
+        this.flushError = error;
+      });
   }
 }
 

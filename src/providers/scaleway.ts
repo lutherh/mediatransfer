@@ -2,6 +2,7 @@ import {
   S3Client,
   ListObjectsV2Command,
   GetObjectCommand,
+  HeadObjectCommand,
   DeleteObjectCommand,
   type ListObjectsV2CommandInput,
   type ListObjectsV2CommandOutput,
@@ -242,6 +243,39 @@ export class ScalewayProvider implements CloudProvider {
 
     // @ts-expect-error — SDK Body may be a web stream; convert to Node Readable
     return Readable.fromWeb(response.Body);
+  }
+
+  /**
+   * Exact-key existence probe via `HeadObject`.
+   *
+   * Returns `null` for a 404 (the canonical "not found" signal). Any other
+   * error is rethrown so transient 5xx / network failures don't get silently
+   * misread as "missing" — that bug previously caused dense date folders to
+   * be re-uploaded on top of existing keys.
+   */
+  async head(key: string): Promise<ObjectInfo | null> {
+    const command = new HeadObjectCommand({
+      Bucket: this.bucket,
+      Key: this.fullKey(key),
+    });
+    try {
+      const response = await this.client.send(command, {
+        abortSignal: AbortSignal.timeout(ScalewayProvider.S3_REQUEST_TIMEOUT_MS),
+      });
+      return {
+        key,
+        size: response.ContentLength ?? 0,
+        lastModified: response.LastModified ?? new Date(0),
+        contentType: response.ContentType,
+      };
+    } catch (err) {
+      const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+      const name = (err as Error)?.name;
+      if (status === 404 || name === 'NotFound' || name === 'NoSuchKey') {
+        return null;
+      }
+      throw err;
+    }
   }
 
   async upload(key: string, stream: Readable, contentType?: string, metadata?: Record<string, string>): Promise<void> {

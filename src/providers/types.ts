@@ -39,6 +39,19 @@ export interface CloudProvider {
   list(options?: ListOptions): Promise<ObjectInfo[]>;
 
   /**
+   * Check whether a single object exists, returning its metadata if so.
+   *
+   * Optional. When implemented this MUST be an exact-key existence probe
+   * (e.g. S3 `HeadObject`) — never a prefix list. Callers rely on this for
+   * idempotent skip-on-exists logic; a prefix-based implementation can race
+   * dense date folders and falsely report missing.
+   *
+   * Implementations that cannot offer an exact probe should leave this
+   * undefined; callers will fall back to `list` with safer semantics.
+   */
+  head?(key: string): Promise<ObjectInfo | null>;
+
+  /**
    * Download a single object and return it as a Node.js Readable stream.
    */
   download(key: string): Promise<Readable>;
