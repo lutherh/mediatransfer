@@ -218,6 +218,10 @@ RCLONE_ARGS=(
 
 if [[ "${1:-}" == "--background" || "${1:-}" == "-b" ]]; then
   RCLONE_ARGS+=(--daemon)
+  # Tighten umask so the rc Unix socket is created 0600 even in the brief
+  # window between bind() and rclone's chmod(). Parity with --supervised /
+  # foreground branches below. See security review P3-1.
+  umask 077
   rclone "${RCLONE_ARGS[@]}"
   # Capture the PID of the daemon rclone forks. `rclone --daemon` double-forks,
   # so we record the most recent rclone PID owning this mount point.

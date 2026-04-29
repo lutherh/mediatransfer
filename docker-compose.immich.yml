@@ -11,8 +11,16 @@ services:
   # Clean up stale FUSE mounts left by a crashed rclone-s3 container.
   # Without this, Docker gets "transport endpoint is not connected" on the
   # bind-mount path and refuses to start rclone-s3 after an unclean shutdown.
+  #
+  # Linux-only: gated behind the `linux` compose profile because
+  # `nsenter -t 1 -m` enters PID 1's mount namespace, which on macOS / OrbStack
+  # is the Linux VM init — not the macOS host. On macOS the host-side
+  # `rclone nfsmount` (scripts/mount-s3.sh) is the source of truth and there
+  # are no in-container FUSE mounts to clean.
   rclone-cleanup:
     image: alpine:3.19
+    profiles:
+      - linux
     container_name: immich_rclone_cleanup
     restart: "no"
     privileged: true
@@ -35,6 +43,14 @@ services:
   rclone-s3:
     image: rclone/rclone:latest
     container_name: immich_rclone_s3
+    # Linux-only: in-container FUSE rclone mount cannot propagate back to
+    # the host bind through OrbStack on macOS (see AGENTS.md "Things that
+    # bite"). On macOS the originals are exposed via host-side
+    # `rclone nfsmount` at data/immich-s3 (scripts/mount-s3.sh, managed by
+    # uk.4to.mediatransfer.s3mount LaunchAgent). Activated automatically by
+    # scripts/start-all.sh when running on Linux.
+    profiles:
+      - linux
     restart: unless-stopped
     cap_add:
       - SYS_ADMIN
@@ -103,6 +119,16 @@ services:
       - ${ENCODED_VIDEO_LOCATION:-./data/immich/encoded-video}:/upload/encoded-video
       - ${PROFILE_LOCATION:-./data/immich/profile}:/upload/profile
       - ${BACKUP_LOCATION:-./data/immich/backups}:/upload/backups
+    # On Linux UPLOAD_LOCATION is the in-container FUSE bind, so the .immich
+    # sentinels MUST be written after rclone-s3 is healthy — otherwise they
+    # land on the empty stub directory shadowed by the not-yet-mounted FUSE
+    # and disappear once rclone takes over the namespace. On macOS rclone-s3
+    # is gated by profile=linux and this depends_on edge is automatically
+    # dropped, so the init still runs against the live NFS mount.
+    depends_on:
+      rclone-s3:
+        condition: service_healthy
+        required: false
     entrypoint: /bin/sh
     command: >
       -c "for d in encoded-video thumbs upload library profile backups; do
@@ -140,12 +166,17 @@ services:
     depends_on:
       immich-init:
         condition: service_completed_successfully
-      rclone-s3:
-        condition: service_healthy
       database:
         condition: service_healthy
       immich-redis:
         condition: service_healthy
+    # NOTE: an `rclone-s3: service_healthy` dependency is intentionally
+    # omitted here. On Linux it is enforced indirectly via
+    # immich-init -> rclone-s3 (configured below in the immich-init block);
+    # on macOS rclone-s3 doesn't run at all (profile=linux) and the upload
+    # path is the host NFS mount validated by
+    # scripts/start-all.sh::ensure_macos_s3_mount before bringing the stack
+    # up. Adding it back will block immich-server in `Created` on macOS.
     healthcheck:
       # The Immich image ships curl but not wget, so use curl here.
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:2283/api/server/ping"]

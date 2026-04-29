@@ -36,6 +36,18 @@ cd "$ROOT_DIR"
 
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.immich.yml)
 
+# Activate the `linux` compose profile only on Linux. This gates the
+# rclone-s3 + rclone-cleanup sidecars (in-container FUSE mount), which are
+# non-functional on macOS — OrbStack cannot propagate FUSE mounts back to
+# the host bind, so rclone-s3 never goes healthy and `immich-server` blocks
+# in `Created` if the dependency is active. On macOS the originals are
+# served from the host NFS mount validated by ensure_macos_s3_mount() below.
+if [ "$(uname -s)" = "Linux" ]; then
+  export COMPOSE_PROFILES="${COMPOSE_PROFILES:-linux}"
+else
+  unset COMPOSE_PROFILES
+fi
+
 wait_for_docker() {
   local retries=30
   while ! docker info >/dev/null 2>&1; do
