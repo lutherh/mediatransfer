@@ -12,6 +12,7 @@ import path from 'node:path';
 import { S3Client, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { resolveScalewayEndpoint, resolveScalewaySigningRegion } from '../../providers/scaleway.js';
 import { getRuntimeSettings, setRuntimeSettings } from '../../config/runtime-settings.js';
+import { assertPublicHttpUrl } from '../../utils/ssrf-guard.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -147,11 +148,22 @@ async function testImmichConnection(cfg: {
   apiKey: string;
 }): Promise<{ ok: boolean; serverVersion?: string; error?: string }> {
   try {
+    // SSRF defence-in-depth: refuse to fetch from internal/private targets.
+    await assertPublicHttpUrl(cfg.url);
     const base = cfg.url.replace(/\/$/, '');
     const res = await fetch(`${base}/api/server/ping`, {
       headers: { 'x-api-key': cfg.apiKey },
       signal: AbortSignal.timeout(10_000),
+      // SSRF defence-in-depth: never auto-follow redirects (the redirect
+      // target is not re-validated by the guard, so a public Immich URL
+      // could 302 us into a private/loopback host).
+      redirect: 'manual',
     });
+    // `redirect: 'manual'` surfaces 3xx as opaque responses (status 0) or as
+    // the original 3xx; reject either explicitly.
+    if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
+      return { ok: false, error: 'redirects not allowed on health check' };
+    }
     if (!res.ok) {
       return { ok: false, error: `HTTP ${res.status} ${res.statusText}` };
     }
@@ -517,7 +529,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     // Test before saving
     const test = await testImmichConnection({ url: body.url, apiKey });
     if (!test.ok) {
-      return reply.code(400).send({ error: `Connection test failed: ${test.error}` });
+      return reply.code(400).send({ ok: false, error: `Connection test failed: ${test.error}` });
     }
 
     await setRuntimeSettings<ImmichStoredConfig>(KEY_IMMICH, {
@@ -546,6 +558,8 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     }
     const base = parsed.data.url.replace(/\/$/, '');
     try {
+      // SSRF defence-in-depth: refuse to probe internal/private targets.
+      await assertPublicHttpUrl(parsed.data.url);
       const res = await fetch(base, {
         method: 'GET',
         signal: AbortSignal.timeout(3_000),

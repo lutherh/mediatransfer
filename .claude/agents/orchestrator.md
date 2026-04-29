@@ -26,6 +26,7 @@ Dispatch via the `Task` tool using the slug in the first column.
 | `security-reviewer` | Auth, encryption, credentials, OWASP, access control |
 | `devops-expert` | Docker, Compose, CI/CD, deployment, containers |
 | `s3-immich-path-verifier` | Verifying S3/Immich prefix conflicts before rclone mount, syncing Immich data to S3 |
+| `immich-asset-integrity` | Immich load failures (ENOENT, I/O error, broken thumbs), suspected vfs-cache write loss, DB-vs-S3 inventory audits |
 
 ## Delegation Rules
 

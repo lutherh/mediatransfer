@@ -6,7 +6,10 @@ import { inferDateFromFilename, extractExifMetadata, extractVideoCreationDate } 
 import { isWrongDate, parseSidecarDate } from '../utils/date-repair.js';
 import { UNDATED_PREFIX, S3TRANSFERS_PREFIX, toDatePath } from '../utils/storage-paths.js';
 import { MEDIA_EXTENSIONS } from '../utils/media-extensions.js';
+import { getLogger } from '../utils/logger.js';
 import type { ArchiveMetadata, MediaItemMetadata } from './archive-metadata.js';
+
+const log = getLogger().child({ module: 'manifest' });
 
 export type ManifestEntry = {
   sourcePath: string;
@@ -50,7 +53,7 @@ export async function buildManifest(
           // encoding mismatch, antivirus quarantine, etc.  Skip it instead of
           // killing the entire scan.
           skippedCount++;
-          console.warn(`[manifest] Skipping inaccessible file: ${sourcePath}`, (err as Error).message);
+          log.warn({ sourcePath, err: (err as Error).message }, '[manifest] Skipping inaccessible file');
           return null;
         }
         const relativePath = toPosix(path.relative(mediaRoot, sourcePath));
@@ -83,7 +86,7 @@ export async function buildManifest(
   }
 
   if (skippedCount > 0) {
-    console.warn(`[manifest] ${skippedCount} file(s) skipped due to access errors`);
+    log.warn({ skippedCount }, '[manifest] file(s) skipped due to access errors');
   }
 
   entries.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
@@ -117,7 +120,7 @@ export async function loadManifestJsonl(manifestPath: string): Promise<ManifestE
     try {
       entries.push(JSON.parse(line) as ManifestEntry);
     } catch {
-      console.warn(`[manifest] Skipping malformed line in ${manifestPath}: ${line.slice(0, 120)}`);
+      log.warn({ manifestPath, line: line.slice(0, 120) }, '[manifest] Skipping malformed line');
     }
   }
   return entries;
@@ -135,7 +138,7 @@ async function listMediaFiles(rootDir: string): Promise<string[]> {
     try {
       entries = await fs.readdir(current, { withFileTypes: true });
     } catch (err) {
-      console.warn(`[manifest] Skipping unreadable directory: ${current}`, (err as Error).message);
+      log.warn({ current, err: (err as Error).message }, '[manifest] Skipping unreadable directory');
       continue;
     }
     for (const entry of entries) {
@@ -387,7 +390,7 @@ async function readSidecarDates(sidecarPath: string): Promise<SidecarDates> {
 
     return { photoTakenDate, creationDate, hasPhotoTakenTime };
   } catch (err) {
-    console.debug('[manifest] Failed to parse sidecar metadata', err);
+    log.debug({ err }, '[manifest] Failed to parse sidecar metadata');
     return { hasPhotoTakenTime: false };
   }
 }
@@ -450,7 +453,7 @@ async function exists(filePath: string): Promise<boolean> {
     // ENOENT is the expected/normal case — sidecar file simply doesn't exist.
     // Only log genuinely unexpected errors (permission denied, etc.).
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.warn('[manifest] Path not accessible', { filePath, err });
+      log.warn({ filePath, err }, '[manifest] Path not accessible');
     }
     return false;
   }

@@ -59,3 +59,28 @@ export function createLogger(
 
   return pino(options);
 }
+
+const VALID_NODE_ENV = ['development', 'production', 'test'] as const;
+const VALID_LOG_LEVEL = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const;
+
+type ValidNodeEnv = (typeof VALID_NODE_ENV)[number];
+type ValidLogLevel = (typeof VALID_LOG_LEVEL)[number];
+
+let sharedLogger: Logger | undefined;
+
+/**
+ * Returns a shared, lazily-initialised Pino logger configured from
+ * `process.env.NODE_ENV` and `process.env.LOG_LEVEL`. Modules can wrap this in
+ * a child logger via `getLogger().child({ module: 'foo' })`.
+ */
+export function getLogger(): Logger {
+  if (sharedLogger) return sharedLogger;
+  const nodeEnv = (VALID_NODE_ENV as readonly string[]).includes(process.env.NODE_ENV ?? '')
+    ? (process.env.NODE_ENV as ValidNodeEnv)
+    : 'production';
+  const logLevel = (VALID_LOG_LEVEL as readonly string[]).includes(process.env.LOG_LEVEL ?? '')
+    ? (process.env.LOG_LEVEL as ValidLogLevel)
+    : 'info';
+  sharedLogger = createLogger({ NODE_ENV: nodeEnv, LOG_LEVEL: logLevel });
+  return sharedLogger;
+}

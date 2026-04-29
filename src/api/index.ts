@@ -63,9 +63,12 @@ import type { ApiServices } from './types.js';
 import { loadEnv, type Env } from '../config/env.js';
 import { apiError } from './errors.js';
 import { delay } from '../utils/delay.js';
+import { getLogger } from '../utils/logger.js';
 import { buildDestinationKey, createDatePath } from './transfer-keys.js';
 import type { CloudProvider } from '../providers/types.js';
 export { buildDestinationKey, createDatePath };
+
+const log = getLogger().child({ module: 'api' });
 
 export type CreateApiOptions = {
 	services?: ApiServices;
@@ -281,17 +284,17 @@ async function createDefaultServices(): Promise<{ services: ApiServices; dispose
 		);
 
 		worker.on('error', (err) => {
-			console.error('[transfer-worker] Worker error', err);
+			log.error({ err }, '[transfer-worker] Worker error');
 		});
 
-		console.log('[redis] Redis connected – queue features enabled');
+		log.info('[redis] Redis connected – queue features enabled');
 	} catch (err) {
-		console.warn('[redis] Redis is not reachable – running without queue support:', (err as Error).message ?? err);
+		log.warn({ err }, '[redis] Redis is not reachable – running without queue support');
 		// Clean up partial connections
 		try {
 			await redis?.disconnect();
 		} catch (disconnectError) {
-			console.debug('[redis] Ignored disconnect cleanup error', disconnectError);
+			log.debug({ err: disconnectError }, '[redis] Ignored disconnect cleanup error');
 		}
 		redis = null;
 		queue = null;

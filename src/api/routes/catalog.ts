@@ -5,6 +5,9 @@ import { decodeKey } from '../../catalog/scaleway-catalog.js';
 import { extractExifMetadataFull } from '../../utils/exif.js';
 import { apiError } from '../errors.js';
 import { buildCatalogHtml } from './catalog-html.js';
+import { getLogger } from '../../utils/logger.js';
+
+const log = getLogger().child({ module: 'catalog-routes' });
 
 // ── Server-side dedup scan state cache ─────────────────────────────────────
 // Keeps the latest scan result in memory so (a) we never run two scans at once,
@@ -107,7 +110,7 @@ export async function registerCatalogRoutes(
       const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
       const status = isTimeout ? 503 : 500;
       const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to list catalog items';
-      console.error('[catalog] /catalog/api/items error:', err);
+      log.error({ err }, '[catalog] /catalog/api/items error');
       return reply.status(status).send({ error: message });
     }
   });
@@ -126,7 +129,7 @@ export async function registerCatalogRoutes(
       const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
       const status = isTimeout ? 503 : 500;
       const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to fetch catalog stats';
-      console.error('[catalog] /catalog/api/stats error:', err);
+      log.error({ err }, '[catalog] /catalog/api/stats error');
       return reply.status(status).send({ error: message });
     }
   });
@@ -145,7 +148,7 @@ export async function registerCatalogRoutes(
       const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
       const status = isTimeout ? 503 : 500;
       const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to list all catalog items';
-      console.error('[catalog] /catalog/api/items/all error:', err);
+      log.error({ err }, '[catalog] /catalog/api/items/all error');
       return reply.status(status).send({ error: message });
     }
   });
@@ -164,7 +167,7 @@ export async function registerCatalogRoutes(
       const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
       const status = isTimeout ? 503 : 500;
       const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to fetch date distribution';
-      console.error('[catalog] /catalog/api/date-distribution error:', err);
+      log.error({ err }, '[catalog] /catalog/api/date-distribution error');
       return reply.status(status).send({ error: message });
     }
   });
@@ -182,7 +185,7 @@ export async function registerCatalogRoutes(
       const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
       const status = isTimeout ? 503 : 500;
       const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to list undated items';
-      console.error('[catalog] /catalog/api/undated error:', err);
+      log.error({ err }, '[catalog] /catalog/api/undated error');
       return reply.status(status).send({ error: message });
     }
   });
@@ -201,7 +204,7 @@ export async function registerCatalogRoutes(
       const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
       const status = isTimeout ? 503 : 500;
       const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to delete catalog items';
-      console.error('[catalog] DELETE /catalog/api/items error:', err);
+      log.error({ err }, '[catalog] DELETE /catalog/api/items error');
       return reply.status(status).send({ error: message });
     }
   });
@@ -220,7 +223,7 @@ export async function registerCatalogRoutes(
       const isTimeout = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
       const status = isTimeout ? 503 : 500;
       const message = isTimeout ? 'S3 request timed out – please retry' : 'Failed to move catalog item';
-      console.error('[catalog] PATCH /catalog/api/items/move error:', err);
+      log.error({ err }, '[catalog] PATCH /catalog/api/items/move error');
       return reply.status(status).send({ error: message });
     }
   });

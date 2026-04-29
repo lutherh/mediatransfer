@@ -16,11 +16,14 @@ Always consult these before answering:
 
 | Doc | Contains |
 |-----|----------|
+| `AGENTS.md` | Cross-tool agent rules + "Things that bite" operational gotchas |
 | `PLAN.md` | Ordered implementation phases, step status, acceptance criteria |
 | `TECH_STACK.md` | Approved technologies, versions, and rationale |
 | `LLM_INSTRUCTIONS.md` | Coding standards, test requirements, workflow rules |
 | `prisma/schema.prisma` | Database models and relationships |
-| `docker-compose.yml` | Service topology (Node app, Postgres, Redis) |
+| `docker-compose.yml` | Main service topology (Node app, Postgres, Redis) |
+| `docker-compose.immich.yml` | Optional Immich stack (separate compose file; `linux` profile gates rclone sidecar) |
+| `/memories/repo/s3-immich-layout.md` | Canonical S3 namespace layout |
 
 ## Module Map
 
@@ -33,16 +36,22 @@ Always consult these before answering:
 | Catalog | `src/catalog/` | S3 object listing, media streaming, thumbnails |
 | Database | `src/db/`, `prisma/` | Prisma ORM, credential encryption, job state |
 | Config | `src/config/` | Zod-validated env loader |
+| Regression harness | `src/regression/` | Snapshot fixtures, golden-output checks |
 | Frontend | `frontend/` | React 19 + Vite 8 + Tailwind 4, catalog grid UI |
-| Utilities | `src/utils/` | Crypto, logging, shared helpers |
+| Utilities | `src/utils/` | Crypto, logging (Pino), shared helpers |
+| Operational scripts | `scripts/` | TypeScript ops scripts (takeout, S3↔Immich migration) + shell launchers (`start-all.sh`, `mount-s3.sh`) |
+| Tactical plans | `plans/` | Numbered tactical plans for individual fixes |
 
 ## Transfer Paths
 
 ```
 Google Photos Picker API  ──→  Scaleway Object Storage
 Google Takeout archives   ──→  Scaleway Object Storage
-Scaleway Object Storage   ──→  Immich (via PowerShell scripts)
+Scaleway Object Storage   ──→  Immich (via rclone NFS mount on macOS / FUSE on Linux
+                                        + bash scripts under scripts/)
 ```
+
+Canonical S3 layout (post-2026-04): `photosync/immich/{library,upload,s3transfers,thumbs,encoded-video,profile,backups}/...`. MediaTransfer writes to `immich/s3transfers/...`; Immich owns everything else under `immich/`. See `/memories/repo/s3-immich-layout.md`.
 
 ## Constraints
 

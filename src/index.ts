@@ -3,6 +3,9 @@ import { fileURLToPath } from 'node:url';
 import { loadEnv } from './config/env.js';
 import { createApiServer } from './api/index.js';
 import { disconnectPrisma } from './db/index.js';
+import { getLogger } from './utils/logger.js';
+
+const log = getLogger().child({ module: 'index' });
 
 export async function main(): Promise<void> {
   const env = loadEnv();
@@ -20,9 +23,9 @@ export async function main(): Promise<void> {
   // These relax SOP protection and should be narrowed in production.
   const wildcardOrigins = corsAllowedOrigins.filter((o) => /[*?]/.test(o));
   if (wildcardOrigins.length > 0 && env.NODE_ENV === 'production') {
-    console.warn(
-      `[cors] WARNING: wildcard pattern(s) in CORS_ALLOWED_ORIGINS: ${wildcardOrigins.join(', ')}. ` +
-      `Narrow to explicit origins (e.g. https://your.domain) for production deployments.`,
+    log.warn(
+      { wildcardOrigins },
+      '[cors] wildcard pattern(s) in CORS_ALLOWED_ORIGINS — narrow to explicit origins for production',
     );
   }
 
@@ -36,11 +39,11 @@ export async function main(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`[shutdown] ${signal} received — closing gracefully…`);
+    log.info({ signal }, '[shutdown] signal received — closing gracefully');
 
     // Hard deadline: force-exit after 15s to avoid hanging
     const forceTimer = setTimeout(() => {
-      console.error('[shutdown] Timeout — forcing exit');
+      log.error('[shutdown] Timeout — forcing exit');
       process.exit(1);
     }, 15_000);
     forceTimer.unref();
@@ -49,7 +52,7 @@ export async function main(): Promise<void> {
       await app.close();
       await disconnectPrisma();
     } catch (err) {
-      console.error('[shutdown] Error during cleanup', err);
+      log.error({ err }, '[shutdown] Error during cleanup');
     }
     process.exit(0);
   };
@@ -57,7 +60,7 @@ export async function main(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('unhandledRejection', (reason) => {
-    console.error('[unhandledRejection]', reason);
+    log.error({ reason }, '[unhandledRejection]');
   });
 
   await app.listen({ port: env.PORT, host: env.HOST });
@@ -67,7 +70,7 @@ const currentPath = fileURLToPath(import.meta.url);
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
 if (currentPath === invokedPath) {
   main().catch((err) => {
-    console.error('Fatal startup error:', err);
+    log.error({ err }, 'Fatal startup error');
     process.exit(1);
   });
 }

@@ -528,9 +528,13 @@ describe('GET /settings/immich', () => {
 });
 
 describe('POST /settings/immich/test', () => {
+  beforeEach(() => {
+    vi.stubEnv('SSRF_ALLOWED_HOSTS', 'immich.local');
+  });
   afterEach(() => {
     vi.clearAllMocks();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('returns ok: true when ping succeeds', async () => {
@@ -583,6 +587,29 @@ describe('POST /settings/immich/test', () => {
     expect(res.json().error).toContain('ECONNREFUSED');
   });
 
+  it('rejects 3xx redirects (SSRF redirect-follow defence)', async () => {
+    // Simulate a public URL that redirects to a private host. fetch is called
+    // with redirect:'manual' so the response surfaces as opaqueredirect or 3xx.
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      type: 'opaqueredirect',
+      ok: false,
+      status: 0,
+      statusText: '',
+    })));
+
+    const { app, register } = buildApp();
+    await register();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/settings/immich/test',
+      payload: { url: 'http://immich.local', apiKey: 'key' },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error).toMatch(/redirects not allowed/);
+  });
+
   it('uses saved apiKey when body omits apiKey', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
@@ -619,6 +646,9 @@ describe('POST /settings/immich/test', () => {
 });
 
 describe('PUT /settings/immich', () => {
+  beforeEach(() => {
+    vi.stubEnv('SSRF_ALLOWED_HOSTS', 'immich.local');
+  });
   afterEach(() => {
     vi.clearAllMocks();
     vi.restoreAllMocks();
@@ -674,9 +704,13 @@ describe('PUT /settings/immich', () => {
 });
 
 describe('GET /settings/immich/reachable', () => {
+  beforeEach(() => {
+    vi.stubEnv('SSRF_ALLOWED_HOSTS', 'immich.local');
+  });
   afterEach(() => {
     vi.clearAllMocks();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('returns ok: true with status when the server responds 2xx', async () => {

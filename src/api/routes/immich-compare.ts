@@ -5,6 +5,9 @@ import { z } from 'zod';
 import { Client } from 'pg';
 import type { CatalogService } from '../../catalog/scaleway-catalog.js';
 import { apiError } from '../errors.js';
+import { getLogger } from '../../utils/logger.js';
+
+const log = getLogger().child({ module: 'immich-compare' });
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -240,7 +243,7 @@ export async function registerImmichCompareRoutes(
 
 			return scanResult;
 		} catch (err) {
-			console.error('[immich-compare] orphan scan error:', err);
+			log.error({ err }, '[immich-compare] orphan scan error');
 			const message = err instanceof Error ? err.message : 'Failed to scan orphans';
 			return reply.status(500).send(apiError('SCAN_FAILED', message));
 		} finally {
@@ -290,7 +293,7 @@ export async function registerImmichCompareRoutes(
 			return { applied, total: remaps.length, backedUp: backup };
 		} catch (err) {
 			if (client) await client.query('ROLLBACK').catch(() => {});
-			console.error('[immich-compare] remap error:', err);
+			log.error({ err }, '[immich-compare] remap error');
 			const message = err instanceof Error ? err.message : 'Failed to apply remaps';
 			return reply.status(500).send(apiError('REMAP_FAILED', message));
 		} finally {
@@ -332,7 +335,7 @@ export async function registerImmichCompareRoutes(
 				newPath,
 			};
 		} catch (err) {
-			console.error('[immich-compare] resolve error:', err);
+			log.error({ err }, '[immich-compare] resolve error');
 			const message = err instanceof Error ? err.message : 'Failed to resolve asset';
 			return reply.status(500).send(apiError('RESOLVE_FAILED', message));
 		} finally {

@@ -473,7 +473,7 @@ const SWIPE_HORIZONTAL_RATIO = 1.5;
  * @pattern Immich lightbox with swipe navigation and zoom
  * @pattern Ente info panel overlay with EXIF metadata
  */
-function Lightbox({
+export function Lightbox({
   items,
   index,
   apiToken,
@@ -488,20 +488,23 @@ function Lightbox({
   onNavigate: (index: number) => void;
   onDateChanged: () => void;
 }) {
-  const item = items[index];
+  const item: CatalogItem | undefined = items[index];
 
-  // Guard: if index is somehow out of bounds, close the lightbox
-  if (!item) {
-    onClose();
-    return null;
-  }
+  // Guard: if index is somehow out of bounds, close the lightbox via effect
+  // (calling onClose() during render would mutate parent state mid-render and
+  // trigger React 19's "Cannot update a component while rendering" warning).
+  useEffect(() => {
+    if (!item) onClose();
+  }, [item, onClose]);
 
   // Full-resolution URL for download only
-  const fullMediaUrl = catalogMediaUrl(item.encodedKey, apiToken);
+  const fullMediaUrl = item ? catalogMediaUrl(item.encodedKey, apiToken) : '';
   // Lightbox preview: use large (1920px) thumbnail for images, full URL for videos.
-  const thumbUrl = item.mediaType === 'video'
-    ? fullMediaUrl
-    : catalogThumbnailUrl(item.encodedKey, 'large', apiToken);
+  const thumbUrl = item
+    ? (item.mediaType === 'video'
+      ? fullMediaUrl
+      : catalogThumbnailUrl(item.encodedKey, 'large', apiToken))
+    : '';
 
   // Fall back to the full media URL if the large thumbnail fails.
   const [previewFailed, setPreviewFailed] = useState(false);
@@ -598,6 +601,7 @@ function Lightbox({
   }, [index, items.length, onNavigate]);
 
   // Extract filename from the key for the toolbar display
+  if (!item) return null;
   const filename = item.key.split('/').pop() ?? item.key;
 
   return (

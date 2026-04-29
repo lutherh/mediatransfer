@@ -13,6 +13,9 @@ import { Agent as HttpsAgent } from 'node:https';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
+import { getLogger } from '../utils/logger.js';
+
+const log = getLogger().child({ module: 'scaleway-catalog' });
 import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -394,7 +397,7 @@ export class DiskThumbnailCache {
     fs.mkdir(path.dirname(fp), { recursive: true })
       .then(() => fs.writeFile(fp, buffer))
       .catch((err) => {
-        console.warn('[catalog] Failed to write disk thumbnail cache', { file: fp, err });
+        log.warn({ file: fp, err }, '[catalog] Failed to write disk thumbnail cache');
       });
   }
 
@@ -426,9 +429,9 @@ async function s3ListWithRetry(
       lastError = err;
       if (attempt < options.maxRetries - 1) {
         const delay = Math.min(1000 * 2 ** attempt, 15_000); // 1s, 2s, 4s, 8s exponential backoff
-        console.warn(
-          `[catalog] S3 list page failed (attempt ${attempt + 1}/${options.maxRetries}), retrying in ${delay}ms`,
-          err,
+        log.warn(
+          { err, attempt: attempt + 1, maxRetries: options.maxRetries, delayMs: delay },
+          '[catalog] S3 list page failed, retrying',
         );
         await new Promise((r) => setTimeout(r, delay));
       }
@@ -598,7 +601,7 @@ export class ScalewayCatalogService implements CatalogService {
               return items;
             })
             .catch((err) => {
-              console.warn('[catalog] Background index refresh failed, keeping stale cache', err);
+              log.warn({ err }, '[catalog] Background index refresh failed, keeping stale cache');
               return cache.items; // keep serving stale on failure
             })
             .finally(() => {
@@ -616,7 +619,7 @@ export class ScalewayCatalogService implements CatalogService {
             return items;
           })
           .catch((err) => {
-            console.warn('[catalog] Index refresh failed, extending stale cache', err);
+            log.warn({ err }, '[catalog] Index refresh failed, extending stale cache');
             // Extend the stale cache so we don't hammer S3 on repeated failures
             this.itemsIndexCache = { items: cache.items, expiresAt: Date.now() + 60_000 };
             return cache.items;
@@ -786,7 +789,7 @@ export class ScalewayCatalogService implements CatalogService {
       }),
       { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
     ).catch((err) => {
-      console.warn('[catalog] Failed to persist thumbnail to S3', { thumbKey, err });
+      log.warn({ thumbKey, err }, '[catalog] Failed to persist thumbnail to S3');
     });
 
     // Persist to disk cache (fire-and-forget)
@@ -941,7 +944,7 @@ export class ScalewayCatalogService implements CatalogService {
         .catch((err) => {
           // If we have stale stats, return them
           if (this.statsCache) {
-            console.warn('[catalog] Stats refresh failed, serving stale', err);
+            log.warn({ err }, '[catalog] Stats refresh failed, serving stale');
             return this.statsCache.data;
           }
           throw err;
@@ -1282,7 +1285,7 @@ export class ScalewayCatalogService implements CatalogService {
         }),
         { abortSignal: AbortSignal.timeout(this.s3RequestTimeoutMs) },
       ).catch((err) => {
-        console.warn('[catalog] Failed to delete persisted thumbnails', err);
+        log.warn({ err }, '[catalog] Failed to delete persisted thumbnails');
       });
     }
   }
@@ -1318,7 +1321,7 @@ export function decodeKey(encodedKey: string): string {
   try {
     return Buffer.from(encodedKey, 'base64url').toString('utf8');
   } catch (err) {
-    console.debug('[catalog] Invalid encoded media key', { encodedKey, err });
+    log.debug({ encodedKey, err }, '[catalog] Invalid encoded media key');
     throw new Error('Invalid media key encoding');
   }
 }

@@ -18,7 +18,8 @@ services:
   # `rclone nfsmount` (scripts/mount-s3.sh) is the source of truth and there
   # are no in-container FUSE mounts to clean.
   rclone-cleanup:
-    image: alpine:3.19
+    # alpine:3.19 (pinned 2026-04-29)
+    image: alpine@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1
     profiles:
       - linux
     container_name: immich_rclone_cleanup
@@ -41,7 +42,8 @@ services:
         fi
 
   rclone-s3:
-    image: rclone/rclone:latest
+    # rclone/rclone:latest (pinned 2026-04-29)
+    image: rclone/rclone@sha256:1619a625f845e169c34b952cf40c483c0392965b821c5155cde8cbfd35254a96
     container_name: immich_rclone_s3
     # Linux-only: in-container FUSE rclone mount cannot propagate back to
     # the host bind through OrbStack on macOS (see AGENTS.md "Things that
@@ -94,23 +96,24 @@ services:
       # Host bind with `rshared` propagation is required so rclone's FUSE
       # mount inside this container becomes visible to immich-server.
       # Stale endpoints after an unclean shutdown are handled by the
-      # rclone-cleanup sidecar + the write-based healthcheck below.
+      # rclone-cleanup sidecar + the read-only healthcheck below.
       - ./data/s3-mount:/mnt/s3:rshared
     depends_on:
       rclone-cleanup:
         condition: service_completed_successfully
     healthcheck:
-      # `ls` succeeds even on a dead FUSE mount (returns empty). A touch/rm on
-      # a sentinel file forces a real syscall round-trip through rclone and
-      # fails fast when the mount is broken — Docker then restarts the container.
-      test: ["CMD-SHELL", "touch /mnt/s3/.healthcheck && rm -f /mnt/s3/.healthcheck"]
+      # Read-only probe: confirm the FUSE mount entry exists and a canonical
+      # child namespace can be listed. Avoid the old touch/rm sentinel, which
+      # issued a real S3 PUT+DELETE every interval.
+      test: ["CMD-SHELL", "grep -q ' /mnt/s3 ' /proc/mounts && ls /mnt/s3/library >/dev/null 2>&1"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 45s
 
   immich-init:
-    image: busybox:latest
+    # busybox:latest (pinned 2026-04-29)
+    image: busybox@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e
     container_name: immich_init
     restart: "no"
     volumes:
@@ -136,7 +139,8 @@ services:
       done"
 
   immich-server:
-    image: ghcr.io/immich-app/immich-server:release
+    # ghcr.io/immich-app/immich-server:release (pinned 2026-04-29)
+    image: ghcr.io/immich-app/immich-server@sha256:c15bff75068effb03f4355997d03dc7e0fc58720c2b54ad6f7f10d1bc57efaa5
     container_name: immich_server
     restart: unless-stopped
     stop_grace_period: 30s
@@ -186,7 +190,8 @@ services:
       start_period: 30s
 
   immich-machine-learning:
-    image: ghcr.io/immich-app/immich-machine-learning:release
+    # ghcr.io/immich-app/immich-machine-learning:release (pinned 2026-04-29)
+    image: ghcr.io/immich-app/immich-machine-learning@sha256:a2501141440f10516d329fdfba2c68082e19eb9ba6016c061ac80d23beadf7f3
     container_name: immich_machine_learning
     restart: unless-stopped
     depends_on:
@@ -204,7 +209,8 @@ services:
       start_period: 120s
 
   database:
-    image: ghcr.io/tensorchord/pgvecto-rs:pg16-v0.3.0
+    # ghcr.io/tensorchord/pgvecto-rs:pg16-v0.3.0 (pinned 2026-04-29)
+    image: ghcr.io/tensorchord/pgvecto-rs@sha256:b89f8ddbb28400d428d3c5e3e860f578cde85ad8e78544a8b687b97937cfc50b
     container_name: immich_postgres
     restart: unless-stopped
     environment:
@@ -221,7 +227,8 @@ services:
       retries: 5
 
   immich-redis:
-    image: redis:7-alpine
+    # redis:7-alpine (pinned 2026-04-29)
+    image: redis@sha256:7aec734b2bb298a1d769fd8729f13b8514a41bf90fcdd1f38ec52267fbaa8ee6
     container_name: immich_redis
     restart: unless-stopped
     networks:
@@ -241,7 +248,8 @@ services:
   # Outbound-only connection to Cloudflare edge; no router port-forward needed.
   # Token is issued in Cloudflare Zero Trust → Networks → Tunnels → home-immich.
   immich-tunnel:
-    image: cloudflare/cloudflared:latest
+    # cloudflare/cloudflared:latest (pinned 2026-04-29)
+    image: cloudflare/cloudflared@sha256:6b599ca3e974349ead3286d178da61d291961182ec3fe9c505e1dd02c8ac31b0
     container_name: immich_tunnel
     restart: unless-stopped
     # Force HTTP/2 over TCP instead of QUIC.

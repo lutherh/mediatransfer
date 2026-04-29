@@ -2,6 +2,9 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { ManifestEntry } from './manifest.js';
 import { partialFileHash } from './manifest.js';
+import { getLogger } from '../utils/logger.js';
+
+const log = getLogger().child({ module: 'archive-metadata' });
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -98,7 +101,7 @@ export async function loadArchiveMetadata(
     const raw = await fs.readFile(filePath, 'utf8');
     const parsed = JSON.parse(raw);
     if (parsed?.version !== 1 || typeof parsed.archiveName !== 'string') {
-      console.warn(`[archive-metadata] Invalid shape in ${filePath}, ignoring`);
+      log.warn({ filePath }, '[archive-metadata] Invalid shape, ignoring');
       return undefined;
     }
     return parsed as ArchiveMetadata;
@@ -122,7 +125,7 @@ export async function loadAllArchiveMetadata(
         const raw = await fs.readFile(path.join(metadataDir, file), 'utf8');
         const parsed = JSON.parse(raw);
         if (parsed?.version !== 1 || typeof parsed.archiveName !== 'string') {
-          console.warn(`[archive-metadata] Invalid shape in ${file}, skipping`);
+          log.warn({ file }, '[archive-metadata] Invalid shape, skipping');
           continue;
         }
         results.push(parsed as ArchiveMetadata);

@@ -1,5 +1,8 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { getLogger } from '../../utils/logger.js';
+
+const log = getLogger().child({ module: 'catalog-html' });
 
 let cachedCatalogHtml: string | null = null;
 
@@ -19,7 +22,7 @@ export function buildCatalogHtml(): string {
     cachedCatalogHtml = readFileSync(filePath, 'utf8');
     return cachedCatalogHtml;
   } catch (err) {
-    console.debug('[catalog-html] Failed to load archive_browser.html fallback template', err);
+    log.debug({ err }, '[catalog-html] Failed to load archive_browser.html fallback template');
     cachedCatalogHtml = FALLBACK_CATALOG_HTML;
     return cachedCatalogHtml;
   }

@@ -86,12 +86,6 @@ ensure_macos_s3_mount() {
   local upload_location
   upload_location="$(read_env_val .env.immich UPLOAD_LOCATION ./data/immich)"
 
-  # Only guard when UPLOAD_LOCATION is the dedicated S3 mount path.
-  case "$upload_location" in
-    *immich-s3*) ;;
-    *) return 0 ;;
-  esac
-
   local abs_mount="$upload_location"
   if [[ "$abs_mount" != /* ]]; then
     abs_mount="$ROOT_DIR/$abs_mount"
@@ -105,6 +99,21 @@ ensure_macos_s3_mount() {
   mount_base="$(basename "$abs_mount")"
   if mount_parent="$(cd "$mount_parent" 2>/dev/null && pwd -P)"; then
     abs_mount="$mount_parent/$mount_base"
+  fi
+
+  local expected_mount="$ROOT_DIR/data/immich-s3"
+  local expected_parent expected_base
+  expected_parent="$(dirname "$expected_mount")"
+  expected_base="$(basename "$expected_mount")"
+  if expected_parent="$(cd "$expected_parent" 2>/dev/null && pwd -P)"; then
+    expected_mount="$expected_parent/$expected_base"
+  fi
+
+  # Only guard when UPLOAD_LOCATION is the canonical S3 mount path. The old
+  # `*immich-s3*` substring match accepted paths such as backups or test dirs
+  # and could guard the wrong location.
+  if [ "$abs_mount" != "$expected_mount" ]; then
+    return 0
   fi
 
   is_nfs_mounted() {

@@ -99,3 +99,44 @@ Before running `scripts/sync-immich-to-s3.sh --execute`:
 - **Read only when diagnosing** — do not edit `.env`, `.env.immich`, or scripts without explicit user approval.
 - **Never delete S3 objects** — all remediation is done by reconfiguring prefixes, not by moving data.
 - **Flag ambiguous cases** — if the config could be interpreted multiple ways, list the interpretations and ask which is correct before proceeding.
+## macOS-specific trap (2026-04 incident)
+
+`docker-compose.immich.yml` previously contained a second volume:
+```yaml
+- ./data/s3-mount:/usr/src/app/upload/s3transfers:ro,rslave
+```
+The intent was to expose the in-container FUSE mount from `immich_rclone_s3`
+back into immich-server. **On macOS / OrbStack this silently fails**: FUSE mounts
+inside the Linux VM cannot propagate back through the macOS host bind, so
+`data/s3-mount` stays empty and shadows everything Immich would otherwise see
+at `/usr/src/app/upload/s3transfers`. Result: every `originalPath` that
+contains `/upload/s3transfers/` returns ENOENT.
+
+**Resolution:** delete the `s3-mount → s3transfers` volume line. Use only the
+Mac-native NFS mount (`scripts/mount-s3.sh` → `data/immich-s3` →
+`UPLOAD_LOCATION`). The `immich_rclone_s3` sidecar stays around for native
+`rclone` API calls (used by `scripts/remap-immich-to-s3.ts`) but its `/mnt/s3`
+is a dead-end on macOS.
+
+Symptom to recognize:
+```
+ERROR [LoggingRepository] Unable to send file: Error: ENOENT:
+  no such file or directory, access '/usr/src/app/upload/thumbs/.../<uuid>_thumbnail.webp'
+```
+combined with `ls data/immich-s3/s3transfers/` returning **non-empty** while
+`ls data/s3-mount/` returns **empty** confirms it.
+
+## Canonical S3 layout (post-2026-04)
+
+After the cleanup, MediaTransfer uploads live under Immich's prefix:
+```
+photosync/
+├── immich/
+│   ├── library/admin/YYYY/...        (Immich-imported originals)
+│   ├── upload/<userUUID>/...          (Immich uploads)
+│   └── s3transfers/YYYY/MM/DD/...    (MediaTransfer→Immich import target)
+└── _thumbs/large/...                  (MediaTransfer catalog thumbs only)
+```
+The legacy `transfers/**` root (without the `immich/` prefix) was migrated to
+`immich/s3transfers/**` via a server-side `rclone move`. Future MediaTransfer
+imports should write directly under `immich/s3transfers/`.

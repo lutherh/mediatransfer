@@ -5,6 +5,9 @@ import { Transform, type Readable } from 'node:stream';
 import type { CloudProvider } from '../providers/types.js';
 import type { ManifestEntry } from './manifest.js';
 import { toErrorMessage } from '../utils/errors.js';
+import { getLogger } from '../utils/logger.js';
+
+const log = getLogger().child({ module: 'uploader' });
 
 export type UploadStateItem = {
   status: 'uploaded' | 'skipped' | 'failed';
@@ -143,7 +146,7 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
   try {
     preloadedExistingKeys = await preloadDestinationIndex(options.provider, entries);
   } catch (err) {
-    console.debug('[uploader] Failed to preload destination index, continuing without preload', err);
+    log.debug({ err }, '[uploader] Failed to preload destination index, continuing without preload');
     preloadedExistingKeys = new Set<string>();
   }
   const confirmedExistingKeys = new Set<string>(preloadedExistingKeys);
@@ -272,7 +275,7 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
         existenceCache,
       );
     } catch (err) {
-      console.debug('[uploader] Failed object existence check, treating as missing', err);
+      log.debug({ err }, '[uploader] Failed object existence check, treating as missing');
       destinationExists = false;
     }
 
@@ -508,7 +511,7 @@ export async function loadUploadState(statePath: string): Promise<UploadState> {
 
     return parsed;
   } catch (err) {
-    console.debug('[uploader] Failed to load upload state, using empty state', err);
+    log.debug({ err }, '[uploader] Failed to load upload state, using empty state');
     return createEmptyState();
   }
 }
@@ -541,8 +544,9 @@ export async function persistUploadState(
         throw err;
       }
       const delayMs = 200 * (attempt + 1);
-      console.warn(
-        `[uploader] rename EPERM/EACCES, retrying in ${delayMs}ms (attempt ${attempt + 1}/${MAX_RENAME_RETRIES})`,
+      log.warn(
+        { delayMs, attempt: attempt + 1, maxRetries: MAX_RENAME_RETRIES },
+        '[uploader] rename EPERM/EACCES, retrying',
       );
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
@@ -611,7 +615,7 @@ export async function preloadDestinationIndex(
           keys.add(item.key);
         }
       } catch (err) {
-        console.warn(`⚠️  preload listing failed for prefix "${prefixes[i]}", will check keys individually:`, (err as Error).message);
+        log.warn({ prefix: prefixes[i], err: (err as Error).message }, '⚠️ preload listing failed, will check keys individually');
       }
     }
   });

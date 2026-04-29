@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import type { CloudProvider } from '../providers/types.js';
 import type { TakeoutConfig } from './config.js';
 import { isFileNotFoundError, isCrossDeviceError } from '../utils/errors.js';
+import { getLogger } from '../utils/logger.js';
 import {
   discoverTakeoutArchives,
   extractArchive,
@@ -31,6 +32,8 @@ import {
 import { extractAndPersistArchiveMetadata, loadArchiveMetadata } from './archive-metadata.js';
 import type { ArchiveMetadata } from './archive-metadata.js';
 import { DEFAULT_MANIFEST_FILE } from './runner.js';
+
+const log = getLogger().child({ module: 'incremental' });
 
 // ─── Archive-level state tracking ──────────────────────────────────────────
 
@@ -74,7 +77,7 @@ export async function loadArchiveState(statePath: string): Promise<ArchiveState>
     return parsed;
   } catch (err) {
     if (!isFileNotFoundError(err)) {
-      console.debug('[incremental] Failed to load archive state, using empty state', err);
+      log.debug({ err }, '[incremental] Failed to load archive state, using empty state');
     }
     return createEmptyArchiveState();
   }
@@ -105,10 +108,13 @@ export async function persistArchiveState(
       throw error;
     }
 
-    console.warn('[incremental] Low disk space while writing archive state tmp file; retrying in-place', {
-      statePath,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    log.warn(
+      {
+        statePath,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      '[incremental] Low disk space while writing archive state tmp file; retrying in-place',
+    );
   }
 
   await fs.writeFile(statePath, serialized, 'utf8');
@@ -142,11 +148,14 @@ async function persistArchiveMetadataBestEffort(
   try {
     await extractAndPersistArchiveMetadata(extractDir, entries, archiveName, metadataDir);
   } catch (error) {
-    console.warn('[incremental] Failed to persist archive metadata; continuing upload', {
-      archiveName,
-      metadataDir,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    log.warn(
+      {
+        archiveName,
+        metadataDir,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      '[incremental] Failed to persist archive metadata; continuing upload',
+    );
   }
 }
 
@@ -271,7 +280,7 @@ export async function runTakeoutIncremental(
         if (archiveMeta) {
           const { refinedCount, breakdown } = refineDatesFromMetadata(entries, archiveMeta);
           if (refinedCount > 0) {
-            console.log(`[incremental] Date refinement for ${archiveName}: ${refinedCount} entries improved`, breakdown);
+            log.info({ archiveName, refinedCount, breakdown }, '[incremental] Date refinement for archive: entries improved');
           }
         }
         // Process entries from the root
@@ -305,7 +314,7 @@ export async function runTakeoutIncremental(
         if (archiveMeta) {
           const { refinedCount, breakdown } = refineDatesFromMetadata(allEntries, archiveMeta);
           if (refinedCount > 0) {
-            console.log(`[incremental] Date refinement for ${archiveName}: ${refinedCount} entries improved`, breakdown);
+            log.info({ archiveName, refinedCount, breakdown }, '[incremental] Date refinement for archive: entries improved');
           }
         }
 
@@ -344,7 +353,7 @@ export async function runTakeoutIncremental(
         }
       } catch (postUploadError) {
         // Log but don't change archive status — upload data is safe
-        console.warn(`[incremental] Post-upload operation failed for ${archiveName}:`, postUploadError);
+        log.warn({ archiveName, err: postUploadError }, '[incremental] Post-upload operation failed for archive');
       }
 
       options.onArchiveComplete?.(archiveName, {
@@ -363,7 +372,7 @@ export async function runTakeoutIncremental(
       const currentStatus = archiveState.archives[archiveName]?.status;
       if (currentStatus === 'completed') {
         // Upload already succeeded and was persisted — don't overwrite to 'failed'
-        console.warn(`[incremental] Post-upload error for ${archiveName}, keeping completed status:`, error);
+        log.warn({ archiveName, err: error }, '[incremental] Post-upload error for archive, keeping completed status');
       } else {
         const wasAlreadyFailed = currentStatus === 'failed';
         archiveState.archives[archiveName] = {
@@ -394,8 +403,9 @@ export async function runTakeoutIncremental(
   // status endpoint shows accurate counts instead of phantom "pending" items.
   const reconcileResult = await reconcileManifest(globalManifestPath, config.statePath);
   if (reconcileResult.removed > 0) {
-    console.log(
-      `[incremental] Manifest reconciled: removed ${reconcileResult.removed} stale entries, kept ${reconcileResult.kept}`,
+    log.info(
+      { removed: reconcileResult.removed, kept: reconcileResult.kept },
+      '[incremental] Manifest reconciled',
     );
   }
 
@@ -516,7 +526,7 @@ async function cleanupDir(dirPath: string): Promise<void> {
   try {
     await fs.rm(dirPath, { recursive: true, force: true });
   } catch (err) {
-    console.debug('[incremental] Best-effort cleanup failed', { dirPath, err });
+    log.debug({ dirPath, err }, '[incremental] Best-effort cleanup failed');
     // best-effort cleanup
   }
 }
@@ -554,7 +564,7 @@ async function getUniqueDestinationPath(directory: string, fileName: string): Pr
     const dirEntries = await fs.readdir(directory);
     existingNames = new Set(dirEntries);
   } catch (err) {
-    console.debug('[incremental] Destination directory not readable, using base file name', { directory, err });
+    log.debug({ directory, err }, '[incremental] Destination directory not readable, using base file name');
     // Directory doesn't exist yet — no collisions possible
     return path.join(directory, fileName);
   }

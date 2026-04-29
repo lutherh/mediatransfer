@@ -12,18 +12,27 @@ You diagnose why Immich originals/thumbnails fail to render and determine whethe
 
 Re-read these every time. Past sessions have wasted hours by assuming the wrong one.
 
-1. **There are two rclone mounts in this repo.** They are NOT interchangeable.
+1. **Two rclone mounts exist in the repo. They are NOT interchangeable.**
    - **Mac-native NFS mount** at `data/immich-s3` (started by `scripts/mount-s3.sh`, managed by `uk.4to.mediatransfer.stack` launchagent). This is the **single source of truth** that `immich_server` reads via the bind `data/immich-s3 → /usr/src/app/upload`.
-   - **In-container FUSE sidecar** `immich_rclone_s3` at `data/s3-mount → /mnt/s3`. On macOS this **cannot propagate writes back through OrbStack** and is effectively decorative. Never assume Immich uses it.
-   - Confirm with: `docker inspect immich_server --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}'`
-2. **`--vfs-cache-mode full` buffers writes locally.** If the rclone process is restarted (launchagent kicked, container restarted, mount remounted) before the cache flushes, **uploads silently disappear**. The cache directory is the only place those bytes still live.
-3. **Originals on S3 live under `${RCLONE_BUCKET}/${RCLONE_PREFIX}/library/<userId>/...`** following Immich's storage template. Thumbs/encoded-video are local-only (see [.claude/agents/s3-immich-path-verifier.md](.claude/agents/s3-immich-path-verifier.md)).
-4. **Log-signature decoder:**
+   - **In-container FUSE sidecar** `immich_rclone_s3` at `data/s3-mount → /mnt/s3`. On macOS this **cannot propagate writes back through OrbStack** and is gated behind `profiles: [linux]` in `docker-compose.immich.yml` — i.e. it does **not** run on macOS at all. On Linux it's the active mount.
+   - Confirm which mount Immich actually reads: `docker inspect immich_server --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}'`
+2. **`--vfs-cache-mode full` buffers writes locally.** If rclone is killed (launchagent kicked, container restarted, mount force-unmounted) before the cache flushes, **uploads silently disappear**. The Mac-native rclone exposes an rc Unix socket at `data/rclone-rc.sock` (0600). Always flush before tear-down:
+   ```bash
+   rclone rc --unix-socket data/rclone-rc.sock vfs/sync --timeout 120s
+   ```
+   `scripts/mount-s3.sh --unmount` does this automatically; manual `umount` / `kill` does NOT.
+3. **DB table is `asset` (singular).** `assets` does not exist — `psql ... "SELECT ... FROM assets"` fails. Use:
+   ```bash
+   docker exec immich_postgres psql -U immich -d immich -tAc "SELECT count(*) FROM asset WHERE \"isOffline\"=false AND \"deletedAt\" IS NULL"
+   ```
+4. **Canonical S3 layout (post-2026-04):** originals live under `${RCLONE_BUCKET}/${RCLONE_PREFIX}/library/<userId>/...` and `${RCLONE_PREFIX}/upload/...` and `${RCLONE_PREFIX}/s3transfers/...` (the legacy bucket-root `transfers/**` was server-side-moved into `immich/s3transfers/**`). Thumbs / encoded-video / profile / backups are local-only — see [.claude/agents/s3-immich-path-verifier.md](.claude/agents/s3-immich-path-verifier.md).
+5. **Log-signature decoder:**
    | Signature | Cause |
    |---|---|
-   | `Input/output error` from container shell | rclone FUSE mount broken (DNS, transport, network) |
+   | `Input/output error` from container shell | rclone FUSE mount broken (DNS, transport, network) — Linux only |
    | `ENOENT: no such file or directory` from Immich logs | File never existed at that path (genuine miss OR mount serving a different view) |
-   | `lookup ... no such host` in rclone logs | Docker embedded DNS (127.0.0.11) flaked; restart container |
+   | `Stale file handle` / `ENOTCONN` on `data/immich-s3/...` | macOS NFS endpoint died; `scripts/start-all.sh up` re-runs `probe_mount_live` and remounts |
+   | `lookup ... no such host` in rclone logs | Docker embedded DNS (127.0.0.11) flaked; restart container (Linux only) |
    | `Failed to read metadata: object not found` + `CopyObject 404` | rclone server-side copy with `--fast-list` hit an encoded-key mismatch (Scaleway). Drop `--fast-list` and use `copy` not `move`. |
    | Multiple `rclone move/copy` PIDs racing | Two launches of the same job; kill duplicates before retrying |
 
@@ -63,31 +72,34 @@ ASSET_ID=<from-log>
 docker exec immich_postgres psql -U immich -d immich -c \
   "SELECT id, \"originalPath\", \"isOffline\", status, \"updatedAt\" FROM asset WHERE id='$ASSET_ID';"
 
-# Does the original exist on S3 (bypass FUSE — go direct)?
-source .env .env.immich
-docker exec immich_rclone_s3 sh -c "rclone lsf \
-  ':s3:${RCLONE_BUCKET}/${RCLONE_PREFIX}/library/<USER>/<YEAR>/<DAY>/' \
+# Does the original exist on S3? Use host rclone with .env credentials
+# (immich_rclone_s3 is profile-gated and not running on macOS).
+set -a; source .env; set +a
+rclone lsf \
   --s3-provider Scaleway \
-  --s3-access-key-id \"\$SCW_ACCESS_KEY\" \
-  --s3-secret-access-key \"\$SCW_SECRET_KEY\" \
-  --s3-endpoint \"https://s3.\${SCW_REGION:-nl-ams}.scw.cloud\" \
-  --s3-region \"\${SCW_REGION:-nl-ams}\""
+  --s3-access-key-id "$SCW_ACCESS_KEY" \
+  --s3-secret-access-key "$SCW_SECRET_KEY" \
+  --s3-region "$SCW_REGION" \
+  --s3-endpoint "https://s3.${SCW_REGION}.scw.cloud" \
+  ":s3:${SCW_BUCKET}/immich/library/<USER>/<YEAR>/<DAY>/"
 ```
 
 Then run a **summary** comparison:
 
 ```bash
 # DB count of original rows
-docker exec immich_postgres psql -U immich -d immich -t -c \
+docker exec immich_postgres psql -U immich -d immich -tAc \
   "SELECT COUNT(*) FROM asset WHERE \"originalPath\" LIKE '/usr/src/app/upload/library/%';"
 
-# S3 count under the same prefix
-docker exec immich_rclone_s3 sh -c \
-  'rclone size ":s3:${RCLONE_BUCKET}/${RCLONE_PREFIX}/library/" \
-   --s3-provider Scaleway --s3-access-key-id "$SCW_ACCESS_KEY" \
-   --s3-secret-access-key "$SCW_SECRET_KEY" \
-   --s3-endpoint "https://s3.${SCW_REGION:-nl-ams}.scw.cloud" \
-   --s3-region "${SCW_REGION:-nl-ams}"'
+# S3 count under the same prefix (host rclone, .env credentials)
+set -a; source .env; set +a
+rclone size \
+  --s3-provider Scaleway \
+  --s3-access-key-id "$SCW_ACCESS_KEY" \
+  --s3-secret-access-key "$SCW_SECRET_KEY" \
+  --s3-region "$SCW_REGION" \
+  --s3-endpoint "https://s3.${SCW_REGION}.scw.cloud" \
+  ":s3:${SCW_BUCKET}/immich/library/"
 ```
 
 A DB count materially larger than the S3 count means **uploads were lost** (almost always vfs-cache flush failure). Report exact numbers.
@@ -102,11 +114,14 @@ ls -la ~/Library/Caches/rclone/ 2>/dev/null
 find ~/Library/Caches/rclone -type f -size +0 2>/dev/null | head -20
 du -sh ~/Library/Caches/rclone/vfs* 2>/dev/null
 
-# In-container cache (less likely to matter, but check)
-docker exec immich_rclone_s3 sh -c 'du -sh /root/.cache/rclone 2>/dev/null; find /root/.cache/rclone -type f -size +0 2>/dev/null | head'
+# Live writeback queue stats via the rc Unix socket
+rclone rc --unix-socket data/rclone-rc.sock vfs/stats 2>/dev/null | jq '{diskCache, inUse, transfers}'
+
+# In-container cache (Linux profile only — won't exist on macOS)
+docker exec immich_rclone_s3 sh -c 'du -sh /root/.cache/rclone 2>/dev/null; find /root/.cache/rclone -type f -size +0 2>/dev/null | head' 2>/dev/null || echo "rclone-s3 container not running (macOS profile)"
 ```
 
-Files in the vfs cache that don't exist on S3 are recoverable. **Do not** restart the rclone process while files remain unflushed — coordinate a manual flush first (`rclone rc vfs/forget` is read-only; uploads happen via the writeback queue).
+Files in the vfs cache that don't exist on S3 are recoverable. **Do not** restart, kill, or `umount` the rclone process while writeback transfers are queued — flush first via `rclone rc --unix-socket data/rclone-rc.sock vfs/sync --timeout 120s`. `rclone rc vfs/forget` is read-only and safe.
 
 ## Phase 4 — Decision matrix
 
@@ -119,8 +134,10 @@ Files in the vfs cache that don't exist on S3 are recoverable. **Do not** restar
 
 ## Constraints
 
-- **Never** run `docker restart`, `kill`, `umount`, `rm -rf`, or `rclone rc` mutations without an explicit user "go ahead" referencing the specific command.
+- **Never** run `docker restart`, `kill`, `umount`, `launchctl bootout`, `rm -rf`, or `rclone rc` mutations without an explicit user "go ahead" referencing the specific command.
+- **Never** unmount `data/immich-s3` or kill the launchagent without first running `rclone rc --unix-socket data/rclone-rc.sock vfs/sync` (writeback cache loss = silent data loss; this is the 2026-04 incident pattern).
 - **Never** delete or overwrite anything in `~/Library/Caches/rclone/` or `data/s3-mount/`. Unflushed bytes there may be the only surviving copy.
 - **Never** touch `data/takeout/state*.json` (per AGENTS.md).
+- Recovery / forensic artifacts go under `data/logs/recovery-<YYYY-MM>/` (0700) — not `/tmp` (cleared on reboot, world-readable).
 - Always report counts and paths — exact numbers, not "some files".
 - If the user's observation contradicts your hypothesis (e.g. they say "loading works for old photos but not recent"), stop and re-think — it's a clue.

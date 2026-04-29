@@ -27,6 +27,9 @@ import {
 import { analyseArchiveSequences, normaliseArchiveName } from '../../takeout/sequence-analysis.js';
 import { apiError } from '../errors.js';
 import { createJob, updateJob } from '../../db/jobs.js';
+import { getLogger } from '../../utils/logger.js';
+
+const log = getLogger().child({ module: 'takeout-routes' });
 
 type TakeoutAction =
   | 'scan'
@@ -192,8 +195,9 @@ async function loadCustomPaths(env: Env): Promise<void> {
         // Skip any persisted path with unsafe characters — defense-in-depth
         // in case the file was hand-edited or pre-dated input validation.
         if (validateCustomPath(value) !== null) {
-          console.warn(
-            `[takeout] Skipping persisted custom path '${key}' — contains unsafe characters`,
+          log.warn(
+            { key },
+            '[takeout] Skipping persisted custom path — contains unsafe characters',
           );
           continue;
         }
@@ -269,7 +273,7 @@ async function ensurePipelineState(workDir: string): Promise<PipelineState> {
 function persistPipelineState(): void {
   if (!pipelineState || !resolvedWorkDir) return;
   savePipelineState(resolvedWorkDir, pipelineState).catch((err) => {
-    console.debug('[takeout] Failed to persist pipeline state:', err);
+    log.debug({ err }, '[takeout] Failed to persist pipeline state');
   });
 }
 
@@ -1217,7 +1221,7 @@ function createTransferJobForUpload(): void {
       return updateJob(job.id, { status: 'IN_PROGRESS' as const, startedAt: new Date() });
     })
     .catch((err) => {
-      console.warn('[takeout] Could not create transfer job (DB may be unavailable):', err);
+      log.warn({ err }, '[takeout] Could not create transfer job (DB may be unavailable)');
     });
 }
 
@@ -1235,7 +1239,7 @@ function maybeUpdateTransferProgress(lines: string[]): void {
       const percent = parseInt(match[1], 10);
       lastProgressUpdateMs = now;
       updateJob(currentTransferJobId, { progress: percent / 100 }).catch((err) => {
-        console.debug('[takeout] Failed to update transfer-job progress:', err);
+        log.debug({ err }, '[takeout] Failed to update transfer-job progress');
       });
       return;
     }
@@ -1255,7 +1259,7 @@ function finalizeTransferJob(success: boolean, errorMessage?: string): void {
     errorMessage: success ? null : (errorMessage ?? 'Unknown error'),
     completedAt: new Date(),
   }).catch((err) => {
-    console.warn('[takeout] Failed to finalize transfer job:', err);
+    log.warn({ err }, '[takeout] Failed to finalize transfer job');
   });
 }
 
@@ -1295,7 +1299,7 @@ function parseScanProgress(): ScanProgress | undefined {
           detail: parsed.detail ? String(parsed.detail) : undefined,
         };
       } catch (err) {
-        console.debug('[takeout] Ignored malformed scan progress line', err);
+        log.debug({ err }, '[takeout] Ignored malformed scan progress line');
         // malformed line, skip
       }
     }
@@ -1396,7 +1400,7 @@ async function readManifestKeys(manifestPath: string): Promise<Set<string>> {
         const entry = JSON.parse(trimmed) as { destinationKey?: string };
         if (typeof entry.destinationKey === 'string') keys.add(entry.destinationKey);
       } catch (err) {
-        console.debug('[takeout] Ignored malformed manifest line', err);
+        log.debug({ err }, '[takeout] Ignored malformed manifest line');
       }
     }
 

@@ -4,6 +4,9 @@ import extractZip from 'extract-zip';
 import { extract as extractTar } from 'tar';
 import { partialFileHash } from './manifest.js';
 import { MEDIA_EXTENSIONS } from '../utils/media-extensions.js';
+import { getLogger } from '../utils/logger.js';
+
+const log = getLogger().child({ module: 'unpack' });
 
 const ARCHIVE_EXTENSIONS = ['.zip', '.tar', '.tgz', '.tar.gz'] as const;
 
@@ -262,7 +265,7 @@ async function walkDirectories(
     try {
       entries = await fs.readdir(current, { withFileTypes: true });
     } catch (err) {
-      console.warn(`[unpack] Skipping unreadable directory: ${current}`, (err as Error).message);
+      log.warn({ current, err: (err as Error).message }, '[unpack] Skipping unreadable directory');
       continue;
     }
     for (const entry of entries) {
@@ -284,7 +287,7 @@ async function mergeDirectory(
   try {
     entries = await fs.readdir(sourceDir, { withFileTypes: true });
   } catch (err) {
-    console.warn(`[unpack] Skipping unreadable directory: ${sourceDir}`, (err as Error).message);
+    log.warn({ sourceDir, err: (err as Error).message }, '[unpack] Skipping unreadable directory');
     return;
   }
 
@@ -304,7 +307,7 @@ async function mergeDirectory(
         onFile?.(entry.name);
       }
     } catch (err) {
-      console.warn(`[unpack] Skipping file due to error: ${sourcePath}`, (err as Error).message);
+      log.warn({ sourcePath, err: (err as Error).message }, '[unpack] Skipping file due to error');
     }
   }
 }
@@ -372,7 +375,7 @@ async function exists(filePath: string): Promise<boolean> {
     // ENOENT is the expected case — file simply doesn't exist yet.
     // Only log genuinely unexpected access errors (permissions etc.).
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.warn('[unpack] Path not accessible', { filePath, err });
+      log.warn({ filePath, err }, '[unpack] Path not accessible');
     }
     return false;
   }
@@ -387,7 +390,7 @@ async function countFilesRecursive(dir: string): Promise<number> {
     try {
       entries = await fs.readdir(current, { withFileTypes: true });
     } catch (err) {
-      console.warn(`[unpack] Skipping unreadable directory: ${current}`, (err as Error).message);
+      log.warn({ current, err: (err as Error).message }, '[unpack] Skipping unreadable directory');
       continue;
     }
     for (const entry of entries) {
@@ -409,7 +412,7 @@ async function containsMediaFiles(rootDir: string): Promise<boolean> {
     try {
       entries = await fs.readdir(current, { withFileTypes: true });
     } catch (err) {
-      console.warn(`[unpack] Skipping unreadable directory: ${current}`, (err as Error).message);
+      log.warn({ current, err: (err as Error).message }, '[unpack] Skipping unreadable directory');
       continue;
     }
     for (const entry of entries) {

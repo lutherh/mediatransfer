@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { CloudProvider } from '../providers/types.js';
 import type { TakeoutConfig } from './config.js';
+import { getLogger } from '../utils/logger.js';
 import {
   buildManifest,
   loadManifestJsonl,
@@ -13,6 +14,8 @@ import {
   extractAndPersistArchiveMetadata,
   loadAllArchiveMetadata,
 } from './archive-metadata.js';
+
+const log = getLogger().child({ module: 'runner' });
 import {
   containsMediaFiles,
   discoverTakeoutArchives,
@@ -134,11 +137,14 @@ async function persistArchiveMetadataBestEffort(
   try {
     await extractAndPersistArchiveMetadata(extractDir, entries, archiveName, metadataDir);
   } catch (error) {
-    console.warn('[runner] Failed to persist archive metadata; continuing scan', {
-      archiveName,
-      metadataDir,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    log.warn(
+      {
+        archiveName,
+        metadataDir,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      '[runner] Failed to persist archive metadata; continuing scan',
+    );
   }
 }
 
@@ -173,7 +179,7 @@ export async function runTakeoutScan(
       const allMetadata = await loadAllArchiveMetadata(metadataDir);
       const { refinedCount, breakdown } = refineDatesFromAllMetadata(entries, allMetadata);
       if (refinedCount > 0) {
-        console.log(`[runner] Global date refinement: ${refinedCount} entries improved`, breakdown);
+        log.info({ refinedCount, breakdown }, '[runner] Global date refinement: entries improved');
       }
 
     await persistManifestJsonl(entries, manifestPath);
@@ -344,14 +350,14 @@ export async function runTakeoutScan(
 
   const removedCount = allEntries.length - entries.length;
   if (removedCount > 0) {
-    console.log(`[runner] Manifest dedup: removed ${removedCount} duplicate entries by destination key`);
+    log.info({ removedCount }, '[runner] Manifest dedup: removed duplicate entries by destination key');
   }
 
   const allMetadata = await loadAllArchiveMetadata(metadataDir);
   if (allMetadata.length > 0) {
     const { refinedCount, breakdown } = refineDatesFromAllMetadata(entries, allMetadata);
     if (refinedCount > 0) {
-      console.log(`[runner] Global date refinement: ${refinedCount} entries improved`, breakdown);
+      log.info({ refinedCount, breakdown }, '[runner] Global date refinement: entries improved');
     }
   }
 
@@ -432,7 +438,7 @@ export async function runTakeoutVerify(
   try {
     indexedKeys = await preloadDestinationIndex(provider, entries);
   } catch (err) {
-    console.warn('⚠️  preloadDestinationIndex failed, falling back to per-key checks:', (err as Error).message);
+    log.warn({ err: (err as Error).message }, '⚠️ preloadDestinationIndex failed, falling back to per-key checks');
     indexedKeys = new Set<string>();
   }
 
@@ -471,7 +477,7 @@ export async function runTakeoutVerify(
         }
       } catch (err) {
         // Transient S3 error after retries — don't count as missing
-        console.warn(`⚠️  verify check failed for "${key}", skipping:`, (err as Error).message);
+        log.warn({ key, err: (err as Error).message }, '⚠️ verify check failed, skipping');
         present += 1;
       }
     }
@@ -522,14 +528,14 @@ async function safeRmRecursive(dirPath: string): Promise<void> {
         try { await fs.rmdir(fullPath); } catch (err) {
           const code = (err as NodeJS.ErrnoException).code;
           if (code !== 'ENOENT' && code !== 'ENOTEMPTY') {
-            console.warn(`[runner] Could not remove directory (corrupted?): ${fullPath} — skipping`);
+            log.warn({ fullPath }, '[runner] Could not remove directory (corrupted?), skipping');
           }
         }
       } else {
         await fs.unlink(fullPath);
       }
     } catch {
-      console.warn(`[runner] Could not remove entry (corrupted?): ${fullPath} — skipping`);
+      log.warn({ fullPath }, '[runner] Could not remove entry (corrupted?), skipping');
     }
   }
 

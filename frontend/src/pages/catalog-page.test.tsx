@@ -378,3 +378,88 @@ describe('formatSectionDate logic', () => {
     expect(result).toBe('Sat 4 Jul 2020');
   });
 });
+
+// ── Lightbox out-of-range guard (P0 regression) ────────────────────────────
+//
+// Regression for: "Cannot update a component while rendering" warning when the
+// Lightbox was rendered with an out-of-range index. The fix moves the close
+// call out of the render body and into a useEffect.
+
+describe('Lightbox out-of-range guard', () => {
+  it('renders content for a valid index without calling onClose', async () => {
+    const { Lightbox } = await import('./catalog-page');
+    const items = [
+      {
+        key: '2025/06/16/photo1.jpg',
+        encodedKey: 'abc1',
+        size: 5000,
+        lastModified: '2025-06-16T12:00:00Z',
+        capturedAt: '2025-06-16T10:00:00Z',
+        mediaType: 'image' as const,
+        sectionDate: '2025-06-16',
+      },
+    ];
+    const onClose = vi.fn();
+    const onNavigate = vi.fn();
+    const onDateChanged = vi.fn();
+
+    render(
+      <Lightbox
+        items={items}
+        index={0}
+        apiToken={undefined}
+        onClose={onClose}
+        onNavigate={onNavigate}
+        onDateChanged={onDateChanged}
+      />,
+    );
+
+    // Filename is rendered in the toolbar
+    expect(screen.getAllByText(/photo1\.jpg/).length).toBeGreaterThan(0);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('does not call onClose during render but does call it after effects flush when index is out-of-range', async () => {
+    const { Lightbox } = await import('./catalog-page');
+    const onClose = vi.fn();
+    const onNavigate = vi.fn();
+    const onDateChanged = vi.fn();
+
+    // Spy on console.error so we catch React's "Cannot update a component
+    // while rendering" warning if the regression returns.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // Track whether onClose was called *synchronously* during render. We do
+    // this by wrapping the render in act() and observing call count before
+    // effects flush — React Testing Library's render() already flushes
+    // effects, so we instead check that onClose was *not* invoked from inside
+    // the render phase by ensuring no React warning fires.
+    render(
+      <Lightbox
+        items={[]}
+        index={5}
+        apiToken={undefined}
+        onClose={onClose}
+        onNavigate={onNavigate}
+        onDateChanged={onDateChanged}
+      />,
+    );
+
+    // After render + effect flush, onClose should have been called exactly once.
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // No "Cannot update a component while rendering" or related render-phase
+    // setState warnings should have surfaced.
+    const renderPhaseWarning = errorSpy.mock.calls.find((args) =>
+      args.some(
+        (a) =>
+          typeof a === 'string' &&
+          /Cannot update a component .* while rendering|setState.*during render/i.test(a),
+      ),
+    );
+    expect(renderPhaseWarning).toBeUndefined();
+
+    errorSpy.mockRestore();
+  });
+});
+

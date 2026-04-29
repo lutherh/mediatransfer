@@ -151,8 +151,11 @@ if [[ "${1:-}" == "--unmount" || "${1:-}" == "-u" ]]; then
   exit 0
 fi
 
-# Ensure mount directory
-mkdir -p "$MOUNT_POINT"
+# Ensure mount + runtime directories. The rclone rc Unix socket lives under
+# data/ and trusts filesystem permissions, so keep that directory owner-only
+# before rclone creates the socket.
+mkdir -p "$ROOT_DIR/data" "$MOUNT_POINT"
+chmod 0750 "$ROOT_DIR/data"
 
 # Defensively unmount any stale NFS / FUSE handle still pointing at this path.
 # Without this, when launchd restarts a crashed rclone the kernel keeps the old

@@ -4,11 +4,14 @@ import { statfs } from 'node:fs/promises';
 import type { CloudProvider } from '../providers/types.js';
 import type { TakeoutConfig } from './config.js';
 import { isCrossDeviceError } from '../utils/errors.js';
+import { getLogger } from '../utils/logger.js';
 import {
   runTakeoutIncremental,
   type IncrementalOptions,
   type IncrementalResult,
 } from './incremental.js';
+
+const log = getLogger().child({ module: 'watch-downloads' });
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -199,7 +202,7 @@ export function watchDownloadsFolder(
         await pollCycle();
       } catch (error) {
         // Log but don't crash the watcher for transient errors
-        console.error('[watch] Poll cycle error:', error instanceof Error ? error.message : error);
+        log.error({ err: error instanceof Error ? error.message : error }, '[watch] Poll cycle error');
       }
 
       if (stopped) break;

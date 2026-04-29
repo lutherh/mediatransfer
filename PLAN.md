@@ -669,3 +669,26 @@ needed.
   directory.
 - `archive-browser.ts`, `archive-metadata.ts` — in-archive browsing helpers.
 
+**Operational hardening (`scripts/`, compose, Immich local ops):**
+- `scripts/mount-s3.sh` — macOS-native rclone NFS mount hardened with Unix
+  socket rc, pre-unmount `vfs/sync`, owner-only `data/` permissions, and
+  `umask 077` before rc socket creation.
+- `scripts/start-all.sh` — macOS startup guard now requires the canonical
+  `data/immich-s3` NFS mount and a bounded live `library/` probe before
+  starting Immich, avoiding stale NFS endpoints.
+- `docker-compose.immich.yml` — Linux-only `rclone-s3` sidecar is gated behind
+  the `linux` compose profile; macOS uses the host NFS mount and no longer
+  blocks `immich-server` on a FUSE sidecar that cannot become healthy.
+- `docker-compose.immich.yml` (2026-04-29) — all mutable image tags
+  (`immich-server:release`, `immich-machine-learning:release`,
+  `rclone/rclone:latest`, `cloudflare/cloudflared:latest`, `busybox:latest`,
+  `redis:7-alpine`, `ghcr.io/tensorchord/pgvecto-rs:pg16-v0.3.0`,
+  `alpine:3.19`) are now pinned by `@sha256:` digest of the
+  currently-running local image, with the original tag preserved as a
+  comment for same-day rollback safety. Compose config validated under
+  both default and `linux` profiles; no containers were restarted.
+- Recovery evidence for the 2026-04 rclone writeback incident is archived under
+  `data/logs/recovery-2026-04/` (gitignored). Validation: `npm run lint`,
+  `npx vitest run`, compose config in macOS/Linux profile modes, and
+  `./scripts/start-all.sh up` with Immich HTTP 200.
+
