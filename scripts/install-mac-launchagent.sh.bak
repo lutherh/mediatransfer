@@ -48,23 +48,7 @@ DOCKER_BIN="$(command -v docker || true)"
 BIN_DIR_RCLONE="$(dirname "$RCLONE_BIN")"
 BIN_DIR_DOCKER="${DOCKER_BIN:+$(dirname "$DOCKER_BIN"):}"
 
-flush_mount() {
-  # Drain the rv writeback cache before letting launchctl SIGTERM rclone.
-  # Without this, in-flight writes (--vfs-cache-mode writes) are lost on
-  # kill and the bytes never reach S3 -- this is how ~740 assets went
-  # missing in the Apr 2026 incident.
-  local rc_port
-  rc_port=$(awk -F= '/^RCLONE_RC_PORT=/ {print $2}' "$ROOT_DIR/.env.immich" 2>/dev/null | tr -d ' "')
-  rc_port=${rc_port:-5573}
-  if command -v rclone &>/dev/null; then
-    echo "Flushing rclone vfs cache via rc on 127.0.0.1:${rc_port} ..."
-    rclone rc vfs/sync --rc-addr "127.0.0.1:${rc_port}" 2>/dev/null || true
-    sleep 2
-  fi
-}
-
 uninstall() {
-  flush_mount
   for label in "$LABEL_STACK" "$LABEL_MOUNT"; do
     if launchctl list "$label" &>/dev/null; then
       echo "Unloading $label..."
@@ -113,8 +97,6 @@ esac
 
 mkdir -p "$LOG_DIR" "$(dirname "$PLIST_MOUNT")"
 
-# Flush any running mount first so the writeback cache is drained.
-flush_mount
 # Unload any previous versions before rewriting.
 for label in "$LABEL_STACK" "$LABEL_MOUNT"; do
   plist="$HOME/Library/LaunchAgents/${label}.plist"
@@ -169,12 +151,6 @@ cat > "$PLIST_MOUNT" <<PLIST_EOF
 
   <key>ThrottleInterval</key>
   <integer>10</integer>
-
-  <!-- Give rclone up to 5 minutes to flush its vfs writeback cache when
-       launchd sends SIGTERM. Default is 20s, which is not enough to push
-       multi-GB pending writes back to Scaleway and causes silent data loss. -->
-  <key>ExitTimeOut</key>
-  <integer>300</integer>
 
   <key>StandardOutPath</key>
   <string>${LOG_DIR}/s3mount.out.log</string>
