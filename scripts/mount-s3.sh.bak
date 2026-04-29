@@ -77,10 +77,6 @@ MOUNT_POINT=$(read_env_val "$IMMICH_ENV" UPLOAD_LOCATION "./data/immich-s3")
 # Without this, every restart picks a new ephemeral port and Finder shows
 # "Server connections interrupted" on the now-orphaned mount.
 NFS_PORT=$(read_env_val "$IMMICH_ENV" RCLONE_NFS_PORT "32049")
-# rclone remote-control socket. Used by vfs/sync to flush the writeback
-# cache before launchd kills the process; without this, an unflushed cache
-# means uploaded bytes never reach S3 and are silently lost.
-RCLONE_RC_PORT=$(read_env_val "$IMMICH_ENV" RCLONE_RC_PORT "5573")
 
 if [ -z "$BUCKET" ]; then
   echo "ERROR: No bucket configured. Set RCLONE_BUCKET in .env.immich or SCW_BUCKET in .env" >&2
@@ -115,13 +111,6 @@ if [[ "${1:-}" == "--unmount" || "${1:-}" == "-u" ]]; then
     diskutil unmount force "$MOUNT_POINT" 2>/dev/null || umount -f "$MOUNT_POINT" 2>/dev/null || true
   else
     fusermount -uz "$MOUNT_POINT" 2>/dev/null || umount "$MOUNT_POINT" 2>/dev/null || true
-  fi
-  # Flush the rclone vfs writeback cache before killing the daemon.
-  # If we skip this, any in-flight writes (--vfs-cache-mode writes) are lost
-  # when the process dies — the bytes never make it to S3.
-  if command -v rclone &>/dev/null; then
-    rclone rc vfs/sync --rc-addr "127.0.0.1:${RCLONE_RC_PORT:-5573}" 2>/dev/null || true
-    sleep 2
   fi
   # Stop the rclone daemon — without this it survives the unmount and leaks
   # an orphan NFS server on a random localhost port (architect review #2).
@@ -198,9 +187,6 @@ RCLONE_ARGS=(
   --poll-interval 0
   --transfers 8
   --s3-chunk-size 16M
-  --rc
-  --rc-no-auth
-  --rc-addr "127.0.0.1:$RCLONE_RC_PORT"
   ${EXTRA_MOUNT_FLAGS[@]+"${EXTRA_MOUNT_FLAGS[@]}"}
   --log-level NOTICE
 )
