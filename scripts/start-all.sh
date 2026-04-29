@@ -96,20 +96,88 @@ ensure_macos_s3_mount() {
   if [[ "$abs_mount" != /* ]]; then
     abs_mount="$ROOT_DIR/$abs_mount"
   fi
-  # Normalize: ./data/immich-s3 -> data/immich-s3 (the `mount` table holds
-  # the kernel's canonicalized path, no /./ segments).
-  abs_mount="$(cd "$abs_mount" 2>/dev/null && pwd -P || echo "$abs_mount")"
+  # Normalize without entering the mount point. If the mount is stale, even
+  # `cd "$abs_mount"` can hang before the bounded liveness probe below gets
+  # a chance to run. Resolve only the parent directory and append the mount
+  # basename.
+  local mount_parent mount_base
+  mount_parent="$(dirname "$abs_mount")"
+  mount_base="$(basename "$abs_mount")"
+  if mount_parent="$(cd "$mount_parent" 2>/dev/null && pwd -P)"; then
+    abs_mount="$mount_parent/$mount_base"
+  fi
 
-  if mount | grep -E "on ${abs_mount}[[:space:]].*\(nfs" >/dev/null 2>&1; then
-    echo "S3 mount: $abs_mount (nfs, live)"
-    return 0
+  is_nfs_mounted() {
+    local target="$1"
+    mount | grep -F " on ${target} " | grep -Fq "(nfs"
+  }
+
+  # `mount | grep` only proves the kernel still has a mount entry — it does
+  # NOT detect a stale NFS endpoint where the rclone-side server has died
+  # but the entry hasn't been reaped yet. A real syscall round-trip is the
+  # only reliable liveness probe. We list a sentinel subdir (`library/` is
+  # always present in the canonical photosync/immich layout) with a 5s
+  # bound to avoid hanging on a wedged NFS endpoint. See AGENTS.md
+  # "Things that bite" — stale FUSE / dead NFS look identical from `mount`.
+  probe_mount_live() {
+    local target="$1"
+    # Use a backgrounded `ls` + perl-bounded wait. macOS lacks GNU `timeout`
+    # by default; perl is shipped with the system and gives us a hard cap.
+    perl -e '
+      use strict; use warnings;
+      my ($path, $secs) = @ARGV;
+      my $pid = fork();
+      if (!defined $pid) { exit 2; }
+      if ($pid == 0) {
+        open STDOUT, ">", "/dev/null"; open STDERR, ">", "/dev/null";
+        exec("/bin/ls", "-1", "$path/library") or exit 127;
+      }
+      local $SIG{ALRM} = sub { kill 9, $pid; waitpid($pid, 0); exit 3; };
+      alarm $secs;
+      waitpid($pid, 0);
+      my $code = $? >> 8;
+      exit($code == 0 ? 0 : 1);
+    ' "$target" 5
+  }
+
+  if is_nfs_mounted "$abs_mount"; then
+    if probe_mount_live "$abs_mount"; then
+      echo "S3 mount: $abs_mount (nfs, live)"
+      return 0
+    fi
+    echo "WARN: $abs_mount is in the mount table but unresponsive (stale NFS endpoint)." >&2
+    if [ "${START_ALL_AUTO_MOUNT:-0}" = "1" ]; then
+      echo "  attempting forced unmount + remount (START_ALL_AUTO_MOUNT=1)..." >&2
+      "$SCRIPT_DIR/mount-s3.sh" --unmount >/dev/null 2>&1 || true
+      diskutil unmount force "$abs_mount" >/dev/null 2>&1 || true
+      "$SCRIPT_DIR/mount-s3.sh" --background
+      sleep 2
+      if is_nfs_mounted "$abs_mount" && probe_mount_live "$abs_mount"; then
+        echo "S3 mount: $abs_mount (nfs, live after remount)"
+        return 0
+      fi
+      echo "ERROR: remount of $abs_mount still unresponsive." >&2
+      exit 1
+    fi
+    cat >&2 <<EOF
+ERROR: $abs_mount is mounted but stale (rclone has likely died).
+
+  Force-unmount and remount:
+    ./scripts/mount-s3.sh --unmount || diskutil unmount force "$abs_mount"
+    ./scripts/mount-s3.sh --background
+
+  Or re-run this script with auto-mount enabled:
+    START_ALL_AUTO_MOUNT=1 $0 ${ACTION}
+
+EOF
+    exit 1
   fi
 
   if [ "${START_ALL_AUTO_MOUNT:-0}" = "1" ]; then
     echo "S3 mount missing at $abs_mount — auto-mounting (START_ALL_AUTO_MOUNT=1)..."
     "$SCRIPT_DIR/mount-s3.sh" --background
     sleep 2
-    if ! mount | grep -E "on ${abs_mount}[[:space:]].*\(nfs" >/dev/null 2>&1; then
+    if ! is_nfs_mounted "$abs_mount" || ! probe_mount_live "$abs_mount"; then
       echo "ERROR: auto-mount of $abs_mount did not produce a live nfs mount." >&2
       exit 1
     fi
