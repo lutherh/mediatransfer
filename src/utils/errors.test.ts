@@ -1,4 +1,9 @@
-import { toErrorMessage, isFileNotFoundError, isCrossDeviceError } from './errors.js';
+import {
+  toErrorMessage,
+  isFileNotFoundError,
+  isCrossDeviceError,
+  isTransientNetworkError,
+} from './errors.js';
 
 describe('toErrorMessage', () => {
   it('extracts message from Error instance', () => {
@@ -77,5 +82,58 @@ describe('isCrossDeviceError', () => {
     expect(isCrossDeviceError('EXDEV')).toBe(false);
     expect(isCrossDeviceError(null)).toBe(false);
     expect(isCrossDeviceError(undefined)).toBe(false);
+  });
+});
+
+describe('isTransientNetworkError', () => {
+  const codes = [
+    'ENOTFOUND',
+    'EAI_AGAIN',
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'ETIMEDOUT',
+    'ESOCKETTIMEDOUT',
+    'EPIPE',
+    'EHOSTUNREACH',
+    'ENETUNREACH',
+  ];
+
+  for (const code of codes) {
+    it(`returns true for code ${code}`, () => {
+      const err = Object.assign(new Error('net'), { code });
+      expect(isTransientNetworkError(err)).toBe(true);
+    });
+  }
+
+  const names = ['NetworkingError', 'TimeoutError', 'AbortError'];
+
+  for (const name of names) {
+    it(`returns true for name ${name}`, () => {
+      const err = new Error('net');
+      err.name = name;
+      expect(isTransientNetworkError(err)).toBe(true);
+    });
+  }
+
+  it('returns false for a plain Error', () => {
+    expect(isTransientNetworkError(new Error('boom'))).toBe(false);
+  });
+
+  it('returns true when the transient error is wrapped via cause', () => {
+    const cause = Object.assign(new Error('dns'), { code: 'ENOTFOUND' });
+    const wrapper = new Error('S3 service exception', { cause });
+    expect(isTransientNetworkError(wrapper)).toBe(true);
+  });
+
+  it('returns false for a wrapper whose cause is not transient', () => {
+    const cause = new Error('inner');
+    const wrapper = new Error('outer', { cause });
+    expect(isTransientNetworkError(wrapper)).toBe(false);
+  });
+
+  it('returns false for null, undefined, and strings', () => {
+    expect(isTransientNetworkError(null)).toBe(false);
+    expect(isTransientNetworkError(undefined)).toBe(false);
+    expect(isTransientNetworkError('ENOTFOUND')).toBe(false);
   });
 });

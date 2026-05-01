@@ -573,4 +573,82 @@ describe('takeout/uploader', () => {
       });
     });
   });
+
+  describe('transient network backoff', () => {
+    class NetworkFlakyProvider extends MockProvider {
+      readonly errorFactory: (attempt: number) => Error;
+      readonly failures: number;
+
+      constructor(errorFactory: (attempt: number) => Error, failures: number) {
+        super();
+        this.errorFactory = errorFactory;
+        this.failures = failures;
+      }
+
+      async upload(key: string, _stream: Readable): Promise<void> {
+        const attempts = (this.uploadAttempts.get(key) ?? 0) + 1;
+        this.uploadAttempts.set(key, attempts);
+        if (attempts <= this.failures) {
+          throw this.errorFactory(attempts);
+        }
+        this.objects.add(key);
+      }
+    }
+
+    it('uses the long network backoff for ENOTFOUND failures', async () => {
+      await withTempDir(async (dir) => {
+        const provider = new NetworkFlakyProvider(
+          () => Object.assign(new Error('getaddrinfo ENOTFOUND s3.nl-ams.scw.cloud'), { code: 'ENOTFOUND' }),
+          3,
+        );
+        const entry = await createEntry(dir, 'Album/NET_1.jpg', '2025/12/13/Album/NET_1.jpg');
+        const statePath = path.join(dir, 'state.json');
+
+        const delays: number[] = [];
+        const summary = await uploadManifest({
+          provider,
+          entries: [entry],
+          statePath,
+          retryCount: 5,
+          sleep: async (ms: number) => {
+            delays.push(ms);
+          },
+        });
+
+        expect(summary.uploaded).toBe(1);
+        expect(summary.failed).toBe(0);
+        expect(provider.uploadAttempts.get(entry.destinationKey)).toBe(4);
+        expect(delays).toHaveLength(3);
+        for (const ms of delays) {
+          expect(ms).toBeGreaterThanOrEqual(1500);
+        }
+      });
+    });
+
+    it('uses the short backoff for non-network errors', async () => {
+      await withTempDir(async (dir) => {
+        const provider = new NetworkFlakyProvider(() => new Error('boom'), 3);
+        const entry = await createEntry(dir, 'Album/NET_2.jpg', '2025/12/13/Album/NET_2.jpg');
+        const statePath = path.join(dir, 'state.json');
+
+        const delays: number[] = [];
+        const summary = await uploadManifest({
+          provider,
+          entries: [entry],
+          statePath,
+          retryCount: 5,
+          sleep: async (ms: number) => {
+            delays.push(ms);
+          },
+        });
+
+        expect(summary.uploaded).toBe(1);
+        expect(summary.failed).toBe(0);
+        expect(delays).toHaveLength(3);
+        for (const ms of delays) {
+          expect(ms).toBeLessThan(1500);
+        }
+      });
+    });
+  });
 });

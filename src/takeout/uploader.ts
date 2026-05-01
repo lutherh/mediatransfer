@@ -4,7 +4,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import { Transform, type Readable } from 'node:stream';
 import type { CloudProvider } from '../providers/types.js';
 import type { ManifestEntry } from './manifest.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage, isTransientNetworkError } from '../utils/errors.js';
 import { writeFileAtomic } from '../utils/fs-atomic.js';
 import { getLogger } from '../utils/logger.js';
 
@@ -423,7 +423,9 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
         // Don't retry filesystem errors like ENOENT — the file doesn't exist
         // on disk and retrying will never help (e.g. stale __dup manifest entries).
         if (!isNonRetryableError(error) && attempt <= retryCount) {
-          const delay = computeBackoffDelay(baseDelayMs, attempt);
+          const delay = isTransientNetworkError(error)
+            ? computeNetworkBackoffDelay(attempt)
+            : computeBackoffDelay(baseDelayMs, attempt);
           emitSnapshot('running', true, {
             key: entry.destinationKey,
             sourcePath: entry.sourcePath,
@@ -687,6 +689,16 @@ class StateCheckpointManager {
 function computeBackoffDelay(baseDelayMs: number, attempt: number): number {
   const jitter = Math.floor(Math.random() * 100);
   return baseDelayMs * 2 ** (attempt - 1) + jitter;
+}
+
+/**
+ * Longer backoff used when the failure looks like a transient network/DNS
+ * blip (see `isTransientNetworkError`). Yields ~2s, 4s, 8s, 16s, 30s — about
+ * a 60s recovery window across the default 5 retries, enough to ride out a
+ * typical macOS DNS hiccup without exhausting attempts.
+ */
+function computeNetworkBackoffDelay(attempt: number): number {
+  return Math.min(30_000, 2_000 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 500);
 }
 
 function contentTypeForPath(filePath: string): string | undefined {
