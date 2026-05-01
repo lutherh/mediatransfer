@@ -25,6 +25,29 @@ If you want the short version: this is a practical migration tool for getting ou
 - The codebase is structured around local services plus S3-style object storage, but the documented setup assumes Scaleway
 - This is not a hosted SaaS and not a generic no-config multi-cloud appliance yet
 
+## Tech Stack
+
+- **Runtime:** Node.js (`^20.19 || ^22.12 || >=24.0`), TypeScript only, ESM
+- **API:** Fastify 5, Pino logging, Zod validation
+- **Database:** PostgreSQL 16 + Prisma 7
+- **Job queue:** BullMQ on Redis 7 (`transfer-jobs` + `transfer-jobs-dlq`)
+- **Frontend:** React 19, Vite 8, Tailwind 4, TanStack Query/Virtual
+- **Storage:** Scaleway Object Storage (S3-compatible) via AWS SDK v3
+- **Tests:** Vitest (backend + frontend)
+
+See [TECH_STACK.md](TECH_STACK.md) for the full version matrix.
+
+## Repository Layout
+
+```
+src/        Backend (Fastify routes, BullMQ workers, providers, takeout pipeline)
+frontend/   React 19 + Vite SPA
+prisma/     Prisma schema
+scripts/    TypeScript operational scripts (takeout, S3↔Immich migration)
+plans/      Numbered tactical plans
+data/       Runtime data (gitignored: takeout, immich volumes, mounts)
+```
+
 ## Requirements
 
 Install these first:
@@ -192,13 +215,20 @@ After upload, use the local catalog UI:
 
 | URL | Purpose |
 |---|---|
-| `http://localhost:5173/` | Google Photos picker flow |
-| `http://localhost:5173/upload` | Local upload page |
-| `http://localhost:5173/takeout` | Takeout scan, upload, verify |
-| `http://localhost:5173/takeout/sequences` | Sequence analysis |
-| `http://localhost:5173/transfers` | Transfer jobs |
-| `http://localhost:5173/catalog` | Uploaded media catalog |
-| `http://localhost:5173/costs` | Storage cost view |
+| `http://localhost:5173/` | Google Photos picker flow (4-step wizard) |
+| `http://localhost:5173/setup` | First-run setup wizard for Google, Scaleway, and Immich |
+| `http://localhost:5173/settings` | Reconfigure Google / Scaleway / Immich credentials at any time |
+| `http://localhost:5173/upload` | Direct file upload page |
+| `http://localhost:5173/takeout` | Takeout scan, upload, verify, auto-upload toggle, archive history |
+| `http://localhost:5173/takeout/sequences` | Detect missing or duplicate archive numbers in a Takeout export |
+| `http://localhost:5173/transfers` | Transfer jobs list (filter, costs) |
+| `http://localhost:5173/transfers/new` | Create a custom cloud-to-cloud transfer |
+| `http://localhost:5173/catalog` | Uploaded media catalog (timeline grid + lightbox) |
+| `http://localhost:5173/catalog/dedup` | Stream-based duplicate detection and cleanup |
+| `http://localhost:5173/catalog/albums` | Album management |
+| `http://localhost:5173/catalog/undated` | Items with unknown date — bulk fix |
+| `http://localhost:5173/catalog/immich-compare` | Find S3 files unmatched in Immich and remap |
+| `http://localhost:5173/costs` | Storage cost calculator |
 | `http://localhost:5173/pipeline` | Visual pipeline overview and schedule config |
 
 ## Useful Commands
@@ -477,11 +507,55 @@ On macOS, `start-all.sh` will refuse to start Immich if `data/immich-s3` isn't a
 docker compose -f docker-compose.immich.yml down
 ```
 
+## Long-Running Jobs and Unattended Operation
+
+MediaTransfer is designed to support multi-hour Takeout imports and large S3 uploads without losing data when the laptop sleeps, the API container restarts, or you keep the web UI open during a CLI run.
+
+**Cross-process lock.** Both the API and the long-running CLI scripts coordinate through a shared lockfile at `data/takeout/work/.takeout-run.lock` ([src/takeout/run-lock.ts](src/takeout/run-lock.ts)). Acquire is exclusive (`O_EXCL` + atomic `tmp + rename`); the holder writes a `lastSeenAt` heartbeat every 30 s; readers reclaim the lock only after a 5-minute staleness window. A corrupt lockfile is treated as **unknown state** (fail-closed) — it is not auto-deleted.
+
+**External-run UI banner.** When a foreign CLI holds the lock, [http://localhost:5173/takeout](http://localhost:5173/takeout) shows an amber banner with the holder's PID, source, and start time, and disables every mutating control (action buttons, auto-upload toggle, path editing). The API returns `409 EXTERNAL_JOB_RUNNING` for the same actions. This makes the page safe to leave open during a 24–48 h overnight run.
+
+**Upload stall watchdog.** [src/providers/scaleway.ts](src/providers/scaleway.ts) tracks raw socket-level bytes per upload and aborts a single S3 part if no bytes flow for 5 minutes (checked every 30 s), in addition to TCP/TLS and read-idle timeouts. Aborts are retried by the uploader's normal failure path, so a hung connection no longer wedges the whole import.
+
+**Resume safety.** Every state file (`state.json`, `archive-state.json`, `manifest.jsonl`) is appended or rewritten atomically. After any crash, restart, or manual `Ctrl+C`, re-running the same action picks up where it left off.
+
+**External heartbeater.** If you started a CLI run before the in-process heartbeat existed, [scripts/heartbeat-takeout-lock.ts](scripts/heartbeat-takeout-lock.ts) refreshes the lockfile for an external PID:
+
+```bash
+npx tsx scripts/heartbeat-takeout-lock.ts <pid> data/takeout/work
+```
+
+**macOS unattended runs.** On a laptop, sleep > 5 minutes can stale the lock and let the API reclaim it under the live CLI. Either disable sleep with `pmset` (see [macOS sleep settings](#macos-sleep-settings)) or attach `caffeinate` to the CLI's PID for the duration of the run:
+
+```bash
+caffeinate -dimsu -w <cli-pid> &
+```
+
+**rclone S3 mount.** If you mount your bucket for Immich, **always flush the rclone VFS cache before unmounting**, or any pending writes since the last flush will be lost silently:
+
+```bash
+rclone rc --unix-socket data/rclone-rc.sock vfs/sync
+```
+
+Never `kill -9` rclone or yank `data/immich-s3` while writes are pending.
+
+## Frontend Build-Time Variables
+
+The React SPA is a static bundle, so any backend URL or auth token must be baked in at build time via `frontend/Dockerfile` ARGs:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VITE_API_BASE_URL` | `http://<window.hostname>:3000` | Base URL the SPA calls. Set when the API is on a different host or proxied. |
+| `VITE_API_AUTH` / `VITE_API_TOKEN` | unset | If set, the SPA injects `Authorization: Bearer <token>` on every API call. Pair with `API_AUTH_TOKEN` on the backend. |
+
+For local dev these are usually left unset; the SPA falls back to `http://<your-host>:3000` and unauthenticated requests.
+
 ## Security Notes
 
 - `.env` and all `.env.*` files (except the `.example` templates) are gitignored
 - The app validates config at startup and fails fast on bad env values
 - `ENCRYPTION_SECRET` is used to encrypt stored cloud credentials
+- `API_AUTH_TOKEN` (when set) is required as `Authorization: Bearer <token>` on every API call; pair with `VITE_API_AUTH` for the SPA
 - In local development, services are intended to stay on your machine unless you explicitly expose them
 
 ## Troubleshooting
@@ -494,6 +568,9 @@ docker compose -f docker-compose.immich.yml down
 | Upload interrupted | Rerun the same upload command or button action; the state is resumable |
 | `ENCRYPTION_SECRET` error | Run `npm run app:setup` to generate a local secret |
 | Wrong object storage target | Re-check `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_REGION`, and `SCW_BUCKET` |
+| Takeout buttons disabled, amber “External run in progress” banner | A CLI/script holds the lock — wait for it, or remove `data/takeout/work/.takeout-run.lock` only after confirming no `tsx scripts/takeout-*.ts` process is running |
+| API returns `409 EXTERNAL_JOB_RUNNING` | Same as above — the API refuses to start a second writer |
+| Photos missing in Immich after a restart | rclone cache wasn't flushed before remount. See [Long-Running Jobs and Unattended Operation](#long-running-jobs-and-unattended-operation) for the `vfs/sync` command |
 
 ## Stopping Everything
 
