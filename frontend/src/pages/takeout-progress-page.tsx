@@ -1233,10 +1233,18 @@ function ArchiveNotUploadedReasons({ record }: { record: TakeoutArchiveHistoryEn
     return <span className="text-slate-400">-</span>;
   }
 
+  const codeStyles: Partial<Record<NonNullable<TakeoutArchiveHistoryEntry['notUploadedReasons']>[number]['code'], string>> = {
+    upload_failed_permanent: 'text-red-700',
+    upload_failed_transient: 'text-amber-700',
+  };
+
   return (
     <ul className="space-y-1">
       {reasons.map((reason) => (
-        <li key={reason.code} className="text-[11px] leading-tight">
+        <li
+          key={reason.code}
+          className={`text-[11px] leading-tight${codeStyles[reason.code] ? ` ${codeStyles[reason.code]}` : ''}`}
+        >
           {reason.count.toLocaleString()} {reason.label.toLowerCase()}
         </li>
       ))}

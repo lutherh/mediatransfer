@@ -45,6 +45,8 @@ export type ArchiveStateItem = {
   uploadedCount: number;
   skippedCount: number;
   failedCount: number;
+  transientFailedCount?: number;
+  permanentFailedCount?: number;
   skipReasons?: Partial<Record<UploadSkipReason, number>>;
   archiveSizeBytes?: number;
   mediaBytes?: number;
@@ -364,6 +366,8 @@ export async function runTakeoutIncremental(
         uploaded: archiveState.archives[archiveName].uploadedCount,
         skipped: archiveState.archives[archiveName].skippedCount,
         failed: archiveState.archives[archiveName].failedCount,
+        transientFailures: archiveState.archives[archiveName].transientFailedCount ?? 0,
+        permanentFailures: archiveState.archives[archiveName].permanentFailedCount ?? 0,
         dryRun: options.dryRun ?? false,
         stoppedEarly: archiveState.archives[archiveName].failedCount > 0,
         failureLimitReached: false,
@@ -417,6 +421,8 @@ export async function runTakeoutIncremental(
     uploaded: result.totalUploaded,
     skipped: result.totalSkipped,
     failed: result.totalFailed,
+    transientFailures: 0,
+    permanentFailures: 0,
     dryRun: options.dryRun ?? false,
     stoppedEarly: false,
     failureLimitReached: false,
@@ -483,6 +489,8 @@ async function processArchiveEntries(
     uploadedCount: summary.uploaded,
     skippedCount: summary.skipped,
     failedCount: summary.failed,
+    transientFailedCount: summary.transientFailures,
+    permanentFailedCount: summary.permanentFailures,
     skipReasons: summary.skipReasons,
     mediaBytes: entries.reduce((sum, entry) => sum + Math.max(0, entry.size ?? 0), 0),
     completedAt: new Date().toISOString(),

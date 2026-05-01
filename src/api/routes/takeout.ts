@@ -100,7 +100,7 @@ type ArchiveHistoryEntry = {
   handledPercent: number;
   isFullyUploaded: boolean;
   notUploadedReasons?: Array<{
-    code: UploadSkipReason | 'upload_failed';
+    code: UploadSkipReason | 'upload_failed' | 'upload_failed_transient' | 'upload_failed_permanent';
     label: string;
     count: number;
   }>;
@@ -1617,11 +1617,30 @@ function buildNotUploadedReasons(item: ArchiveStateItem): ArchiveHistoryEntry['n
   }
 
   if (item.failedCount > 0) {
-    reasons.push({
-      code: 'upload_failed',
-      label: 'Upload failed',
-      count: item.failedCount,
-    });
+    const hasTransient = typeof item.transientFailedCount === 'number';
+    const hasPermanent = typeof item.permanentFailedCount === 'number';
+    if (hasTransient || hasPermanent) {
+      if ((item.transientFailedCount ?? 0) > 0) {
+        reasons.push({
+          code: 'upload_failed_transient',
+          label: 'Upload failed (will retry next pass)',
+          count: item.transientFailedCount as number,
+        });
+      }
+      if ((item.permanentFailedCount ?? 0) > 0) {
+        reasons.push({
+          code: 'upload_failed_permanent',
+          label: 'Upload failed (needs re-run)',
+          count: item.permanentFailedCount as number,
+        });
+      }
+    } else {
+      reasons.push({
+        code: 'upload_failed',
+        label: 'Upload failed',
+        count: item.failedCount,
+      });
+    }
   }
 
   return reasons.length > 0 ? reasons : undefined;

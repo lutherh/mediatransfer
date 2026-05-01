@@ -1428,6 +1428,154 @@ describe('takeout routes', () => {
 
     await app.close();
   });
+
+  it('emits upload_failed_transient when archive has transientFailedCount', async () => {
+    const inputDir = path.join(tempDir, 'input');
+    const workDir = path.join(tempDir, 'work');
+    const statePath = path.join(tempDir, 'state.json');
+    await fs.mkdir(inputDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workDir, 'manifest.jsonl'),
+      `${JSON.stringify({ destinationKey: 'a.jpg' })}\n`,
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({ version: 1, updatedAt: '2025-01-01T00:00:00.000Z', items: {} }),
+    );
+    await fs.writeFile(
+      path.join(workDir, 'archive-state.json'),
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        archives: {
+          'takeout-trans.tgz': {
+            status: 'failed',
+            entryCount: 10,
+            uploadedCount: 7,
+            skippedCount: 0,
+            failedCount: 3,
+            transientFailedCount: 3,
+            permanentFailedCount: 0,
+            archiveSizeBytes: 100_000,
+          },
+        },
+      }),
+    );
+
+    const env = baseEnv({ TAKEOUT_INPUT_DIR: inputDir, TAKEOUT_WORK_DIR: workDir, TRANSFER_STATE_PATH: statePath });
+    const app = Fastify();
+    await registerTakeoutRoutes(app, env);
+
+    const res = await app.inject({ method: 'GET', url: '/takeout/status' });
+    const body = res.json();
+    expect(res.statusCode).toBe(200);
+    const archive = body.archiveHistory[0];
+    expect(archive.notUploadedReasons).toEqual([
+      { code: 'upload_failed_transient', label: 'Upload failed (will retry next pass)', count: 3 },
+    ]);
+
+    await app.close();
+  });
+
+  it('emits upload_failed_permanent when archive has permanentFailedCount', async () => {
+    const inputDir = path.join(tempDir, 'input');
+    const workDir = path.join(tempDir, 'work');
+    const statePath = path.join(tempDir, 'state.json');
+    await fs.mkdir(inputDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workDir, 'manifest.jsonl'),
+      `${JSON.stringify({ destinationKey: 'a.jpg' })}\n`,
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({ version: 1, updatedAt: '2025-01-01T00:00:00.000Z', items: {} }),
+    );
+    await fs.writeFile(
+      path.join(workDir, 'archive-state.json'),
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        archives: {
+          'takeout-perm.tgz': {
+            status: 'failed',
+            entryCount: 10,
+            uploadedCount: 8,
+            skippedCount: 0,
+            failedCount: 2,
+            transientFailedCount: 0,
+            permanentFailedCount: 2,
+            archiveSizeBytes: 100_000,
+          },
+        },
+      }),
+    );
+
+    const env = baseEnv({ TAKEOUT_INPUT_DIR: inputDir, TAKEOUT_WORK_DIR: workDir, TRANSFER_STATE_PATH: statePath });
+    const app = Fastify();
+    await registerTakeoutRoutes(app, env);
+
+    const res = await app.inject({ method: 'GET', url: '/takeout/status' });
+    const body = res.json();
+    expect(res.statusCode).toBe(200);
+    const archive = body.archiveHistory[0];
+    expect(archive.notUploadedReasons).toEqual([
+      { code: 'upload_failed_permanent', label: 'Upload failed (needs re-run)', count: 2 },
+    ]);
+
+    await app.close();
+  });
+
+  it('emits both transient and permanent codes when archive has both counts', async () => {
+    const inputDir = path.join(tempDir, 'input');
+    const workDir = path.join(tempDir, 'work');
+    const statePath = path.join(tempDir, 'state.json');
+    await fs.mkdir(inputDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workDir, 'manifest.jsonl'),
+      `${JSON.stringify({ destinationKey: 'a.jpg' })}\n`,
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({ version: 1, updatedAt: '2025-01-01T00:00:00.000Z', items: {} }),
+    );
+    await fs.writeFile(
+      path.join(workDir, 'archive-state.json'),
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        archives: {
+          'takeout-both.tgz': {
+            status: 'failed',
+            entryCount: 10,
+            uploadedCount: 5,
+            skippedCount: 0,
+            failedCount: 5,
+            transientFailedCount: 3,
+            permanentFailedCount: 2,
+            archiveSizeBytes: 100_000,
+          },
+        },
+      }),
+    );
+
+    const env = baseEnv({ TAKEOUT_INPUT_DIR: inputDir, TAKEOUT_WORK_DIR: workDir, TRANSFER_STATE_PATH: statePath });
+    const app = Fastify();
+    await registerTakeoutRoutes(app, env);
+
+    const res = await app.inject({ method: 'GET', url: '/takeout/status' });
+    const body = res.json();
+    expect(res.statusCode).toBe(200);
+    const archive = body.archiveHistory[0];
+    expect(archive.notUploadedReasons).toEqual([
+      { code: 'upload_failed_transient', label: 'Upload failed (will retry next pass)', count: 3 },
+      { code: 'upload_failed_permanent', label: 'Upload failed (needs re-run)', count: 2 },
+    ]);
+
+    await app.close();
+  });
 });
 
 

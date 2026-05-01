@@ -342,6 +342,54 @@ describe('frontend pages', () => {
     expect(screen.queryByText('Interrupted (will retry)')).not.toBeInTheDocument();
   });
 
+  it('renders transient upload-failure reasons in the archive history', async () => {
+    await mockTakeoutResponses(
+      takeoutStatus({
+        archiveHistory: [
+          interruptedArchive({
+            notUploadedReasons: [
+              {
+                code: 'upload_failed_transient',
+                label: 'Upload failed (will retry next pass)',
+                count: 7,
+              },
+            ],
+          }),
+        ],
+      }),
+    );
+
+    renderRoute('/takeout');
+
+    expect(
+      await screen.findByText(/7 upload failed \(will retry next pass\)/i),
+    ).toBeInTheDocument();
+  });
+
+  it('renders permanent upload-failure reasons in the archive history', async () => {
+    await mockTakeoutResponses(
+      takeoutStatus({
+        archiveHistory: [
+          interruptedArchive({
+            notUploadedReasons: [
+              {
+                code: 'upload_failed_permanent',
+                label: 'Upload failed (needs re-run)',
+                count: 2,
+              },
+            ],
+          }),
+        ],
+      }),
+    );
+
+    renderRoute('/takeout');
+
+    expect(
+      await screen.findByText(/2 upload failed \(needs re-run\)/i),
+    ).toBeInTheDocument();
+  });
+
   it('does not render a red "Failed (X%)" pill for a partly-handled archive while an external run is active', async () => {
     // Regression: with entryCount>0 the pill used to fall through to red
     // "Failed (0%)" even when the external CLI was actively retrying it.

@@ -194,7 +194,9 @@ export type TakeoutArchiveHistoryEntry = {
       | 'already_exists_in_destination'
       | 'already_uploaded_in_state'
       | 'already_skipped_in_state'
-      | 'upload_failed';
+      | 'upload_failed'
+      | 'upload_failed_transient'
+      | 'upload_failed_permanent';
     label: string;
     count: number;
   }>;

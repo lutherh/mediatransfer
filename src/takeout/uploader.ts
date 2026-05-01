@@ -16,6 +16,8 @@ export type UploadStateItem = {
   updatedAt: string;
   skipReason?: UploadSkipReason;
   error?: string;
+  /** Set when status === 'failed'. Drives resume short-circuit + UI labelling. */
+  failureKind?: 'transient' | 'permanent';
 };
 
 export type UploadSkipReason =
@@ -35,6 +37,8 @@ export type UploadSummary = {
   uploaded: number;
   skipped: number;
   failed: number;
+  transientFailures: number;
+  permanentFailures: number;
   skipReasons?: Record<UploadSkipReason, number>;
   dryRun: boolean;
   stoppedEarly: boolean;
@@ -93,10 +97,16 @@ export type UploadOptions = {
   sleep?: (ms: number) => Promise<void>;
   progressIntervalMs?: number;
   onProgress?: (snapshot: UploadProgressSnapshot) => void;
+  breakerThreshold?: number;
+  breakerWindowMs?: number;
+  breakerPauseMs?: number;
 };
 
 const DEFAULT_RETRY_COUNT = 5;
 const DEFAULT_BASE_DELAY_MS = 300;
+const DEFAULT_BREAKER_THRESHOLD = 5;
+const DEFAULT_BREAKER_WINDOW_MS = 60_000;
+const DEFAULT_BREAKER_PAUSE_MS = 120_000;
 export const DEFAULT_UPLOAD_CONCURRENCY = 1;
 const DEFAULT_PERSIST_EVERY = 25;
 const DEFAULT_FLUSH_INTERVAL_MS = 3000;
@@ -140,6 +150,9 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
     250,
     Math.floor(options.progressIntervalMs ?? DEFAULT_PROGRESS_INTERVAL_MS),
   );
+  const breakerThreshold = Math.max(1, Math.floor(options.breakerThreshold ?? DEFAULT_BREAKER_THRESHOLD));
+  const breakerWindowMs = Math.max(1, Math.floor(options.breakerWindowMs ?? DEFAULT_BREAKER_WINDOW_MS));
+  const breakerPauseMs = Math.max(0, Math.floor(options.breakerPauseMs ?? DEFAULT_BREAKER_PAUSE_MS));
 
   const state = await loadUploadState(options.statePath);
   const entries = applyFilters(options.entries, options.includeFilter, options.excludeFilter);
@@ -165,6 +178,8 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
     uploaded: 0,
     skipped: 0,
     failed: 0,
+    transientFailures: 0,
+    permanentFailures: 0,
     skipReasons: {
       already_uploaded_in_state: 0,
       already_skipped_in_state: 0,
@@ -173,6 +188,15 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
     dryRun,
     stoppedEarly: false,
     failureLimitReached: false,
+  };
+
+  // Closure-scoped circuit breaker: when a burst of transient failures
+  // happens across workers (e.g. multi-minute DNS/network outage), pause
+  // the whole upload pump so the underlying fault can clear instead of
+  // burning per-item retry budgets in parallel.
+  const breaker = {
+    recentTransientTimestamps: [] as number[],
+    pauseUntilMs: 0,
   };
 
   const totalBytes = entries.reduce((sum, entry) => sum + Math.max(0, entry.size ?? 0), 0);
@@ -238,7 +262,34 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
   let stopScheduling = false;
 
   const processEntry = async (entry: ManifestEntry): Promise<void> => {
+    // Honor the circuit breaker before any work. Bound the wait by the
+    // absolute pauseUntilMs so concurrent workers don't stack delays.
+    if (breaker.pauseUntilMs > 0) {
+      const remaining = breaker.pauseUntilMs - Date.now();
+      if (remaining > 0) {
+        await sleep(remaining);
+      }
+    }
+
     const existingState = state.items[entry.destinationKey];
+
+    // Permanent failures (genuinely missing source / unreadable) must never
+    // be retried — short-circuit just like uploaded/skipped entries.
+    if (existingState?.status === 'failed' && existingState.failureKind === 'permanent') {
+      summary.failed += 1;
+      summary.permanentFailures += 1;
+      summary.processed += 1;
+      emitSnapshot('running', true, {
+        key: entry.destinationKey,
+        sourcePath: entry.sourcePath,
+        sizeBytes: entry.size,
+        attempt: existingState.attempts,
+        status: 'failed',
+        error: existingState.error,
+      });
+      return;
+    }
+
     if (existingState?.status === 'uploaded') {
       summary.skipReasons!.already_uploaded_in_state += 1;
       summary.skipped += 1;
@@ -325,9 +376,11 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
         attempts: 1,
         updatedAt: new Date().toISOString(),
         error: err.message,
+        failureKind: 'permanent',
       };
       checkpointManager.markDirty();
       summary.failed += 1;
+      summary.permanentFailures += 1;
       summary.processed += 1;
       emitSnapshot('running', true, {
         key: entry.destinationKey,
@@ -444,9 +497,31 @@ export async function uploadManifest(options: UploadOptions): Promise<UploadSumm
           attempts: attempt,
           updatedAt: new Date().toISOString(),
           error: error instanceof Error ? error.message : String(error),
+          failureKind: isNonRetryableError(error) ? 'permanent' : 'transient',
         };
         checkpointManager.markDirty();
         summary.failed += 1;
+        if (isNonRetryableError(error)) {
+          summary.permanentFailures += 1;
+        } else {
+          summary.transientFailures += 1;
+          // Track for circuit breaker: prune the sliding window then push,
+          // and trip the breaker if we've crossed the threshold.
+          const now = Date.now();
+          breaker.recentTransientTimestamps = breaker.recentTransientTimestamps.filter(
+            (ts) => now - ts < breakerWindowMs,
+          );
+          breaker.recentTransientTimestamps.push(now);
+          if (breaker.recentTransientTimestamps.length >= breakerThreshold) {
+            const pauseMs = breakerPauseMs;
+            breaker.pauseUntilMs = now + pauseMs;
+            breaker.recentTransientTimestamps = [];
+            log.warn(
+              { pauseMs, recentFailures: breakerThreshold },
+              '[uploader] transient-failure circuit breaker engaged',
+            );
+          }
+        }
         summary.processed += 1;
         emitSnapshot('running', true, {
           key: entry.destinationKey,
