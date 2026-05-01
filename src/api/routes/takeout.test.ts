@@ -71,6 +71,36 @@ function baseEnv(overrides: Partial<Env> = {}): Env {
   };
 }
 
+async function writeExternalRunLock(
+  workDir: string,
+  overrides: Partial<{
+    pid: number;
+    startedAt: string;
+    source: 'cli' | 'api';
+    command: string;
+    instanceId: string;
+    runToken: string;
+    lastSeenAt: string;
+  }> = {},
+) {
+  await fs.mkdir(workDir, { recursive: true });
+  const info = {
+    pid: process.pid === 1 ? 2 : 1,
+    startedAt: new Date().toISOString(),
+    source: 'cli' as const,
+    command: 'external takeout run',
+    instanceId: 'external-instance',
+    lastSeenAt: new Date().toISOString(),
+    ...overrides,
+  };
+  await fs.writeFile(
+    path.join(workDir, '.takeout-run.lock'),
+    JSON.stringify(info, null, 2),
+    'utf8',
+  );
+  return info;
+}
+
 describe('takeout routes', () => {
 
   beforeEach(async () => {
@@ -279,6 +309,79 @@ describe('takeout routes', () => {
     expect(statusRes.json().running).toBe(false);
     expect(statusRes.json().exitCode).toBe(0);
     expect(spawnMock).toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('treats an unreadable run lock as external and blocks mutations', async () => {
+    const inputDir = path.join(tempDir, 'input');
+    const workDir = path.join(tempDir, 'work');
+    const lockFile = path.join(workDir, '.takeout-run.lock');
+    await fs.mkdir(inputDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(lockFile, '{not-json', 'utf8');
+
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv({
+      TAKEOUT_INPUT_DIR: inputDir,
+      TAKEOUT_WORK_DIR: workDir,
+    }));
+
+    const statusRes = await app.inject({ method: 'GET', url: '/takeout/status' });
+    expect(statusRes.statusCode).toBe(200);
+    expect(statusRes.json().externalRun).toEqual(expect.objectContaining({
+      pid: -1,
+      source: 'cli',
+    }));
+
+    const actionRes = await app.inject({ method: 'POST', url: '/takeout/actions/scan' });
+    expect(actionRes.statusCode).toBe(409);
+    expect(actionRes.json().error.code).toBe('EXTERNAL_JOB_RUNNING');
+
+    const autoUploadRes = await app.inject({
+      method: 'PUT',
+      url: '/takeout/auto-upload',
+      payload: { enabled: true },
+    });
+    expect(autoUploadRes.statusCode).toBe(409);
+    expect(autoUploadRes.json().error.code).toBe('EXTERNAL_JOB_RUNNING');
+
+    const resetRes = await app.inject({ method: 'POST', url: '/takeout/reset-upload-state' });
+    expect(resetRes.statusCode).toBe(409);
+    expect(resetRes.json().error.code).toBe('EXTERNAL_JOB_RUNNING');
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    await expect(fs.readFile(lockFile, 'utf8')).resolves.toBe('{not-json');
+
+    await app.close();
+  });
+
+  it('returns 409 for action and auto-upload start attempts when an external lock exists', async () => {
+    const workDir = path.join(tempDir, 'work');
+    const existing = await writeExternalRunLock(workDir);
+
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv({ TAKEOUT_WORK_DIR: workDir }));
+
+    const actionRes = await app.inject({ method: 'POST', url: '/takeout/actions/scan' });
+    expect(actionRes.statusCode).toBe(409);
+    expect(actionRes.json().error.code).toBe('EXTERNAL_JOB_RUNNING');
+
+    const autoUploadRes = await app.inject({
+      method: 'PUT',
+      url: '/takeout/auto-upload',
+      payload: { enabled: true },
+    });
+    expect(autoUploadRes.statusCode).toBe(409);
+    expect(autoUploadRes.json().error.code).toBe('EXTERNAL_JOB_RUNNING');
+
+    const statusRes = await app.inject({ method: 'GET', url: '/takeout/status' });
+    expect(statusRes.json().externalRun).toEqual(expect.objectContaining({
+      pid: existing.pid,
+      source: 'cli',
+      command: 'external takeout run',
+    }));
+    expect(spawnMock).not.toHaveBeenCalled();
 
     await app.close();
   });

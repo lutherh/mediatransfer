@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Readable } from 'node:stream';
 import type { S3Client } from '@aws-sdk/client-s3';
 import {
@@ -15,18 +15,25 @@ import type { ProviderConfig } from './types.js';
 
 const mockUploadDone = vi.fn().mockResolvedValue({});
 let lastUploadParams: unknown = null;
+interface MockUploadInstance {
+  on: ReturnType<typeof vi.fn>;
+  abort: ReturnType<typeof vi.fn>;
+  done: typeof mockUploadDone;
+}
+let lastMockUpload: MockUploadInstance | null = null;
 
 vi.mock('@aws-sdk/lib-storage', () => {
   class MockUpload {
+    on = vi.fn();
+    abort = vi.fn().mockResolvedValue(undefined);
+    done = mockUploadDone;
     constructor(params: unknown) {
       lastUploadParams = params;
+      lastMockUpload = this as unknown as MockUploadInstance;
     }
-    done = mockUploadDone;
     // Real `Upload` from @aws-sdk/lib-storage extends EventEmitter and
     // exposes an `abort()` method. The stall watchdog in
     // ScalewayProvider.upload() calls both, so the mock must satisfy them.
-    on = vi.fn();
-    abort = vi.fn().mockResolvedValue(undefined);
   }
   return { Upload: MockUpload };
 });
@@ -407,5 +414,180 @@ describe('createScalewayProvider', () => {
     expect(() =>
       createScalewayProvider({ provider: 'scaleway' }),
     ).toThrow(/"region" is required/);
+  });
+});
+
+// ── upload stall watchdog ──────────────────────────────────────
+//
+// ScalewayProvider.upload() installs a stall watchdog that samples
+// bytesObserved every STALL_CHECK_INTERVAL_MS (30s) and calls
+// upload.abort() if no socket-level bytes flowed for STALL_TIMEOUT_MS
+// (5 min). These tests drive that behaviour using fake timers and a
+// controllable `done()` deferred so we can hold the upload in flight
+// while inspecting the watchdog.
+
+describe('upload stall watchdog', () => {
+  let mockClient: ReturnType<typeof createMockS3Client>;
+  let resolveDone: (() => void) | null = null;
+  let rejectDone: ((err: unknown) => void) | null = null;
+
+  function makeDeferredDone(): void {
+    mockUploadDone.mockImplementationOnce(
+      () =>
+        new Promise<void>((res, rej) => {
+          resolveDone = (): void => res();
+          rejectDone = rej;
+        }),
+    );
+  }
+
+  function createProvider(overrides?: Partial<ScalewayConfig>): ScalewayProvider {
+    return new ScalewayProvider(validConfig(overrides), mockClient);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'],
+    });
+    mockClient = createMockS3Client();
+    lastMockUpload = null;
+    lastUploadParams = null;
+    resolveDone = null;
+    rejectDone = null;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    // Restore default behaviour for tests in other files / blocks.
+    mockUploadDone.mockReset();
+    mockUploadDone.mockResolvedValue({});
+  });
+
+  it('does not abort when stream emits data within the stall window', async () => {
+    makeDeferredDone();
+    const provider = createProvider();
+    const stream = new Readable({ read() {} });
+    const uploadPromise = provider.upload('keep-alive.bin', stream);
+
+    // Push 64 KiB every simulated minute for 6 minutes (well past the
+    // 5-minute stall threshold). Because each push resets the watchdog
+    // via the 30s sampling interval, abort must not fire.
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(60_000);
+      stream.push(Buffer.alloc(64 * 1024));
+      // Flush the 'data' emission scheduled by Readable.push().
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+
+    resolveDone!();
+    await uploadPromise;
+
+    expect(lastMockUpload!.abort).not.toHaveBeenCalled();
+  });
+
+  it('aborts upload when stream is silent past STALL_TIMEOUT_MS', async () => {
+    makeDeferredDone();
+    const provider = createProvider();
+    const stream = new Readable({ read() {} });
+    const uploadPromise = provider.upload('silent.bin', stream);
+    // Attach the rejection handler immediately — `await advanceTimers...`
+    // synchronously rejects done() before we get a chance to await
+    // uploadPromise, which would otherwise surface as a transient
+    // unhandled rejection in the test runner.
+    const settled = uploadPromise.then(
+      () => ({ ok: true as const }),
+      (err: unknown) => ({ ok: false as const, err }),
+    );
+    await Promise.resolve();
+
+    // Mirror real lib-storage semantics: abort() rejects done() so the
+    // upload promise settles and the watchdog interval gets cleared.
+    lastMockUpload!.abort.mockImplementationOnce(async () => {
+      const err = new Error('aborted');
+      err.name = 'AbortError';
+      rejectDone!(err);
+    });
+
+    // Advance 6 minutes — first stall detection fires at the 30s tick
+    // after t = 5 min (i.e. t = 5m30s); abort must be called exactly
+    // once because the abort path settles done() and the finally clears
+    // the interval before any subsequent tick can re-trigger.
+    await vi.advanceTimersByTimeAsync(360_000);
+
+    expect(lastMockUpload!.abort).toHaveBeenCalledTimes(1);
+    const result = await settled;
+    expect(result.ok).toBe(false);
+    expect((result as { err: Error }).err).toBeInstanceOf(Error);
+    expect((result as { err: Error }).err.message).toMatch(/aborted/);
+  });
+
+  it('does not abort when bytes flow within the stall window', async () => {
+    makeDeferredDone();
+    const provider = createProvider();
+    const stream = new Readable({ read() {} });
+    const uploadPromise = provider.upload('flow.bin', stream);
+    await Promise.resolve();
+
+    // 4 minutes of silence (still under 5-minute threshold).
+    await vi.advanceTimersByTimeAsync(240_000);
+    stream.push(Buffer.alloc(64 * 1024));
+    await Promise.resolve();
+    await Promise.resolve();
+    // Let at least one 30s sampling tick observe the new bytes and
+    // reset lastProgressAt.
+    await vi.advanceTimersByTimeAsync(30_000);
+    // Another 4 minutes — total elapsed since reset is < 5 min.
+    await vi.advanceTimersByTimeAsync(240_000);
+
+    expect(lastMockUpload!.abort).not.toHaveBeenCalled();
+
+    resolveDone!();
+    await uploadPromise;
+  });
+
+  it('swallows errors thrown by upload.abort() during a stall', async () => {
+    makeDeferredDone();
+    const provider = createProvider();
+    const stream = new Readable({ read() {} });
+    const uploadPromise = provider.upload('boom.bin', stream);
+    await Promise.resolve();
+
+    // abort() itself rejects — the watchdog uses `.catch()` so this must
+    // not surface as an unhandled rejection or throw out of upload().
+    lastMockUpload!.abort.mockRejectedValueOnce(new Error('boom'));
+
+    // Trigger the stall (advance well past STALL_TIMEOUT_MS).
+    await vi.advanceTimersByTimeAsync(360_000);
+
+    expect(lastMockUpload!.abort).toHaveBeenCalled();
+
+    // Settle done() so the outer upload promise resolves cleanly. If the
+    // abort rejection had escaped, this await would reject too.
+    resolveDone!();
+    await expect(uploadPromise).resolves.toBeUndefined();
+  });
+
+  it('clears the watchdog interval on successful upload', async () => {
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+
+    // Default fast-resolve path: done() resolves on the next microtask,
+    // upload() returns, finally{} clears the interval.
+    mockUploadDone.mockResolvedValueOnce({} as never);
+
+    const provider = createProvider();
+    const stream = new Readable({ read() {} });
+    await provider.upload('quick.bin', stream);
+
+    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+    const intervalId = setIntervalSpy.mock.results[0]!.value;
+    expect(clearIntervalSpy).toHaveBeenCalledWith(intervalId);
+
+    // After clearing, advancing time must not produce any abort call —
+    // proves the interval is gone, not just that abort happened to be
+    // skipped by the `completed` guard.
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(lastMockUpload!.abort).not.toHaveBeenCalled();
   });
 });
