@@ -21,9 +21,12 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
+import { ensureCaffeinate } from '../src/utils/caffeinate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
+
+ensureCaffeinate();
 
 const DRY_RUN = !process.argv.includes('--execute');
 const BACKUP = process.argv.includes('--backup');

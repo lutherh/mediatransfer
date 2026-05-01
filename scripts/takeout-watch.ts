@@ -6,6 +6,9 @@ import { watchDownloadsFolder, type WatcherState } from '../src/takeout/watch-do
 import type { UploadProgressSnapshot } from '../src/takeout/uploader.js';
 import { validateScalewayConfig, ScalewayProvider } from '../src/providers/scaleway.js';
 import { formatDuration, formatBytes } from '../src/utils/format.js';
+import { ensureCaffeinate } from '../src/utils/caffeinate.js';
+
+ensureCaffeinate();
 
 dotenv.config();
 

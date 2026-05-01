@@ -18,6 +18,7 @@
  *   npx tsx scripts/takeout-repair-dates.ts --apply --concurrency 4
  */
 import * as dotenv from 'dotenv';
+import { ensureCaffeinate } from "../src/utils/caffeinate.js";
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
@@ -35,6 +36,7 @@ import {
 } from './lib/repair-helpers.js';
 
 dotenv.config();
+ensureCaffeinate();
 
 // ── Parse arguments ─────────────────────────────────────────────
 

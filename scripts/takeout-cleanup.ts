@@ -21,6 +21,7 @@
  *   npx tsx scripts/takeout-cleanup.ts --backfill-state            # also create archive-state.json
  */
 import * as dotenv from 'dotenv';
+import { ensureCaffeinate } from "../src/utils/caffeinate.js";
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
@@ -36,6 +37,7 @@ import {
 import { formatBytes } from '../src/utils/format.js';
 
 dotenv.config();
+ensureCaffeinate();
 
 const args = process.argv.slice(2);
 const pathOverrides = parseTakeoutPathArgs(args);

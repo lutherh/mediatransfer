@@ -18,6 +18,7 @@
  *   npx tsx scripts/takeout-repair-dates-s3.ts --apply --save-every 200
  */
 import * as dotenv from 'dotenv';
+import { ensureCaffeinate } from "../src/utils/caffeinate.js";
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import {
@@ -44,6 +45,7 @@ import {
 } from './lib/repair-helpers.js';
 
 dotenv.config();
+ensureCaffeinate();
 
 // ── Parse arguments ─────────────────────────────────────────────
 

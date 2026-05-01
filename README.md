@@ -525,7 +525,9 @@ MediaTransfer is designed to support multi-hour Takeout imports and large S3 upl
 npx tsx scripts/heartbeat-takeout-lock.ts <pid> data/takeout/work
 ```
 
-**macOS unattended runs.** On a laptop, sleep > 5 minutes can stale the lock and let the API reclaim it under the live CLI. Either disable sleep with `pmset` (see [macOS sleep settings](#macos-sleep-settings)) or attach `caffeinate` to the CLI's PID for the duration of the run:
+**macOS unattended runs.** Every long-running entry point in MediaTransfer (the API server in `src/index.ts`, plus all CLI scripts under `scripts/` — takeout pipeline, catalog dedup, transfers, S3↔Immich tools) automatically attaches a `caffeinate -dimsu -w <pid>` helper at startup so the laptop won't sleep mid-run and stale the run lock. The helper exits with the parent. To opt out (e.g. on a desktop, or for a quick test), set `MEDIATRANSFER_CAFFEINATE=0` in `.env` or the shell. On non-macOS hosts the call is a no-op, so this is safe inside the Linux containers as well.
+
+If you start a script outside the standard entry points (e.g. an ad-hoc `tsx` invocation), you can still attach manually:
 
 ```bash
 caffeinate -dimsu -w <cli-pid> &

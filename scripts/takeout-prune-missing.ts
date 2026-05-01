@@ -18,6 +18,7 @@
  *   npx tsx scripts/takeout-prune-missing.ts --apply       # actually prune
  */
 import * as dotenv from 'dotenv';
+import { ensureCaffeinate } from "../src/utils/caffeinate.js";
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -33,6 +34,7 @@ import {
 } from '../src/takeout/uploader.js';
 
 dotenv.config();
+ensureCaffeinate();
 
 const args = process.argv.slice(2);
 const pathOverrides = parseTakeoutPathArgs(args);

@@ -1,4 +1,5 @@
 import * as dotenv from 'dotenv';
+import { ensureCaffeinate } from "../src/utils/caffeinate.js";
 import path from 'node:path';
 import {
   createOAuth2Client,
@@ -10,6 +11,7 @@ import {
 import { runGoogleApiBatchTransferLoop } from '../src/takeout/google-api-runner.js';
 
 dotenv.config();
+ensureCaffeinate();
 
 const clientId = requiredEnv('GOOGLE_CLIENT_ID');
 const clientSecret = requiredEnv('GOOGLE_CLIENT_SECRET');

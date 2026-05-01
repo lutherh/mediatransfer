@@ -4,10 +4,14 @@ import { loadEnv } from './config/env.js';
 import { createApiServer } from './api/index.js';
 import { disconnectPrisma } from './db/index.js';
 import { getLogger } from './utils/logger.js';
+import { ensureCaffeinate } from './utils/caffeinate.js';
 
 const log = getLogger().child({ module: 'index' });
 
 export async function main(): Promise<void> {
+  // Suppress macOS sleep for the lifetime of the API process. No-op in
+  // Linux containers and when MEDIATRANSFER_CAFFEINATE=0.
+  ensureCaffeinate();
   const env = loadEnv();
 
   if (env.NODE_ENV === 'production' && !env.API_AUTH_TOKEN) {

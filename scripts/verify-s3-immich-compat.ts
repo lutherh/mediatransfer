@@ -19,10 +19,12 @@ import * as path from 'path';
 import * as dotenv from 'dotenv';
 import { resolve } from 'path';
 import { resolveScalewayEndpoint, resolveScalewaySigningRegion } from '../src/providers/scaleway.js';
+import { ensureCaffeinate } from '../src/utils/caffeinate.js';
 
-// ── Config ──────────────────────────────────────────────────────
+// ── Config ─────────────────────────────────────────────────────────
 
 dotenv.config({ path: resolve(import.meta.dirname, '../.env') });
+ensureCaffeinate();
 
 const envImmich = resolve(import.meta.dirname, '../.env.immich');
 const immichVars: Record<string, string> = {};

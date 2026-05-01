@@ -1,9 +1,11 @@
 import * as dotenv from 'dotenv';
+import { ensureCaffeinate } from "../src/utils/caffeinate.js";
 import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
 import { runTakeoutVerify } from '../src/takeout/runner.js';
 import { validateScalewayConfig, ScalewayProvider } from '../src/providers/scaleway.js';
 
 dotenv.config();
+ensureCaffeinate();
 
 const args = process.argv.slice(2);
 const pathOverrides = parseTakeoutPathArgs(args);

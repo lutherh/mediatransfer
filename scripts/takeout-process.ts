@@ -13,8 +13,13 @@ import { validateScalewayConfig, ScalewayProvider } from '../src/providers/scale
 import { discoverTakeoutArchives } from '../src/takeout/unpack.js';
 import { formatDuration, formatBytes } from '../src/utils/format.js';
 import { acquireRunLock, RunLockBusyError, type RunLockHandle } from '../src/takeout/run-lock.js';
+import { ensureCaffeinate } from '../src/utils/caffeinate.js';
 
 dotenv.config();
+
+// Suppress laptop sleep for the lifetime of this process. No-op on Linux
+// and when MEDIATRANSFER_CAFFEINATE=0. See src/utils/caffeinate.ts.
+ensureCaffeinate();
 
 const args = process.argv.slice(2);
 const pathOverrides = parseTakeoutPathArgs(args);

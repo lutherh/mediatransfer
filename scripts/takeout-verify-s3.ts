@@ -13,6 +13,7 @@
  *   npx tsx scripts/takeout-verify-s3.ts --prefix s3transfers/2019  # check specific prefix
  */
 import * as dotenv from 'dotenv';
+import { ensureCaffeinate } from "../src/utils/caffeinate.js";
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import {
@@ -29,6 +30,7 @@ import {
 } from '../src/providers/scaleway.js';
 
 dotenv.config();
+ensureCaffeinate();
 
 // ── Parse arguments ─────────────────────────────────────────────
 

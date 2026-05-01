@@ -19,6 +19,7 @@
  *   npx tsx scripts/takeout-repair-dates-enhanced.ts --skip-s3        # skip S3 EXIF reads
  */
 import * as dotenv from 'dotenv';
+import { ensureCaffeinate } from "../src/utils/caffeinate.js";
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import {
@@ -47,6 +48,7 @@ import {
 } from './lib/repair-helpers.js';
 
 dotenv.config();
+ensureCaffeinate();
 
 // ── Parse arguments ─────────────────────────────────────────────
 

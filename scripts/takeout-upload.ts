@@ -5,8 +5,10 @@ import { runTakeoutIncremental } from '../src/takeout/incremental.js';
 import type { UploadProgressSnapshot } from '../src/takeout/uploader.js';
 import { validateScalewayConfig, ScalewayProvider } from '../src/providers/scaleway.js';
 import { formatDuration, formatBytes } from '../src/utils/format.js';
+import { ensureCaffeinate } from '../src/utils/caffeinate.js';
 
 dotenv.config();
+ensureCaffeinate();
 
 const args = process.argv.slice(2);
 const pathOverrides = parseTakeoutPathArgs(args);
