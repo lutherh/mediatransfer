@@ -1191,13 +1191,24 @@ function ArchiveStatusPill({
   }
 
   if (record.status === 'failed') {
+    // While an external CLI / active action / pending auto-upload is in
+    // flight, a 'failed' marker on the most recent archive is almost
+    // always a stale snapshot from an earlier attempt that the live run
+    // is about to retry. Don't render a confident red "Failed" pill.
+    if (interruptedWillRetry) {
+      return (
+        <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+          Interrupted (will retry)
+        </span>
+      );
+    }
     // entryCount===0 means the archive was interrupted before per-item
     // accounting started — don't render a confident "Failed (0%)" pill
     // when we genuinely don't know how many items were touched.
     if (record.entryCount === 0) {
       return (
         <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-          {interruptedWillRetry ? 'Interrupted (will retry)' : 'Interrupted (needs re-run)'}
+          Interrupted (needs re-run)
         </span>
       );
     }

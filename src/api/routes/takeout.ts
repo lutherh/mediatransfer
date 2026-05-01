@@ -1156,6 +1156,11 @@ function ensureAutoUploadPoll(): void {
 
     const inputDir = customPaths.get('inputDir') ?? path.resolve(env.TAKEOUT_INPUT_DIR);
     const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
+    const externalRun = await detectExternalRun(workDir);
+    if (externalRun) {
+      appendOutput(`🔄 Auto-upload poll: external run detected (pid=${externalRun.pid}) — skipping this poll.`);
+      return;
+    }
     const count = await countPendingArchivesInInput(inputDir, workDir);
     if (count > 0) {
       // Re-check after async gap — timeout callback may have started an action
