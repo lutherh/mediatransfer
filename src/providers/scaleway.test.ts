@@ -22,6 +22,11 @@ vi.mock('@aws-sdk/lib-storage', () => {
       lastUploadParams = params;
     }
     done = mockUploadDone;
+    // Real `Upload` from @aws-sdk/lib-storage extends EventEmitter and
+    // exposes an `abort()` method. The stall watchdog in
+    // ScalewayProvider.upload() calls both, so the mock must satisfy them.
+    on = vi.fn();
+    abort = vi.fn().mockResolvedValue(undefined);
   }
   return { Upload: MockUpload };
 });

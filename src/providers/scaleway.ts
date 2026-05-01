@@ -9,8 +9,12 @@ import {
   type StorageClass,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
+import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { Readable } from 'node:stream';
 import type { CloudProvider, ListOptions, ObjectInfo, ProviderConfig } from './types.js';
+import { getLogger } from '../utils/logger.js';
+
+const log = getLogger().child({ module: 'scaleway' });
 
 // ── Scaleway region → endpoint mapping ──────────────────────────
 
@@ -153,6 +157,15 @@ export class ScalewayProvider implements CloudProvider {
           secretAccessKey: config.secretKey,
         },
         forcePathStyle: config.forcePathStyle ?? true,
+        // Hard per-request timeouts so a silent half-open TCP socket can
+        // never wedge an upload indefinitely (observed 2026-04-30/05-01:
+        // multipart PutPart hung for 14h+ with 0 B/s on the last item of
+        // a takeout archive). connectionTimeout = TCP/TLS establishment;
+        // requestTimeout = read-idle on an established socket.
+        requestHandler: new NodeHttpHandler({
+          connectionTimeout: ScalewayProvider.S3_CONNECT_TIMEOUT_MS,
+          requestTimeout: ScalewayProvider.S3_REQUEST_TIMEOUT_MS,
+        }),
       });
   }
 
@@ -294,7 +307,40 @@ export class ScalewayProvider implements CloudProvider {
       },
     });
 
-    await upload.done();
+    // Stall watchdog: if `httpUploadProgress` reports the same `loaded`
+    // value for STALL_TIMEOUT_MS, the multipart upload is wedged on a
+    // half-open socket. Force-abort so the per-item retry loop in
+    // takeout/uploader.ts can reschedule it instead of hanging forever.
+    let lastLoaded = 0;
+    let lastProgressAt = Date.now();
+    upload.on('httpUploadProgress', (progress) => {
+      const loaded = progress.loaded ?? 0;
+      if (loaded !== lastLoaded) {
+        lastLoaded = loaded;
+        lastProgressAt = Date.now();
+      }
+    });
+    const stallTimer = setInterval(() => {
+      if (Date.now() - lastProgressAt > ScalewayProvider.STALL_TIMEOUT_MS) {
+        log.warn(
+          { key, loaded: lastLoaded, stalledForMs: Date.now() - lastProgressAt },
+          '[scaleway] upload stalled — aborting to free the slot',
+        );
+        // upload.abort() rejects upload.done() with an AbortError, which
+        // takeout/uploader.ts treats as a normal failure (retried via the
+        // outer attempt loop, then surfaced as failedItems if it persists).
+        void upload.abort().catch((err: unknown) => {
+          log.warn({ key, err }, '[scaleway] upload.abort() itself failed');
+        });
+      }
+    }, ScalewayProvider.STALL_CHECK_INTERVAL_MS);
+    stallTimer.unref();
+
+    try {
+      await upload.done();
+    } finally {
+      clearInterval(stallTimer);
+    }
   }
 
   async delete(key: string): Promise<void> {
@@ -309,7 +355,11 @@ export class ScalewayProvider implements CloudProvider {
   // ── Retry helper for transient S3 errors ──────────────────────
 
   private static readonly S3_MAX_RETRIES = 4;
+  private static readonly S3_CONNECT_TIMEOUT_MS = 15_000;
   private static readonly S3_REQUEST_TIMEOUT_MS = 120_000;
+  /** No progress for this long → assume the socket is wedged and abort the multipart upload. */
+  private static readonly STALL_TIMEOUT_MS = 90_000;
+  private static readonly STALL_CHECK_INTERVAL_MS = 15_000;
 
   /**
    * Send an S3 command with per-request timeout and exponential backoff retries.
