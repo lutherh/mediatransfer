@@ -23,9 +23,8 @@ Cross-tool guidance for AI coding agents (Claude Code, GitHub Copilot, Codex, Cu
 2. **Never run `git commit`, `git push`, or any version-control mutation.** The developer handles VCS manually.
 3. **Every change ships with tests** (Vitest). `foo.ts` → `foo.test.ts`. Run `npm run lint` and `npx vitest run` before declaring a step done.
 4. **No secrets in source.** All credentials live in `.env` (gitignored) and are read via environment variables.
-5. **No Python.** Anywhere. For any reason.
-6. **No `console.log` in production code.** Use Pino.
-7. **Update `PLAN.md`** as steps progress. Add a manual user-verification gate after passing tests.
+5. **No `console.log` in production code.** Use Pino.
+6. **Update `PLAN.md`** as steps progress. Add a manual user-verification gate after passing tests.
 
 ---
 
