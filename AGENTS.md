@@ -25,6 +25,7 @@ Cross-tool guidance for AI coding agents (Claude Code, GitHub Copilot, Codex, Cu
 4. **No secrets in source.** All credentials live in `.env` (gitignored) and are read via environment variables.
 5. **No `console.log` in production code.** Use Pino.
 6. **Update `PLAN.md`** as steps progress. Add a manual user-verification gate after passing tests.
+7. **Default to parallel subagents for non-trivial work.** When a task spans multiple independent areas (backend + frontend, multiple files, research + implementation, multi-area review), dispatch specialized subagents (`Explore`, `architect`, `debug`, `expert-react-frontend-engineer`, `security-reviewer`, etc.) in a single tool batch instead of working serially. The user does not need to ask. Skip only for single-file edits, trivial questions, or strictly sequential dependencies.
 
 ---
 
