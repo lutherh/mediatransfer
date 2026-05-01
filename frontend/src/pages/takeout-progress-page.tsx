@@ -1,4 +1,4 @@
-﻿import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+﻿import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,8 @@ import {
   type PipelineSummary,
   type StepRecord,
   type StepStatus,
+  type TakeoutActionStatus,
+  type TakeoutStatus,
   type UploadProgressInfo,
 } from '@/lib/api';
 
@@ -41,21 +43,27 @@ export function TakeoutProgressPage() {
   const queryClient = useQueryClient();
   const [detailsOpen, setDetailsOpen] = useState(false);
 
-  const { data, isLoading, error } = useQuery({
+  const statusQuery = useQuery({
     queryKey: ['takeout-status'],
     queryFn: fetchTakeoutStatus,
     refetchInterval: 3000,
     staleTime: 30_000,
     gcTime: 5 * 60_000,
+    retry: 4,
+    retryDelay: (attempt) => Math.min(15_000, 1_000 * 2 ** attempt),
   });
+  const { data, isLoading, error } = statusQuery;
 
-  const { data: actionStatus, isLoading: isLoadingActionStatus } = useQuery({
+  const actionStatusQuery = useQuery({
     queryKey: ['takeout-action-status'],
     queryFn: fetchTakeoutActionStatus,
     refetchInterval: 1500,
     staleTime: 10_000,
     gcTime: 5 * 60_000,
+    retry: 4,
+    retryDelay: (attempt) => Math.min(15_000, 1_000 * 2 ** attempt),
   });
+  const { data: actionStatus, isLoading: isLoadingActionStatus } = actionStatusQuery;
 
   const actionMutation = useMutation({
     mutationFn: runTakeoutAction,
@@ -108,8 +116,11 @@ export function TakeoutProgressPage() {
     : 'Failed to start action.';
   const failureReason    = getActionFailureReason(lastOutput);
 
-  const busy = isActionRunning || actionMutation.isPending;
+  const busy = isActionRunning || actionMutation.isPending || Boolean(data.externalRun);
   const disablePathEditing = busy;
+  const externalRun = data.externalRun ?? null;
+  const liveCurrentArchive = externalRun ? undefined : actionStatus?.uploadProgress?.currentArchive;
+  const interruptedWillRetry = Boolean(externalRun || isActionRunning || actionStatus?.autoUploadPending);
   const run  = (action: TakeoutAction) => actionMutation.mutate(action);
 
   // Parsed verify output
@@ -157,7 +168,7 @@ export function TakeoutProgressPage() {
         <div className="flex items-center gap-3 flex-wrap">
           <AutoUploadToggle
             enabled={data.autoUpload ?? false}
-            disabled={autoUploadMutation.isPending}
+            disabled={autoUploadMutation.isPending || busy}
             onToggle={(enabled) => autoUploadMutation.mutate(enabled)}
           />
           {!isLoadingActionStatus && (
@@ -175,6 +186,33 @@ export function TakeoutProgressPage() {
       {/* Mutation error */}
       {actionMutation.isError && (
         <Alert variant="error" className="text-xs">{mutationError}</Alert>
+      )}
+
+      <StaleDataBanner
+        status={statusQuery}
+        actionStatus={actionStatusQuery}
+      />
+
+      {/* External run banner: a foreign writer (overnight CLI, another
+          API instance) holds the run lock. Mutation buttons are disabled
+          via `busy`; the API will return EXTERNAL_JOB_RUNNING anyway. */}
+      {externalRun && (
+        <Alert variant="warning" className="text-xs space-y-1">
+          <p className="font-medium">
+            External takeout run in progress — actions disabled
+          </p>
+          <p>
+            Source: <code className="rounded bg-amber-100 px-1">{externalRun.source}</code>
+            {' · '}PID <code className="rounded bg-amber-100 px-1">{externalRun.pid}</code>
+            {' · '}started {new Date(externalRun.startedAt).toLocaleString()}
+          </p>
+          {externalRun.command && (
+            <p className="text-[11px] font-mono opacity-75 break-all">{externalRun.command}</p>
+          )}
+          <p className="text-[11px] opacity-75">
+            Live status below auto-refreshes. Wait for the external run to finish before clicking any button.
+          </p>
+        </Alert>
       )}
 
       {/* Pipeline stepper — shows the 4-step workflow visually */}
@@ -745,7 +783,11 @@ export function TakeoutProgressPage() {
                       <ArchiveNotUploadedReasons record={record} />
                     </td>
                     <td className="py-2 pr-3">
-                      <ArchiveStatusPill record={record} />
+                      <ArchiveStatusPill
+                        record={record}
+                        liveCurrentArchive={liveCurrentArchive}
+                        interruptedWillRetry={interruptedWillRetry}
+                      />
                     </td>
                     <td className="py-2 text-slate-500 tabular-nums">
                       {record.completedAt ? formatDateTime(record.completedAt) : (
@@ -1101,11 +1143,35 @@ function CleanupOption({
   );
 }
 
-function ArchiveStatusPill({ record }: { record: TakeoutArchiveHistoryEntry }): ReactElement {
+function ArchiveStatusPill({
+  record,
+  liveCurrentArchive,
+  interruptedWillRetry,
+}: {
+  record: TakeoutArchiveHistoryEntry;
+  liveCurrentArchive?: string;
+  interruptedWillRetry: boolean;
+}): ReactElement {
   const hasItemAccounting = record.entryCount > 0
     || record.uploadedCount > 0
     || record.skippedCount > 0
     || record.failedCount > 0;
+
+  // If this archive is the one currently being processed by the active
+  // CLI/API run, override any persisted record.status — the persisted
+  // value can be 'failed' from a prior interrupted attempt while a fresh
+  // attempt is actually in progress right now.
+  const isLive =
+    liveCurrentArchive !== undefined && liveCurrentArchive === record.archiveName;
+
+  if (isLive && !record.isFullyUploaded) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-800">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" aria-hidden />
+        In progress
+      </span>
+    );
+  }
 
   if (record.isFullyUploaded) {
     const allSkipped = record.uploadedCount === 0 && record.skippedCount > 0;
@@ -1125,6 +1191,16 @@ function ArchiveStatusPill({ record }: { record: TakeoutArchiveHistoryEntry }): 
   }
 
   if (record.status === 'failed') {
+    // entryCount===0 means the archive was interrupted before per-item
+    // accounting started — don't render a confident "Failed (0%)" pill
+    // when we genuinely don't know how many items were touched.
+    if (record.entryCount === 0) {
+      return (
+        <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+          {interruptedWillRetry ? 'Interrupted (will retry)' : 'Interrupted (needs re-run)'}
+        </span>
+      );
+    }
     return (
       <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-800">
         Failed ({record.handledPercent.toFixed(0)}%)
@@ -1409,6 +1485,59 @@ function useElapsedTime(startedAt?: string): string {
   if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
   if (minutes > 0) return `${minutes}m ${seconds}s`;
   return `${seconds}s`;
+}
+
+/**
+ * Re-render every `intervalMs` and return the current `Date.now()`. Used by
+ * the stale-data banner to compare against TanStack Query's `dataUpdatedAt`
+ * without subscribing to every individual query field.
+ */
+function useNow(intervalMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
+function StaleDataBanner({
+  status,
+  actionStatus,
+}: {
+  status: UseQueryResult<TakeoutStatus>;
+  actionStatus: UseQueryResult<TakeoutActionStatus>;
+}): ReactElement | null {
+  const now = useNow(2_000);
+  const oldestUpdatedAt = Math.min(
+    status.dataUpdatedAt || now,
+    actionStatus.dataUpdatedAt || now,
+  );
+  const staleAgeMs = now - oldestUpdatedAt;
+  const hasSeenAnyData = status.isSuccess || actionStatus.isSuccess;
+  const isStale =
+    hasSeenAnyData &&
+    staleAgeMs > 15_000 &&
+    (status.isError || actionStatus.isError ||
+      status.failureCount > 1 || actionStatus.failureCount > 1);
+
+  if (!isStale) return null;
+
+  const seconds = Math.round(staleAgeMs / 1000);
+  const age = seconds >= 3_600
+    ? `${Math.round(seconds / 3_600)}h`
+    : seconds >= 60
+      ? `${Math.round(seconds / 60)}m`
+      : `${seconds}s`;
+
+  return (
+    <Alert variant="warning" className="text-xs">
+      <p className="font-medium">Live updates paused</p>
+      <p>
+        The page hasn’t reached the API for {age}. Numbers below may be stale. Retrying automatically…
+      </p>
+    </Alert>
+  );
 }
 
 function UploadActivityIndicator({

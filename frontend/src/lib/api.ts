@@ -164,6 +164,18 @@ export type TakeoutStatus = {
   pipeline?: PipelineSummary;
   /** Whether auto-upload mode is enabled */
   autoUpload?: boolean;
+  /**
+   * Set when a foreign takeout writer (CLI overnight job, etc.) holds the
+   * run lock. While present, all mutation buttons in the UI must be
+   * disabled — the API will reject them with EXTERNAL_JOB_RUNNING anyway.
+   */
+  externalRun?: {
+    pid: number;
+    startedAt: string;
+    source: 'cli' | 'api';
+    command: string;
+    lastSeenAt?: string;
+  } | null;
 };
 
 export type TakeoutArchiveHistoryEntry = {

@@ -32,7 +32,6 @@ You are helping build **MediaTransfer**, a **locally-run** cloud-to-cloud media 
 - **Job queue:** BullMQ + Redis
 - **Testing:** Vitest
 - **Frontend:** React 19 + Vite 8 + Tailwind 4 + TanStack Query/Virtual
-- **NEVER use Python** for any part of this project
 
 Refer to `TECH_STACK.md` for full details.
 

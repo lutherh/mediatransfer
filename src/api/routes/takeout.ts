@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import type { FastifyInstance } from 'fastify';
 import type { Env } from '../../config/env.js';
@@ -24,6 +25,7 @@ import {
   reconcileManifest,
   type ArchiveStateItem,
 } from '../../takeout/incremental.js';
+import { readRunLock, type RunLockInfo } from '../../takeout/run-lock.js';
 import { analyseArchiveSequences, normaliseArchiveName } from '../../takeout/sequence-analysis.js';
 import { apiError } from '../errors.js';
 import { createJob, updateJob } from '../../db/jobs.js';
@@ -136,6 +138,7 @@ const RUN_STATUS: ActionStatus = {
 };
 
 let currentProcess: ChildProcess | null = null;
+let currentRunToken: string | null = null;
 let currentTimeout: NodeJS.Timeout | null = null;
 let pauseRequested = false;
 let lastOutputAt: string | undefined;
@@ -360,9 +363,18 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
         apiError('ACTION_ALREADY_RUNNING', 'Cannot reset upload state while an action is running'),
       );
     }
+    const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
+    const externalRun = await detectExternalRun(workDir);
+    if (externalRun) {
+      return reply.code(409).send(
+        apiError(
+          'EXTERNAL_JOB_RUNNING',
+          `An external takeout run is in progress (pid=${externalRun.pid}, since ${externalRun.startedAt}). Stop it before resetting upload state.`,
+        ),
+      );
+    }
 
     const statePath = path.resolve(env.TRANSFER_STATE_PATH);
-    const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
     const archiveStatePath = path.join(workDir, 'archive-state.json');
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 
@@ -465,6 +477,12 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     const defaultWorkDir = path.resolve(env.TAKEOUT_WORK_DIR);
     const statePath = path.resolve(env.TRANSFER_STATE_PATH);
     const manifestPath = path.join(workDir, 'manifest.jsonl');
+
+    // Detect a foreign takeout writer (CLI overnight job, or another API
+    // instance) so the frontend can disable mutation buttons. The lock is
+    // held only while a writer is actively touching state files; absence
+    // means it's safe to spawn a new action.
+    const externalRun = await detectExternalRun(workDir);
 
     const [state, manifestKeys, pipeline, initialArchiveState] = await Promise.all([
       loadUploadState(statePath),
@@ -573,6 +591,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       archiveHistory,
       pipeline: buildPipelineSummary(pipeline),
       autoUpload: autoUploadEnabled,
+      externalRun,
     };
   });
 
@@ -702,7 +721,20 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
 
   app.put('/takeout/auto-upload', async (req, reply) => {
     const body = req.body as { enabled?: boolean } | null;
-    autoUploadEnabled = body?.enabled === true;
+    const shouldEnable = body?.enabled === true;
+    if (shouldEnable) {
+      const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
+      const externalRun = await detectExternalRun(workDir);
+      if (externalRun) {
+        return reply.code(409).send(
+          apiError(
+            'EXTERNAL_JOB_RUNNING',
+            `An external takeout run is in progress (pid=${externalRun.pid}, since ${externalRun.startedAt}). Wait for it to finish before enabling auto-upload.`,
+          ),
+        );
+      }
+    }
+    autoUploadEnabled = shouldEnable;
     try {
       await persistAutoUpload(env);
     } catch {
@@ -762,6 +794,17 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       });
     }
 
+    const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
+    const externalRun = await detectExternalRun(workDir);
+    if (externalRun) {
+      return reply.code(409).send(
+        apiError(
+          'EXTERNAL_JOB_RUNNING',
+          `An external takeout run is in progress (pid=${externalRun.pid}, since ${externalRun.startedAt}). Wait for it to finish or stop it first.`,
+        ),
+      );
+    }
+
     // Guard: prevent upload/resume when there are no archives to process.
     // Without archives the script exits instantly (0 pending), which looks
     // like an infinite start-then-idle loop to the user.
@@ -818,11 +861,42 @@ function reconcileArchiveEntriesForDisplay(
   return reconcileArchiveEntries(archives);
 }
 
+/**
+ * Detect whether a foreign takeout writer holds the run lock. Returns
+ * `null` when the lock is absent OR is held by a child process this API
+ * spawned (the latter is reflected via `RUN_STATUS.running`, no need to
+ * surface it as "external"). Returns the lock info otherwise so the
+ * frontend can disable mutation buttons.
+ */
+async function detectExternalRun(workDir: string): Promise<RunLockInfo | null> {
+  let lock: RunLockInfo | null;
+  try {
+    lock = await readRunLock(workDir);
+  } catch (err) {
+    log.warn({ err }, 'Unable to verify takeout run lock; treating lock state as external');
+    return {
+      pid: -1,
+      startedAt: new Date().toISOString(),
+      source: 'cli',
+      command: 'Unable to verify takeout run lock; mutations are disabled until the lock can be read.',
+    };
+  }
+  if (!lock) return null;
+  // The API itself is never the lock holder — only its spawned child can be.
+  if (lock.pid === process.pid) return null;
+  // Token survives npm/tsx child-process layering, unlike PIDs.
+  if (RUN_STATUS.running && currentRunToken && lock.runToken === currentRunToken) return null;
+  // Treat a lock held by our currently-tracked child as in-flight, not foreign.
+  if (currentProcess?.pid && lock.pid === currentProcess.pid) return null;
+  return lock;
+}
+
 function runAction(action: TakeoutAction): void {
   const projectRoot = path.resolve(process.cwd());
   const commands = resolveActionCommands(action);
 
   const startedAt = new Date().toISOString();
+  currentRunToken = crypto.randomUUID();
   RUN_STATUS.running = true;
   RUN_STATUS.action = action;
   RUN_STATUS.startedAt = startedAt;
@@ -847,7 +921,7 @@ function runAction(action: TakeoutAction): void {
     const current = commands[index];
     const child = spawn(current.command, current.args, {
       cwd: projectRoot,
-      env: process.env,
+      env: { ...process.env, TAKEOUT_RUN_TOKEN: currentRunToken ?? '' },
       shell: os.platform() === 'win32',
     });
 
@@ -870,6 +944,7 @@ function runAction(action: TakeoutAction): void {
       RUN_STATUS.exitCode = -1;
       RUN_STATUS.success = false;
       currentProcess = null;
+      currentRunToken = null;
       currentTimeout = null;
       finalizeTransferJob(false, 'Upload timed out');
       if (pipelineState) {
@@ -896,6 +971,7 @@ function runAction(action: TakeoutAction): void {
       RUN_STATUS.exitCode = -1;
       RUN_STATUS.success = false;
       currentProcess = null;
+      currentRunToken = null;
       if (currentTimeout) {
         clearTimeout(currentTimeout);
         currentTimeout = null;
@@ -925,6 +1001,7 @@ function runAction(action: TakeoutAction): void {
         RUN_STATUS.exitCode = exitCode;
         RUN_STATUS.success = undefined;
         RUN_STATUS.paused = true;
+        currentRunToken = null;
         appendOutput('⏸️ Upload paused. Resume anytime to continue where you left off.');
         finalizeTransferJob(false, 'Paused by user');
         return;
@@ -956,6 +1033,7 @@ function runAction(action: TakeoutAction): void {
       }
 
       RUN_STATUS.running = false;
+      currentRunToken = null;
       RUN_STATUS.success = success;
       if (!success) {
         finalizeTransferJob(false, `Process exited with code ${exitCode}`);
@@ -1010,9 +1088,15 @@ function scheduleAutoUploadAction(nextAction: 'scan' | 'upload', env: Env): void
 
     if (!autoUploadEnabled || RUN_STATUS.running) return;
 
+    const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
+    const externalRun = await detectExternalRun(workDir);
+    if (externalRun) {
+      appendOutput(`🔄 Auto-upload: external run detected (pid=${externalRun.pid}) — skipping this poll.`);
+      return;
+    }
+
     if (nextAction === 'upload') {
       // Verify there's actually something to upload before firing
-      const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
       const manifestPath = path.join(workDir, 'manifest.jsonl');
       const keys = await readManifestKeys(manifestPath);
       if (keys.size === 0) {
@@ -1026,7 +1110,6 @@ function scheduleAutoUploadAction(nextAction: 'scan' | 'upload', env: Env): void
     } else {
       // Check input directory for archives that haven't been completed yet
       const inputDir = customPaths.get('inputDir') ?? path.resolve(env.TAKEOUT_INPUT_DIR);
-      const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
       const count = await countPendingArchivesInInput(inputDir, workDir);
       if (count > 0) {
         // Re-check after async gap — poll callback may have started an action
