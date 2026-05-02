@@ -63,6 +63,10 @@ data/takeout/state.json.pre-*.bak
 data/takeout/state.json.backup-*
 data/takeout/*.bak
 
+# Local-only backups of shell scripts
+scripts/*.bak
+scripts/*.bak2
+
 # One-off root-level test scripts
 test-ffmpeg-resolve.ts
 test-s3-lifecycle.ts
