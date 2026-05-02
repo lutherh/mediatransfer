@@ -9,6 +9,12 @@
 #   2. uk.4to.mediatransfer.stack     — once the mount is healthy, starts
 #      the Immich + tunnel stack via `start-all.sh up`. RunAtLoad only;
 #      not KeepAlive (Docker handles container restarts itself).
+#   3. uk.4to.mediatransfer.queuewatchdog — every 5 min, probes Immich's
+#      BullMQ workers. Catches the 2026-05-02 failure mode where the
+#      microservices process bootstraps but only registers some workers,
+#      leaving the container falsely (healthy). Auto-recovers via
+#      `docker stop && docker start` (a plain `restart` is insufficient).
+#      Skipped if IMMICH_WATCHDOG_API_KEY is not set in .env.immich.
 #
 # Why both? Without the stack agent, login = mount up but no Immich.
 # Without the mount agent, login = Immich starts into an empty dir.
@@ -44,11 +50,14 @@ read_env_val() {
 
 LABEL_MOUNT="uk.4to.mediatransfer.s3mount"
 LABEL_STACK="uk.4to.mediatransfer.stack"
+LABEL_WATCHDOG="uk.4to.mediatransfer.queuewatchdog"
 PLIST_MOUNT="$HOME/Library/LaunchAgents/${LABEL_MOUNT}.plist"
 PLIST_STACK="$HOME/Library/LaunchAgents/${LABEL_STACK}.plist"
+PLIST_WATCHDOG="$HOME/Library/LaunchAgents/${LABEL_WATCHDOG}.plist"
 LOG_DIR="$ROOT_DIR/data/logs"
 MOUNT_SCRIPT="$SCRIPT_DIR/mount-s3.sh"
 START_SCRIPT="$SCRIPT_DIR/start-all.sh"
+WATCHDOG_SCRIPT="$SCRIPT_DIR/immich-queue-watchdog.sh"
 
 # Resolve absolute paths for binaries used inside launchd's minimal PATH.
 RCLONE_BIN="$(command -v rclone || true)"
@@ -79,19 +88,40 @@ flush_mount() {
   if ! command -v rclone &>/dev/null; then
     return 0
   fi
-  # Probe rc/noopauth: if the rc server isn't there, vfs/sync would just
-  # hang or fail — fail loudly instead so a hardening regression is visible.
-  if ! rclone rc rc/noopauth --unix-socket "$RC_SOCK" --timeout 3s &>/dev/null; then
-    echo "WARN: rclone rc unreachable at $RC_SOCK — skipping vfs/sync (writeback cache may not be flushed)" >&2
+  # Liveness probe via rc/noop — a no-op method that doesn't require auth
+  # configuration on the rc server. (rc/noopauth is the WRONG probe: it
+  # asserts auth is set up, returning 401 when --rc-no-auth is absent
+  # and the unix socket is the auth boundary, which is our case.)
+  if ! rclone rc rc/noop --unix-socket "$RC_SOCK" --timeout 3s &>/dev/null; then
+    echo "WARN: rclone rc unreachable at $RC_SOCK — skipping queue drain (relying on rclone SIGTERM grace period)" >&2
     return 0
   fi
-  echo "Flushing rclone vfs cache via rc on $RC_SOCK ..."
-  rclone rc vfs/sync --unix-socket "$RC_SOCK" --timeout 120s 2>/dev/null || true
+  # There is NO `vfs/sync` rc method on rclone 1.x — only forget|list|
+  # queue|queue-set-expiry|refresh|stats. The correct primitive is to
+  # poll `vfs/queue` until it reports zero pending uploads. Earlier
+  # versions called the non-existent `vfs/sync` and the `|| true` masked
+  # the 404 — the actual flushing was happening via launchd's
+  # ExitTimeOut=900 graceful-SIGTERM window.
+  echo "Draining rclone vfs writeback queue via rc on $RC_SOCK ..."
+  local deadline
+  deadline=$(( $(date +%s) + 120 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    local q_len
+    q_len=$(rclone rc vfs/queue --unix-socket "$RC_SOCK" --timeout 5s 2>/dev/null \
+      | jq -r '[.queue[]?] | length' 2>/dev/null || echo 0)
+    if [ "${q_len:-0}" = "0" ]; then
+      echo "  writeback queue empty"
+      return 0
+    fi
+    echo "  $q_len item(s) still pending; sleeping 2s"
+    sleep 2
+  done
+  echo "WARN: writeback drain timed out after 120s; relying on launchd ExitTimeOut grace" >&2
 }
 
 uninstall() {
   flush_mount
-  for label in "$LABEL_STACK" "$LABEL_MOUNT"; do
+  for label in "$LABEL_WATCHDOG" "$LABEL_STACK" "$LABEL_MOUNT"; do
     if launchctl list "$label" &>/dev/null; then
       echo "Unloading $label..."
       launchctl unload "$HOME/Library/LaunchAgents/${label}.plist" 2>/dev/null || true
@@ -106,7 +136,7 @@ uninstall() {
 }
 
 status() {
-  for label in "$LABEL_MOUNT" "$LABEL_STACK"; do
+  for label in "$LABEL_MOUNT" "$LABEL_STACK" "$LABEL_WATCHDOG"; do
     plist="$HOME/Library/LaunchAgents/${label}.plist"
     echo "── $label"
     [ -f "$plist" ] && echo "   plist: yes ($plist)" || echo "   plist: no"
@@ -142,7 +172,7 @@ mkdir -p "$LOG_DIR" "$(dirname "$PLIST_MOUNT")"
 # Flush any running mount first so the writeback cache is drained.
 flush_mount
 # Unload any previous versions before rewriting.
-for label in "$LABEL_STACK" "$LABEL_MOUNT"; do
+for label in "$LABEL_WATCHDOG" "$LABEL_STACK" "$LABEL_MOUNT"; do
   plist="$HOME/Library/LaunchAgents/${label}.plist"
   if launchctl list "$label" &>/dev/null; then
     echo "Unloading previous $label..."
@@ -231,8 +261,10 @@ for i in \$(seq 1 60); do
   sleep 5
 done
 docker info >/dev/null 2>&1 || { echo "Docker never came up" >&2; exit 1; }
-# Wait up to 2 minutes for the S3 mount to be live.
-for i in \$(seq 1 24); do
+# Wait up to 10 minutes for the S3 mount to be live. The mount agent
+# can crash-loop briefly on stale rc sockets / EADDRINUSE, so keep this
+# generous — if we exit, KeepAlive on this agent will retry anyway.
+for i in \$(seq 1 120); do
   if mount | grep -Fq ' ${ROOT_DIR}/data/immich-s3 '; then break; fi
   sleep 5
 done
@@ -254,6 +286,18 @@ exec '${START_SCRIPT}' up</string>
   <key>RunAtLoad</key>
   <true/>
 
+  <!-- Retry on non-zero exit (e.g. mount not yet up at login) but DON'T
+       loop tight — ThrottleInterval enforces a 60s floor between launches.
+       SuccessfulExit=false means we don't restart after the script's `exec
+       start-all.sh up` finishes cleanly (start-all.sh is one-shot). -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+
   <key>StandardOutPath</key>
   <string>${LOG_DIR}/stack.out.log</string>
 
@@ -263,6 +307,84 @@ exec '${START_SCRIPT}' up</string>
 </plist>
 PLIST_EOF
 echo "Wrote $PLIST_STACK"
+
+# ── Watchdog agent (StartInterval, opt-out via missing API key) ──
+WATCHDOG_API_KEY=$(read_env_val "$ROOT_DIR/.env.immich" IMMICH_WATCHDOG_API_KEY "")
+# XML-escape the key before plist heredoc interpolation. Today's Immich keys are
+# base64url-ish so this is defensive, but a paste error with `&`/`<`/`>` would
+# otherwise produce a malformed plist that launchctl silently drops. (audit W1)
+if [ -n "$WATCHDOG_API_KEY" ]; then
+  WATCHDOG_API_KEY=$(printf '%s' "$WATCHDOG_API_KEY" \
+    | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e "s/'/\&apos;/g" -e 's/"/\&quot;/g')
+fi
+if [ -z "$WATCHDOG_API_KEY" ]; then
+  echo "WARN: IMMICH_WATCHDOG_API_KEY not set in .env.immich — skipping queuewatchdog agent."
+  echo "      Create an API key in the Immich UI (Account Settings → API Keys) and add:"
+  echo "        IMMICH_WATCHDOG_API_KEY=<key>"
+  echo "      to .env.immich, then re-run this installer."
+  rm -f "$PLIST_WATCHDOG"
+else
+  [ -x "$WATCHDOG_SCRIPT" ] || { echo "ERROR: $WATCHDOG_SCRIPT missing/not executable" >&2; exit 1; }
+  cat > "$PLIST_WATCHDOG" <<PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${LABEL_WATCHDOG}</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>${WATCHDOG_SCRIPT}</string>
+    <string>--auto-restart</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>${ROOT_DIR}</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${BIN_DIR_DOCKER}${BIN_DIR_RCLONE}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>${HOME}</string>
+    <key>IMMICH_WATCHDOG_API_KEY</key>
+    <string>${WATCHDOG_API_KEY}</string>
+  </dict>
+
+  <!-- Every 5 min. Cheap (<2s); reads /api/jobs + a single CLIENT LIST. -->
+  <key>StartInterval</key>
+  <integer>300</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Non-zero exit IS the alert; don't tight-loop on it.
+       launchd will fire again on the next StartInterval tick. -->
+  <key>KeepAlive</key>
+  <false/>
+
+  <!-- Bound runtime: a stuck docker exec shouldn't pile up. -->
+  <key>ExitTimeOut</key>
+  <integer>120</integer>
+
+  <key>StandardOutPath</key>
+  <string>${LOG_DIR}/queuewatchdog.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>${LOG_DIR}/queuewatchdog.err.log</string>
+
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
+PLIST_EOF
+  # Plist contains the API key in cleartext — restrict to user-only. (audit N1)
+  chmod 600 "$PLIST_WATCHDOG"
+  echo "Wrote $PLIST_WATCHDOG"
+fi
 
 # ── OrbStack login item (so Docker socket is up at login) ──
 HAS_ORBSTACK=$(osascript -e 'tell application "System Events" to get the name of every login item' 2>/dev/null | tr ',' '\n' | grep -ic orbstack || true)
@@ -278,6 +400,7 @@ fi
 echo "Loading agents..."
 launchctl load -w "$PLIST_MOUNT"
 launchctl load -w "$PLIST_STACK"
+[ -f "$PLIST_WATCHDOG" ] && launchctl load -w "$PLIST_WATCHDOG"
 sleep 4
 
 echo
