@@ -8,9 +8,11 @@ import {
   DiskThumbnailCache,
   ScalewayCatalogService,
   VIDEO_THUMB_RANGE_BYTES,
+  assertSafeCatalogKey,
   buildDuplicateGroups,
   decodeKey,
   encodeKey,
+  isSafeCatalogKey,
   scoreKeyForKeep,
 } from './scaleway-catalog.js';
 
@@ -27,6 +29,83 @@ describe('scaleway catalog service', () => {
     const encoded = encodeKey(key);
 
     expect(decodeKey(encoded)).toBe(key);
+  });
+
+  describe('catalog key namespace guard', () => {
+    it('accepts canonical s3transfers/ keys', () => {
+      expect(isSafeCatalogKey('s3transfers/2026/02/20/photo.jpg')).toBe(true);
+      expect(isSafeCatalogKey('s3transfers/unknown-date/photo.jpg')).toBe(true);
+    });
+
+    it('accepts legacy date-prefixed keys', () => {
+      expect(isSafeCatalogKey('2020/01/01/a.jpg')).toBe(true);
+    });
+
+    it('rejects out-of-namespace keys (Immich originals, server-managed prefixes, traversal)', () => {
+      const dangerous = [
+        'immich/library/admin/2024/01/01/photo.jpg',
+        'library/admin/2024/01/01/photo.jpg',
+        'transfers/legacy/photo.jpg',
+        '_thumbs/small/foo.jpg',
+        '_albums.json',
+        '/etc/passwd',
+        '../../etc/passwd',
+        's3transfers/../immich/library/admin/photo.jpg',
+        '',
+      ];
+      for (const k of dangerous) {
+        expect(isSafeCatalogKey(k)).toBe(false);
+        expect(() => assertSafeCatalogKey(k)).toThrow(/out-of-namespace/);
+      }
+    });
+
+    it('refuses getObject for an out-of-namespace encoded key', async () => {
+      const send = vi.fn();
+      const service = makeService(send);
+      await expect(
+        service.getObject(encodeKey('immich/library/admin/2024/01/01/photo.jpg')),
+      ).rejects.toThrow(/out-of-namespace/);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('refuses deleteObjects when ANY key is out-of-namespace (no partial deletes)', async () => {
+      const send = vi.fn();
+      const service = makeService(send);
+      await expect(
+        service.deleteObjects([
+          encodeKey('s3transfers/2020/01/01/a.jpg'),
+          encodeKey('immich/library/admin/2024/01/01/photo.jpg'),
+        ]),
+      ).rejects.toThrow(/out-of-namespace/);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('refuses moveObject for an out-of-namespace source', async () => {
+      const send = vi.fn();
+      const service = makeService(send);
+      await expect(
+        service.moveObject(encodeKey('immich/library/admin/2024/01/01/photo.jpg'), '2020/03/15'),
+      ).rejects.toThrow(/out-of-namespace/);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('refuses moveObject when newDatePrefix is not a YYYY/MM/DD path', async () => {
+      const send = vi.fn();
+      const service = makeService(send);
+      await expect(
+        service.moveObject(encodeKey('s3transfers/2020/01/01/a.jpg'), '../../immich/library/admin'),
+      ).rejects.toThrow(/YYYY\/MM\/DD/);
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('refuses getThumbnail for an out-of-namespace encoded key', async () => {
+      const send = vi.fn();
+      const service = makeService(send);
+      await expect(
+        service.getThumbnail(encodeKey('immich/library/admin/2024/01/01/photo.jpg'), 'small'),
+      ).rejects.toThrow(/out-of-namespace/);
+      expect(send).not.toHaveBeenCalled();
+    });
   });
 
   it('falls back content type from extension when object metadata is missing', async () => {

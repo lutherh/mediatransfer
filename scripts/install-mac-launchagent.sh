@@ -15,6 +15,10 @@
 #      leaving the container falsely (healthy). Auto-recovers via
 #      `docker stop && docker start` (a plain `restart` is insufficient).
 #      Skipped if IMMICH_WATCHDOG_API_KEY is not set in .env.immich.
+#   4. uk.4to.mediatransfer.caffeinate — runs `caffeinate -dimsu` for the
+#      lifetime of the user session so the Mac never idle-sleeps while
+#      Immich/MediaTransfer/rclone are supposed to be running. KeepAlive
+#      so it auto-restarts if killed.
 #
 # Why both? Without the stack agent, login = mount up but no Immich.
 # Without the mount agent, login = Immich starts into an empty dir.
@@ -51,9 +55,11 @@ read_env_val() {
 LABEL_MOUNT="uk.4to.mediatransfer.s3mount"
 LABEL_STACK="uk.4to.mediatransfer.stack"
 LABEL_WATCHDOG="uk.4to.mediatransfer.queuewatchdog"
+LABEL_CAFFEINATE="uk.4to.mediatransfer.caffeinate"
 PLIST_MOUNT="$HOME/Library/LaunchAgents/${LABEL_MOUNT}.plist"
 PLIST_STACK="$HOME/Library/LaunchAgents/${LABEL_STACK}.plist"
 PLIST_WATCHDOG="$HOME/Library/LaunchAgents/${LABEL_WATCHDOG}.plist"
+PLIST_CAFFEINATE="$HOME/Library/LaunchAgents/${LABEL_CAFFEINATE}.plist"
 LOG_DIR="$ROOT_DIR/data/logs"
 MOUNT_SCRIPT="$SCRIPT_DIR/mount-s3.sh"
 START_SCRIPT="$SCRIPT_DIR/start-all.sh"
@@ -121,7 +127,7 @@ flush_mount() {
 
 uninstall() {
   flush_mount
-  for label in "$LABEL_WATCHDOG" "$LABEL_STACK" "$LABEL_MOUNT"; do
+  for label in "$LABEL_CAFFEINATE" "$LABEL_WATCHDOG" "$LABEL_STACK" "$LABEL_MOUNT"; do
     if launchctl list "$label" &>/dev/null; then
       echo "Unloading $label..."
       launchctl unload "$HOME/Library/LaunchAgents/${label}.plist" 2>/dev/null || true
@@ -136,7 +142,7 @@ uninstall() {
 }
 
 status() {
-  for label in "$LABEL_MOUNT" "$LABEL_STACK" "$LABEL_WATCHDOG"; do
+  for label in "$LABEL_MOUNT" "$LABEL_STACK" "$LABEL_WATCHDOG" "$LABEL_CAFFEINATE"; do
     plist="$HOME/Library/LaunchAgents/${label}.plist"
     echo "── $label"
     [ -f "$plist" ] && echo "   plist: yes ($plist)" || echo "   plist: no"
@@ -172,7 +178,7 @@ mkdir -p "$LOG_DIR" "$(dirname "$PLIST_MOUNT")"
 # Flush any running mount first so the writeback cache is drained.
 flush_mount
 # Unload any previous versions before rewriting.
-for label in "$LABEL_WATCHDOG" "$LABEL_STACK" "$LABEL_MOUNT"; do
+for label in "$LABEL_CAFFEINATE" "$LABEL_WATCHDOG" "$LABEL_STACK" "$LABEL_MOUNT"; do
   plist="$HOME/Library/LaunchAgents/${label}.plist"
   if launchctl list "$label" &>/dev/null; then
     echo "Unloading previous $label..."
@@ -386,6 +392,43 @@ PLIST_EOF
   echo "Wrote $PLIST_WATCHDOG"
 fi
 
+# ── Caffeinate agent (keep Mac awake while logged in) ──
+# `caffeinate -dimsu` prevents display, idle, disk, and system sleep, and
+# asserts user activity. Equivalent to KeepingYouAwake / Amphetamine in
+# "indefinite" mode. KeepAlive=true so it auto-restarts if killed.
+cat > "$PLIST_CAFFEINATE" <<PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${LABEL_CAFFEINATE}</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-dimsu</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>${LOG_DIR}/caffeinate.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>${LOG_DIR}/caffeinate.err.log</string>
+</dict>
+</plist>
+PLIST_EOF
+echo "Wrote $PLIST_CAFFEINATE"
+
 # ── OrbStack login item (so Docker socket is up at login) ──
 HAS_ORBSTACK=$(osascript -e 'tell application "System Events" to get the name of every login item' 2>/dev/null | tr ',' '\n' | grep -ic orbstack || true)
 if [ "$HAS_ORBSTACK" = "0" ]; then
@@ -401,13 +444,16 @@ echo "Loading agents..."
 launchctl load -w "$PLIST_MOUNT"
 launchctl load -w "$PLIST_STACK"
 [ -f "$PLIST_WATCHDOG" ] && launchctl load -w "$PLIST_WATCHDOG"
+launchctl load -w "$PLIST_CAFFEINATE"
 sleep 4
 
 echo
 status
 echo
 echo "Logs:"
-echo "  mount: $LOG_DIR/s3mount.{out,err}.log"
-echo "  stack: $LOG_DIR/stack.{out,err}.log"
+echo "  mount:      $LOG_DIR/s3mount.{out,err}.log"
+echo "  stack:      $LOG_DIR/stack.{out,err}.log"
+echo "  watchdog:   $LOG_DIR/queuewatchdog.{out,err}.log"
+echo "  caffeinate: $LOG_DIR/caffeinate.{out,err}.log"
 echo
 echo "Remove with: $0 --uninstall"

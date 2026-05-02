@@ -647,6 +647,7 @@ export class ScalewayCatalogService implements CatalogService {
 
   async getObject(encodedKey: string, range?: string): Promise<CatalogObject> {
     const decodedKey = decodeKey(encodedKey);
+    assertSafeCatalogKey(decodedKey);
     const fullKey = this.withPrefix(decodedKey);
     const response = await this.client.send(
       new GetObjectCommand({
@@ -681,6 +682,7 @@ export class ScalewayCatalogService implements CatalogService {
     maxBytes = 65536,
   ): Promise<{ buffer: Buffer; contentType?: string; contentLength?: number }> {
     const decodedKey = decodeKey(encodedKey);
+    assertSafeCatalogKey(decodedKey);
     const fullKey = this.withPrefix(decodedKey);
     const response = await this.client.send(
       new GetObjectCommand({
@@ -733,6 +735,7 @@ export class ScalewayCatalogService implements CatalogService {
     }
 
     const decodedKey = decodeKey(encodedKey);
+    assertSafeCatalogKey(decodedKey);
 
     // ── Layer 2: Check local disk cache ───────────────────────────────────
     if (this.diskCache) {
@@ -1060,6 +1063,12 @@ export class ScalewayCatalogService implements CatalogService {
     const deleted: string[] = [];
     const failed: { key: string; error: string }[] = [];
 
+    // Validate ALL keys up-front so a single out-of-namespace key in the
+    // batch fails fast rather than partially executing other deletes.
+    for (const ek of encodedKeys) {
+      assertSafeCatalogKey(decodeKey(ek));
+    }
+
     // S3 DeleteObjects supports batches of up to 1000
     const BATCH_SIZE = 1000;
     for (let i = 0; i < encodedKeys.length; i += BATCH_SIZE) {
@@ -1107,6 +1116,12 @@ export class ScalewayCatalogService implements CatalogService {
 
   async moveObject(encodedKey: string, newDatePrefix: string): Promise<{ from: string; to: string }> {
     const oldKey = decodeKey(encodedKey);
+    assertSafeCatalogKey(oldKey);
+    // Restrict newDatePrefix to a date-shaped path so an attacker cannot
+    // point the COPY destination at another bucket prefix (e.g. `immich/`).
+    if (!/^\d{4}\/\d{2}\/\d{2}$/.test(newDatePrefix)) {
+      throw new Error('newDatePrefix must be YYYY/MM/DD');
+    }
     const filename = oldKey.split('/').pop() ?? oldKey;
     // Preserve the s3transfers/ prefix so the moved object stays visible to catalog queries.
     // oldKey is like "s3transfers/YYYY/MM/DD/file.jpg"; newDatePrefix is like "2020/03/15".
@@ -1323,6 +1338,33 @@ export function decodeKey(encodedKey: string): string {
   } catch (err) {
     log.debug({ encodedKey, err }, '[catalog] Invalid encoded media key');
     throw new Error('Invalid media key encoding');
+  }
+}
+
+/**
+ * Catalog keys must live under one of the namespaces the catalog itself
+ * manages: the canonical `s3transfers/...` tree, or a legacy date-prefixed
+ * path (`YYYY/MM/DD/...`). Anything else — most importantly Immich's
+ * `library/...` originals or server-managed `_thumbs/` / `_albums.json`
+ * objects — is rejected before it can reach a destructive S3 call.
+ *
+ * Without this guard a user-supplied `encodedKey` decoded by `decodeKey()`
+ * could be any S3 key, allowing arbitrary delete/move/get against unrelated
+ * prefixes in the same bucket.
+ */
+const SAFE_CATALOG_KEY_RE = /^(?:s3transfers\/|\d{4}\/\d{2}\/\d{2}\/)/;
+
+export function isSafeCatalogKey(decodedKey: string): boolean {
+  if (!decodedKey) return false;
+  if (decodedKey.includes('..')) return false;
+  if (decodedKey.startsWith('/')) return false;
+  if (decodedKey.startsWith('_')) return false;
+  return SAFE_CATALOG_KEY_RE.test(decodedKey);
+}
+
+export function assertSafeCatalogKey(decodedKey: string): void {
+  if (!isSafeCatalogKey(decodedKey)) {
+    throw new Error('Refusing to operate on out-of-namespace catalog key');
   }
 }
 
