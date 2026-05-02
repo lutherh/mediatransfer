@@ -195,7 +195,10 @@ export function TakeoutProgressPage() {
 
       {/* External run banner: a foreign writer (overnight CLI, another
           API instance) holds the run lock. Mutation buttons are disabled
-          via `busy`; the API will return EXTERNAL_JOB_RUNNING anyway. */}
+          via `busy`; the API will return EXTERNAL_JOB_RUNNING anyway.
+          Exception: the Pause button is allowed because a graceful
+          cross-process pause is the one mutation that's safe to issue
+          while another writer holds the lock. */}
       {externalRun && (
         <Alert variant="warning" className="text-xs space-y-1">
           <p className="font-medium">
@@ -212,6 +215,22 @@ export function TakeoutProgressPage() {
           <p className="text-[11px] opacity-75">
             Live status below auto-refreshes. Wait for the external run to finish before clicking any button.
           </p>
+          <div className="pt-1.5">
+            {externalRun.pausePending ? (
+              <p className="text-[11px] font-medium text-amber-800">
+                ⏸ Pause requested — the run will stop after the current archive completes.
+              </p>
+            ) : (
+              <Button
+                className="border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 disabled:opacity-40 text-xs py-1 px-3"
+                type="button"
+                disabled={actionMutation.isPending}
+                onClick={() => run('pause')}
+              >
+                ⏸ Request graceful pause (stops after current archive)
+              </Button>
+            )}
+          </div>
         </Alert>
       )}
 

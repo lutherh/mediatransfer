@@ -7,6 +7,7 @@ import type { CloudProvider, ObjectInfo } from '../providers/types.js';
 import type { TakeoutConfig } from './config.js';
 import { runTakeoutIncremental, loadArchiveState, reconcileArchiveEntries } from './incremental.js';
 import { loadArchiveMetadata } from './archive-metadata.js';
+import { requestPause, isPauseRequested } from './pause-flag.js';
 
 class MockProvider implements CloudProvider {
   readonly name = 'MockProvider';
@@ -581,6 +582,112 @@ describe('skipReasons propagation to archive-state', () => {
       expect(record.skipReasons?.already_exists_in_destination).toBe(0);
       expect(record.skipReasons?.already_uploaded_in_state).toBe(0);
       expect(record.skipReasons?.already_skipped_in_state).toBe(0);
+    });
+  });
+
+  describe('graceful pause flag', () => {
+    it('stops at the next archive boundary when pause flag is set, leaving remaining archives pending', async () => {
+      await withTempDir(async (root) => {
+        const config = configFrom(root);
+        await fs.mkdir(config.inputDir, { recursive: true });
+        await fs.mkdir(config.workDir, { recursive: true });
+
+        // Three archives queued.
+        for (const name of ['takeout-001.zip', 'takeout-002.zip', 'takeout-003.zip']) {
+          await fs.writeFile(path.join(config.inputDir, name), 'dummy');
+        }
+
+        const provider = new MockProvider();
+        let extractCount = 0;
+        const extractor = async (archivePath: string, destinationDir: string) => {
+          extractCount += 1;
+          // Set the pause flag *during* the first archive's extraction so the
+          // loop sees it before iteration 2.
+          if (extractCount === 1) {
+            await requestPause(config.workDir, 'unit-test');
+          }
+          const media = path.join(
+            destinationDir,
+            'Google Photos',
+            'Album',
+            `${path.basename(archivePath)}.jpg`,
+          );
+          await fs.mkdir(path.dirname(media), { recursive: true });
+          await fs.writeFile(media, 'img');
+        };
+
+        let pauseCallbackArg: number | undefined;
+        const result = await runTakeoutIncremental(
+          config,
+          provider,
+          { onPaused: (remaining) => { pauseCallbackArg = remaining; } },
+          extractor,
+        );
+
+        // First archive completed; loop exited before extracting #2 and #3.
+        expect(result.paused).toBe(true);
+        expect(result.remainingAfterPause).toBe(2);
+        expect(pauseCallbackArg).toBe(2);
+        expect(extractCount).toBe(1);
+
+        const state = await loadArchiveState(path.join(config.workDir, 'archive-state.json'));
+        expect(state.archives['takeout-001.zip']?.status).toBe('completed');
+        expect(state.archives['takeout-002.zip']).toBeUndefined();
+        expect(state.archives['takeout-003.zip']).toBeUndefined();
+
+        // Pause flag persists \u2014 the CLI script (not the library) decides
+        // when to clear it. This guarantees the next run can detect that the
+        // previous exit was a graceful pause if it inspects the flag.
+        expect(await isPauseRequested(config.workDir)).toBe(true);
+      });
+    });
+
+    it('resumes pending archives when pause flag is cleared and run is invoked again', async () => {
+      await withTempDir(async (root) => {
+        const config = configFrom(root);
+        await fs.mkdir(config.inputDir, { recursive: true });
+        await fs.mkdir(config.workDir, { recursive: true });
+
+        for (const name of ['takeout-001.zip', 'takeout-002.zip']) {
+          await fs.writeFile(path.join(config.inputDir, name), 'dummy');
+        }
+
+        const provider = new MockProvider();
+        let firstRunExtracts = 0;
+        const firstExtractor = async (archivePath: string, destinationDir: string) => {
+          firstRunExtracts += 1;
+          if (firstRunExtracts === 1) {
+            await requestPause(config.workDir);
+          }
+          const media = path.join(destinationDir, 'Google Photos', 'Album', `${path.basename(archivePath)}.jpg`);
+          await fs.mkdir(path.dirname(media), { recursive: true });
+          await fs.writeFile(media, 'img');
+        };
+
+        const first = await runTakeoutIncremental(config, provider, {}, firstExtractor);
+        expect(first.paused).toBe(true);
+        expect(firstRunExtracts).toBe(1);
+
+        // User clears the flag (or the CLI startup path does) and re-runs.
+        await fs.rm(path.join(config.workDir, '.takeout-pause.flag'), { force: true });
+
+        let secondRunExtracts = 0;
+        const secondExtractor = async (archivePath: string, destinationDir: string) => {
+          secondRunExtracts += 1;
+          const media = path.join(destinationDir, 'Google Photos', 'Album', `${path.basename(archivePath)}.jpg`);
+          await fs.mkdir(path.dirname(media), { recursive: true });
+          await fs.writeFile(media, 'img');
+        };
+
+        const second = await runTakeoutIncremental(config, provider, {}, secondExtractor);
+        expect(second.paused).toBeFalsy();
+        // Only the still-pending archive (#2) should be extracted in the second run.
+        expect(secondRunExtracts).toBe(1);
+
+        const state = await loadArchiveState(path.join(config.workDir, 'archive-state.json'));
+        expect(state.archives['takeout-001.zip']?.status).toBe('completed');
+        expect(state.archives['takeout-002.zip']?.status).toBe('completed');
+      });
     });
   });
 });

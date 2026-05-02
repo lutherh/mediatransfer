@@ -175,6 +175,13 @@ export type TakeoutStatus = {
     source: 'cli' | 'api';
     command: string;
     lastSeenAt?: string;
+    /**
+     * True when a graceful pause has already been requested for this
+     * external run. The CLI will exit cleanly after its current archive
+     * boundary; the UI uses this to switch the Pause button to a
+     * "Pause requested..." state to prevent duplicate clicks.
+     */
+    pausePending?: boolean;
   } | null;
 };
 

@@ -32,6 +32,7 @@ import {
 import { extractAndPersistArchiveMetadata, loadArchiveMetadata } from './archive-metadata.js';
 import type { ArchiveMetadata } from './archive-metadata.js';
 import { DEFAULT_MANIFEST_FILE } from './runner.js';
+import { isPauseRequested } from './pause-flag.js';
 
 const log = getLogger().child({ module: 'incremental' });
 
@@ -139,6 +140,12 @@ export type IncrementalOptions = {
   onArchiveComplete?: (archiveName: string, summary: UploadSummary) => void;
   onArchiveError?: (archiveName: string, error: unknown) => void;
   onUploadProgress?: (archiveName: string, snapshot: UploadProgressSnapshot) => void;
+  /**
+   * Called once when a pause flag is observed at an archive boundary and the
+   * loop is about to exit early. `remainingArchives` includes the archive that
+   * would have been processed next.
+   */
+  onPaused?: (remainingArchives: number) => void;
 };
 
 async function persistArchiveMetadataBestEffort(
@@ -183,6 +190,10 @@ export type IncrementalResult = {
   totalFailed: number;
   reportJsonPath?: string;
   reportCsvPath?: string;
+  /** True when the loop exited early because a pause flag was observed at an archive boundary. */
+  paused?: boolean;
+  /** Archives left in the pending queue when paused. Undefined when `paused` is not true. */
+  remainingAfterPause?: number;
 };
 
 /**
@@ -231,6 +242,22 @@ export async function runTakeoutIncremental(
   const metadataDir = options.metadataDir ?? path.join(config.workDir, 'metadata');
 
   for (let i = 0; i < pending.length; i += 1) {
+    // Graceful pause check: stop cleanly between archives so the next run
+    // resumes from the same point. Per-archive boundary is the safest place
+    // — extraction has not started, no temp files exist, and archive-state
+    // already reflects everything we've persisted.
+    if (await isPauseRequested(config.workDir)) {
+      const remaining = pending.length - i;
+      log.info(
+        { remaining, completed: i, total: pending.length },
+        '[incremental] Pause flag detected; stopping at archive boundary. Re-run upload to resume.',
+      );
+      result.paused = true;
+      result.remainingAfterPause = remaining;
+      options.onPaused?.(remaining);
+      break;
+    }
+
     const archivePath = pending[i];
     const archiveName = path.basename(archivePath);
     const extractDir = path.join(config.workDir, 'temp-extract');

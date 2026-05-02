@@ -26,6 +26,7 @@ import {
   type ArchiveStateItem,
 } from '../../takeout/incremental.js';
 import { readRunLock, type RunLockInfo } from '../../takeout/run-lock.js';
+import { isPauseRequested, requestPause, clearPauseFlag } from '../../takeout/pause-flag.js';
 import { analyseArchiveSequences, normaliseArchiveName } from '../../takeout/sequence-analysis.js';
 import { apiError } from '../errors.js';
 import { createJob, updateJob } from '../../db/jobs.js';
@@ -483,6 +484,12 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
     // held only while a writer is actively touching state files; absence
     // means it's safe to spawn a new action.
     const externalRun = await detectExternalRun(workDir);
+    // When an external run is in flight, also surface whether a graceful
+    // pause has already been requested so the UI can switch the button to
+    // "Pause requested…" instead of letting the user click it again.
+    const externalRunWithPauseState = externalRun
+      ? { ...externalRun, pausePending: await isPauseRequested(workDir) }
+      : null;
 
     const [state, manifestKeys, pipeline, initialArchiveState] = await Promise.all([
       loadUploadState(statePath),
@@ -591,7 +598,7 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
       archiveHistory,
       pipeline: buildPipelineSummary(pipeline),
       autoUpload: autoUploadEnabled,
-      externalRun,
+      externalRun: externalRunWithPauseState,
     };
   });
 
@@ -767,17 +774,44 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
 
     // Special case: pause the currently running action
     if (action === 'pause') {
-      if (!RUN_STATUS.running || !currentProcess) {
-        return reply.code(409).send(
-          apiError('NO_ACTION_RUNNING', 'No action is currently running to pause'),
-        );
+      // Case 1: in-process action — use the existing fast path (kill the
+      // child, set pauseRequested so the action loop persists state and
+      // marks the run as paused for the UI).
+      if (RUN_STATUS.running && currentProcess) {
+        pauseRequested = true;
+        currentProcess.kill();
+        return reply.code(202).send({
+          message: 'Pausing current action',
+          status: snapshotStatus(),
+        });
       }
-      pauseRequested = true;
-      currentProcess.kill();
-      return reply.code(202).send({
-        message: 'Pausing current action',
-        status: snapshotStatus(),
-      });
+
+      // Case 2: external CLI run holds the lock. We cannot signal it
+      // directly across process trees, so we set a flag the CLI polls at
+      // each archive boundary. The CLI then exits cleanly with state in
+      // a fully-resumable shape.
+      const workDir = customPaths.get('workDir') ?? path.resolve(env.TAKEOUT_WORK_DIR);
+      const externalRun = await detectExternalRun(workDir);
+      if (externalRun) {
+        try {
+          await requestPause(workDir, 'pause requested via API');
+        } catch (err) {
+          log.warn({ err, workDir }, 'Failed to write takeout pause flag');
+          return reply.code(500).send(
+            apiError('PAUSE_WRITE_FAILED', 'Failed to write pause flag for external run'),
+          );
+        }
+        return reply.code(202).send({
+          message:
+            'Graceful pause requested — the external run will stop after the current archive',
+          external: true,
+          pid: externalRun.pid,
+        });
+      }
+
+      return reply.code(409).send(
+        apiError('NO_ACTION_RUNNING', 'No action is currently running to pause'),
+      );
     }
 
     if (!isAction(action)) {
@@ -819,6 +853,11 @@ export async function registerTakeoutRoutes(app: FastifyInstance, env: Env): Pro
           ),
         );
       }
+      // Clear any stale graceful-pause flag from a previous run so the new
+      // upload doesn't immediately exit at the first archive boundary.
+      await clearPauseFlag(workDir).catch((err: unknown) => {
+        log.warn({ err, workDir }, 'Failed to clear stale takeout pause flag before run');
+      });
     }
 
     runAction(action);
