@@ -22,6 +22,8 @@ You are helping build **MediaTransfer**, a **locally-run** cloud-to-cloud media 
 
 8. **Involve user.** After implemneting and tests passed, add a manual user verficiation step, both to involve the user in the implemenetion but also as a quality gate
 
+9. **Default to parallel subagents for non-trivial work.** When a task spans multiple independent concerns (backend + frontend, multiple files, research + implementation, multi-area review, test-coverage sweeps, doc enhancements), dispatch specialized subagents (`Explore`, `architect`, `debug`, `expert-react-frontend-engineer`, `security-reviewer`, etc.) **in a single tool batch** instead of working serially. The user should not have to ask. Skip parallelization only for single-file edits, trivial questions, or strictly sequential dependencies.
+
 ---
 
 ## Tech Stack Constraints
@@ -32,7 +34,6 @@ You are helping build **MediaTransfer**, a **locally-run** cloud-to-cloud media 
 - **Job queue:** BullMQ + Redis
 - **Testing:** Vitest
 - **Frontend:** React 19 + Vite 8 + Tailwind 4 + TanStack Query/Virtual
-- **NEVER use Python** for any part of this project
 
 Refer to `TECH_STACK.md` for full details.
 

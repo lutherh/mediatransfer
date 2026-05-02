@@ -12,8 +12,15 @@ import { loadArchiveBrowserSummary } from '../src/takeout/archive-browser.js';
 import { validateScalewayConfig, ScalewayProvider } from '../src/providers/scaleway.js';
 import { discoverTakeoutArchives } from '../src/takeout/unpack.js';
 import { formatDuration, formatBytes } from '../src/utils/format.js';
+import { acquireRunLock, RunLockBusyError, type RunLockHandle } from '../src/takeout/run-lock.js';
+import { clearPauseFlag, isPauseRequested } from '../src/takeout/pause-flag.js';
+import { ensureCaffeinate } from '../src/utils/caffeinate.js';
 
 dotenv.config();
+
+// Suppress laptop sleep for the lifetime of this process. No-op on Linux
+// and when MEDIATRANSFER_CAFFEINATE=0. See src/utils/caffeinate.ts.
+ensureCaffeinate();
 
 const args = process.argv.slice(2);
 const pathOverrides = parseTakeoutPathArgs(args);
@@ -127,6 +134,65 @@ console.log(`  Upload concurrency: ${concurrency ?? config.uploadConcurrency}`);
 console.log(`  Metadata dir: ${metadataDir ?? path.join(config.workDir, 'metadata')}`);
 console.log('');
 
+// Acquire the cross-process run lock BEFORE any state file is touched.
+// This prevents the API process (or a second CLI invocation) from spawning
+// a concurrent writer that races on archive-state.json / state.json /
+// manifest.jsonl. The API checks for a foreign lock and refuses mutations.
+let runLock: RunLockHandle;
+try {
+  runLock = await acquireRunLock(config.workDir, {
+    source: 'cli',
+    command: process.argv.slice(1).join(' '),
+    runToken: process.env.TAKEOUT_RUN_TOKEN,
+  });
+  console.log(`  Run lock: acquired (pid=${runLock.info.pid})`);
+} catch (err) {
+  if (err instanceof RunLockBusyError) {
+    console.error('');
+    console.error('❌ Cannot start: another takeout run is already in progress.');
+    console.error(`   ${err.message}`);
+    console.error('   Wait for it to finish, or kill the holder and retry.');
+    process.exit(3);
+  }
+  throw err;
+}
+
+// Clear any stale pause flag from a previous run so this fresh start
+// does not exit immediately at the first archive boundary. The flag is
+// only meaningful while the CLI is actively running.
+if (await isPauseRequested(config.workDir)) {
+  console.log('  Pause flag: clearing stale flag from previous run');
+  await clearPauseFlag(config.workDir);
+}
+
+// Best-effort lock release on any termination path. The lock module verifies
+// ownership before deleting, so a successor process is never disturbed.
+const releaseLockOnce = async () => {
+  try {
+    await runLock.release();
+  } catch {
+    /* ignore */
+  }
+};
+// Heartbeat the lockfile so cross-namespace readers (e.g. the Dockerized
+// API) can confirm liveness via mtime even when they cannot see this PID.
+// 30s interval keeps `lastSeenAt` well within the 5-minute staleness window.
+const heartbeatTimer = setInterval(() => {
+  void runLock.heartbeat();
+}, 30_000);
+heartbeatTimer.unref();
+process.once('exit', () => {
+  clearInterval(heartbeatTimer);
+  // exit handler must be sync; fire-and-forget the unlink.
+  void releaseLockOnce();
+});
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+  process.once(sig, () => {
+    clearInterval(heartbeatTimer);
+    void releaseLockOnce().finally(() => process.exit(130));
+  });
+}
+
 const startTime = Date.now();
 const uploadProgressTracker = createUploadProgressTracker();
 
@@ -158,6 +224,11 @@ const result = await runTakeoutIncremental(config, provider, {
   onUploadProgress(name, snapshot) {
     uploadProgressTracker.render(name, snapshot);
   },
+  onPaused(remaining) {
+    console.log('');
+    console.log(`⏸️  Graceful pause requested — stopping after current archive (${remaining} archive(s) still pending).`);
+    console.log('   Re-run the same command to resume; completed archives will be skipped automatically.');
+  },
 });
 
 const elapsed = formatDuration(Date.now() - startTime);
@@ -187,6 +258,20 @@ if (result.failedArchives > 0) {
   console.log('💡 Tip: Re-run to retry failed archives. Completed archives are skipped automatically.');
   process.exitCode = 2;
 }
+
+if (result.paused) {
+  console.log('⏸️  Run paused gracefully at archive boundary. Re-run the same command to resume.');
+  // Clear the flag so the *next* invocation starts fresh. We deliberately
+  // wait until after we've logged the paused state so any external observer
+  // (the API, the user) still sees the flag while this process is winding
+  // down.
+  await clearPauseFlag(config.workDir);
+  // Use a distinct exit code so wrappers can detect a graceful pause without
+  // confusing it with a hard failure (exit 2).
+  process.exitCode = 4;
+}
+
+await releaseLockOnce();
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 

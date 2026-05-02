@@ -9,8 +9,12 @@ import {
   type StorageClass,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
+import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { Readable } from 'node:stream';
 import type { CloudProvider, ListOptions, ObjectInfo, ProviderConfig } from './types.js';
+import { getLogger } from '../utils/logger.js';
+
+const log = getLogger().child({ module: 'scaleway' });
 
 // ── Scaleway region → endpoint mapping ──────────────────────────
 
@@ -153,6 +157,15 @@ export class ScalewayProvider implements CloudProvider {
           secretAccessKey: config.secretKey,
         },
         forcePathStyle: config.forcePathStyle ?? true,
+        // Hard per-request timeouts so a silent half-open TCP socket can
+        // never wedge an upload indefinitely (observed 2026-04-30/05-01:
+        // multipart PutPart hung for 14h+ with 0 B/s on the last item of
+        // a takeout archive). connectionTimeout = TCP/TLS establishment;
+        // requestTimeout = read-idle on an established socket.
+        requestHandler: new NodeHttpHandler({
+          connectionTimeout: ScalewayProvider.S3_CONNECT_TIMEOUT_MS,
+          requestTimeout: ScalewayProvider.S3_REQUEST_TIMEOUT_MS,
+        }),
       });
   }
 
@@ -294,7 +307,52 @@ export class ScalewayProvider implements CloudProvider {
       },
     });
 
-    await upload.done();
+    // Stall watchdog: track *socket-level* progress by counting bytes the
+    // SDK reads from the input stream (every chunk, ~64 KiB), not the
+    // lib-storage `httpUploadProgress` event — which only ticks once per
+    // completed 16 MiB part and can legitimately pause for several minutes
+    // during SDK-internal `PutPart` retries with `queueSize=4`. Watching
+    // the underlying stream gives a true "is the socket alive" signal and
+    // avoids false-positive aborts on slow-but-healthy uploads.
+    let lastBytes = 0;
+    let lastProgressAt = Date.now();
+    let bytesObserved = 0;
+    let completed = false;
+    const onData = (chunk: Buffer | string): void => {
+      bytesObserved += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length;
+    };
+    stream.on('data', onData);
+    const stallTimer = setInterval(() => {
+      if (completed) {
+        return;
+      }
+      if (bytesObserved !== lastBytes) {
+        lastBytes = bytesObserved;
+        lastProgressAt = Date.now();
+        return;
+      }
+      if (Date.now() - lastProgressAt > ScalewayProvider.STALL_TIMEOUT_MS) {
+        log.warn(
+          { key, loaded: lastBytes, stalledForMs: Date.now() - lastProgressAt },
+          '[scaleway] upload stalled — aborting to free the slot',
+        );
+        // upload.abort() rejects upload.done() with an AbortError, which
+        // takeout/uploader.ts treats as a normal failure (retried via the
+        // outer attempt loop, then surfaced as failedItems if it persists).
+        void upload.abort().catch((err: unknown) => {
+          log.warn({ key, err }, '[scaleway] upload.abort() itself failed');
+        });
+      }
+    }, ScalewayProvider.STALL_CHECK_INTERVAL_MS);
+    stallTimer.unref();
+
+    try {
+      await upload.done();
+    } finally {
+      completed = true;
+      clearInterval(stallTimer);
+      stream.off('data', onData);
+    }
   }
 
   async delete(key: string): Promise<void> {
@@ -309,7 +367,17 @@ export class ScalewayProvider implements CloudProvider {
   // ── Retry helper for transient S3 errors ──────────────────────
 
   private static readonly S3_MAX_RETRIES = 4;
+  private static readonly S3_CONNECT_TIMEOUT_MS = 15_000;
   private static readonly S3_REQUEST_TIMEOUT_MS = 120_000;
+  /**
+   * No socket-level progress for this long → assume the upload is wedged
+   * and abort the multipart upload. Sized to comfortably exceed the SDK's
+   * worst-case internal retry budget (`requestTimeout` 120s × default 3
+   * attempts ≈ 6 min) so we don't pre-empt legitimate SDK retries on a
+   * single bad PutPart.
+   */
+  private static readonly STALL_TIMEOUT_MS = 300_000;
+  private static readonly STALL_CHECK_INTERVAL_MS = 30_000;
 
   /**
    * Send an S3 command with per-request timeout and exponential backoff retries.

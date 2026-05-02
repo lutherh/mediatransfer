@@ -641,6 +641,45 @@ separately.
 - Verification checklist in `IMMICH_TUNNEL_PLAN.md` must pass after any change
   to `docker-compose.immich.yml` or the tunnel config.
 
+### Step 46: Graceful pause for external takeout CLI runs
+`[~]` — **awaiting manual user verification**
+- Added cross-process pause flag (`data/takeout/work/.takeout-pause.flag`)
+  so the web UI can request a graceful stop on a takeout CLI run that was
+  started outside the API process tree (overnight job, manual `tsx
+  scripts/takeout-process.ts`, etc.).
+- The CLI archive loop in `src/takeout/incremental.ts` polls the flag at
+  the top of each iteration and exits cleanly between archives, leaving
+  `archive-state.json` in a fully resumable shape (already-completed
+  archives are skipped on the next run).
+- API endpoint `POST /takeout/actions/pause` extended to write the flag
+  when a foreign run holds the lock; in-process runs still use the
+  existing `currentProcess.kill()` fast path. `GET /takeout/status`
+  exposes `externalRun.pausePending` so the UI can render a
+  "Pause requested…" state.
+- `scripts/takeout-process.ts`, `scripts/takeout-upload.ts`, and
+  `scripts/takeout-resume.ts` clear stale flags on startup, log the
+  paused state, and exit code `4` (distinct from `2 = failed archives`)
+  when paused.
+- Frontend (`frontend/src/pages/takeout-progress-page.tsx`) shows a
+  "Request graceful pause" button inside the External-run banner; the
+  button switches to a static "Pause requested…" message once the API
+  reports `pausePending: true`.
+- **Tests:**
+  - `src/takeout/pause-flag.test.ts` — unit tests for flag helpers.
+  - `src/takeout/incremental.test.ts` — pause-at-boundary + resume-after-clear.
+  - `src/api/routes/takeout.test.ts` — pause endpoint variants
+    (external run, no run, status surfaces `pausePending`, stale-flag
+    clearing on new upload).
+- **User verification gate:** While the current overnight CLI run
+  (PID 89284) is at ~88% complete, the new feature can only be exercised
+  on the *next* run (the live process predates this code). Verification
+  steps: (1) start a fresh `npm run takeout:upload` or `tsx
+  scripts/takeout-process.ts ...`; (2) click "Request graceful pause"
+  in the UI; (3) confirm the CLI logs `Pause flag detected; stopping
+  at archive boundary` and exits with code 4 after the current archive;
+  (4) re-run the same command and confirm completed archives are
+  skipped and processing resumes.
+
 ---
 
 ## Appendix — Shipped modules not previously enumerated

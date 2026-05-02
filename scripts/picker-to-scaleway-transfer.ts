@@ -14,6 +14,7 @@ import { exec } from 'node:child_process';
 import { Readable } from 'node:stream';
 import os from 'node:os';
 import * as dotenv from 'dotenv';
+import { ensureCaffeinate } from "../src/utils/caffeinate.js";
 import {
   createOAuth2Client,
   getAuthUrlForScopes,
@@ -26,6 +27,7 @@ import {
 import { buildDestinationKey } from '../src/api/transfer-keys.js';
 
 dotenv.config();
+ensureCaffeinate();
 
 const clientId = process.env.GOOGLE_CLIENT_ID;
 const clientSecret = process.env.GOOGLE_CLIENT_SECRET;

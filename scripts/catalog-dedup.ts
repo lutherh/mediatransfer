@@ -1,7 +1,9 @@
 import * as dotenv from 'dotenv';
+import { ensureCaffeinate } from "../src/utils/caffeinate.js";
 import { ScalewayCatalogService } from '../src/catalog/scaleway-catalog.js';
 
 dotenv.config();
+ensureCaffeinate();
 
 const dryRun = !process.argv.includes('--apply');
 

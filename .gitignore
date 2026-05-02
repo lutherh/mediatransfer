@@ -18,6 +18,9 @@ src/generated/
 data/takeout/google-api-state.json
 data/takeout/input/
 data/takeout/work/
+data/takeout/smoketest-input/
+data/takeout/smoketest-work/
+data/takeout/auto-upload.json
 data/takeout/state.json
 data/takeout/state.backup.json
 debug-output.txt
@@ -59,6 +62,10 @@ delete-safe-downloads.ts
 data/takeout/state.json.pre-*.bak
 data/takeout/state.json.backup-*
 data/takeout/*.bak
+
+# Local-only backups of shell scripts
+scripts/*.bak
+scripts/*.bak2
 
 # One-off root-level test scripts
 test-ffmpeg-resolve.ts

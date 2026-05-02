@@ -1,8 +1,10 @@
 import * as dotenv from 'dotenv';
+import { ensureCaffeinate } from "../src/utils/caffeinate.js";
 import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
 import { runTakeoutScan, type ScanProgressEvent } from '../src/takeout/runner.js';
 
 dotenv.config();
+ensureCaffeinate();
 
 const args = process.argv.slice(2);
 const pathOverrides = parseTakeoutPathArgs(args);

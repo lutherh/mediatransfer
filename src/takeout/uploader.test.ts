@@ -573,4 +573,338 @@ describe('takeout/uploader', () => {
       });
     });
   });
+
+  describe('transient network backoff', () => {
+    class NetworkFlakyProvider extends MockProvider {
+      readonly errorFactory: (attempt: number) => Error;
+      readonly failures: number;
+
+      constructor(errorFactory: (attempt: number) => Error, failures: number) {
+        super();
+        this.errorFactory = errorFactory;
+        this.failures = failures;
+      }
+
+      async upload(key: string, _stream: Readable): Promise<void> {
+        const attempts = (this.uploadAttempts.get(key) ?? 0) + 1;
+        this.uploadAttempts.set(key, attempts);
+        if (attempts <= this.failures) {
+          throw this.errorFactory(attempts);
+        }
+        this.objects.add(key);
+      }
+    }
+
+    it('uses the long network backoff for ENOTFOUND failures', async () => {
+      await withTempDir(async (dir) => {
+        const provider = new NetworkFlakyProvider(
+          () => Object.assign(new Error('getaddrinfo ENOTFOUND s3.nl-ams.scw.cloud'), { code: 'ENOTFOUND' }),
+          3,
+        );
+        const entry = await createEntry(dir, 'Album/NET_1.jpg', '2025/12/13/Album/NET_1.jpg');
+        const statePath = path.join(dir, 'state.json');
+
+        const delays: number[] = [];
+        const summary = await uploadManifest({
+          provider,
+          entries: [entry],
+          statePath,
+          retryCount: 5,
+          sleep: async (ms: number) => {
+            delays.push(ms);
+          },
+        });
+
+        expect(summary.uploaded).toBe(1);
+        expect(summary.failed).toBe(0);
+        expect(provider.uploadAttempts.get(entry.destinationKey)).toBe(4);
+        expect(delays).toHaveLength(3);
+        for (const ms of delays) {
+          expect(ms).toBeGreaterThanOrEqual(1500);
+        }
+      });
+    });
+
+    it('uses the short backoff for non-network errors', async () => {
+      await withTempDir(async (dir) => {
+        const provider = new NetworkFlakyProvider(() => new Error('boom'), 3);
+        const entry = await createEntry(dir, 'Album/NET_2.jpg', '2025/12/13/Album/NET_2.jpg');
+        const statePath = path.join(dir, 'state.json');
+
+        const delays: number[] = [];
+        const summary = await uploadManifest({
+          provider,
+          entries: [entry],
+          statePath,
+          retryCount: 5,
+          sleep: async (ms: number) => {
+            delays.push(ms);
+          },
+        });
+
+        expect(summary.uploaded).toBe(1);
+        expect(summary.failed).toBe(0);
+        expect(delays).toHaveLength(3);
+        for (const ms of delays) {
+          expect(ms).toBeLessThan(1500);
+        }
+      });
+    });
+  });
+
+  describe('failureKind classification', () => {
+    it('marks transient retry-exhausted failures with failureKind=transient', async () => {
+      await withTempDir(async (dir) => {
+        const provider = new MockProvider();
+        const entry = await createEntry(dir, 'Album/T1.jpg', '2025/12/13/Album/T1.jpg');
+        const statePath = path.join(dir, 'state.json');
+
+        provider.failAttempts.set(entry.destinationKey, 99);
+
+        const summary = await uploadManifest({
+          provider,
+          entries: [entry],
+          statePath,
+          retryCount: 1,
+          sleep: async () => {},
+        });
+
+        expect(summary.failed).toBe(1);
+        expect(summary.transientFailures).toBe(1);
+        expect(summary.permanentFailures).toBe(0);
+
+        const state = await loadUploadState(statePath);
+        expect(state.items[entry.destinationKey]?.failureKind).toBe('transient');
+      });
+    });
+
+    it('marks ENOENT (missing source) with failureKind=permanent', async () => {
+      await withTempDir(async (dir) => {
+        const provider = new MockProvider();
+        const entry = await createEntry(dir, 'Album/P1.jpg', '2025/12/13/Album/P1.jpg');
+        const statePath = path.join(dir, 'state.json');
+
+        // Remove source file before upload runs.
+        await fs.rm(entry.sourcePath);
+
+        const summary = await uploadManifest({
+          provider,
+          entries: [entry],
+          statePath,
+          retryCount: 3,
+          sleep: async () => {},
+        });
+
+        expect(summary.failed).toBe(1);
+        expect(summary.permanentFailures).toBe(1);
+        expect(summary.transientFailures).toBe(0);
+        expect(provider.uploadAttempts.get(entry.destinationKey) ?? 0).toBe(0);
+
+        const state = await loadUploadState(statePath);
+        expect(state.items[entry.destinationKey]?.failureKind).toBe('permanent');
+      });
+    });
+
+    it('resume: short-circuits items with failureKind=permanent (no upload call)', async () => {
+      await withTempDir(async (dir) => {
+        const provider = new MockProvider();
+        const entry = await createEntry(dir, 'Album/R1.jpg', '2025/12/13/Album/R1.jpg');
+        const statePath = path.join(dir, 'state.json');
+
+        await fs.writeFile(
+          statePath,
+          JSON.stringify({
+            version: 1,
+            updatedAt: new Date().toISOString(),
+            items: {
+              [entry.destinationKey]: {
+                status: 'failed',
+                attempts: 1,
+                updatedAt: new Date().toISOString(),
+                error: 'ENOENT: source file missing',
+                failureKind: 'permanent',
+              },
+            },
+          }),
+        );
+
+        const summary = await uploadManifest({
+          provider,
+          entries: [entry],
+          statePath,
+          retryCount: 3,
+          sleep: async () => {},
+        });
+
+        expect(summary.failed).toBe(1);
+        expect(summary.permanentFailures).toBe(1);
+        // Critically: provider.upload must not have been invoked.
+        expect(provider.uploadAttempts.get(entry.destinationKey) ?? 0).toBe(0);
+      });
+    });
+
+    it('resume: items with failureKind=transient retry upload', async () => {
+      await withTempDir(async (dir) => {
+        const provider = new MockProvider();
+        const entry = await createEntry(dir, 'Album/R2.jpg', '2025/12/13/Album/R2.jpg');
+        const statePath = path.join(dir, 'state.json');
+
+        await fs.writeFile(
+          statePath,
+          JSON.stringify({
+            version: 1,
+            updatedAt: new Date().toISOString(),
+            items: {
+              [entry.destinationKey]: {
+                status: 'failed',
+                attempts: 3,
+                updatedAt: new Date().toISOString(),
+                error: 'transient failure',
+                failureKind: 'transient',
+              },
+            },
+          }),
+        );
+
+        const summary = await uploadManifest({
+          provider,
+          entries: [entry],
+          statePath,
+          retryCount: 1,
+          sleep: async () => {},
+        });
+
+        expect(summary.uploaded).toBe(1);
+        expect(provider.uploadAttempts.get(entry.destinationKey)).toBe(1);
+      });
+    });
+  });
+
+  describe('circuit breaker', () => {
+    it('engages after threshold transient failures and pauses subsequent processing', async () => {
+      await withTempDir(async (dir) => {
+        const provider = new MockProvider();
+        const entries: ManifestEntry[] = [];
+        // 5 entries that always fail (transient) + 1 that succeeds.
+        for (let i = 0; i < 5; i += 1) {
+          const e = await createEntry(dir, `Album/CB${i}.jpg`, `2025/12/13/Album/CB${i}.jpg`);
+          provider.failAttempts.set(e.destinationKey, 99);
+          entries.push(e);
+        }
+        const tail = await createEntry(dir, 'Album/CBtail.jpg', '2025/12/13/Album/CBtail.jpg');
+        entries.push(tail);
+
+        const sleeps: number[] = [];
+        const summary = await uploadManifest({
+          provider,
+          entries,
+          statePath: path.join(dir, 'state.json'),
+          retryCount: 0,
+          uploadConcurrency: 1,
+          sleep: async (ms: number) => {
+            sleeps.push(ms);
+          },
+        });
+
+        expect(summary.transientFailures).toBe(5);
+        expect(summary.uploaded).toBe(1);
+        // Breaker pause (120_000ms by default) should appear at least once
+        // after the threshold is reached.
+        expect(sleeps.some((ms) => ms >= 100_000)).toBe(true);
+      });
+    });
+
+    it('permanent failures do NOT trigger the breaker', async () => {
+      await withTempDir(async (dir) => {
+        const provider = new MockProvider();
+        const entries: ManifestEntry[] = [];
+        for (let i = 0; i < 5; i += 1) {
+          const e = await createEntry(dir, `Album/PERM${i}.jpg`, `2025/12/13/Album/PERM${i}.jpg`);
+          await fs.rm(e.sourcePath);
+          entries.push(e);
+        }
+        const tail = await createEntry(dir, 'Album/PERMtail.jpg', '2025/12/13/Album/PERMtail.jpg');
+        entries.push(tail);
+
+        const sleeps: number[] = [];
+        const summary = await uploadManifest({
+          provider,
+          entries,
+          statePath: path.join(dir, 'state.json'),
+          retryCount: 0,
+          uploadConcurrency: 1,
+          sleep: async (ms: number) => {
+            sleeps.push(ms);
+          },
+        });
+
+        expect(summary.permanentFailures).toBe(5);
+        expect(summary.transientFailures).toBe(0);
+        expect(summary.uploaded).toBe(1);
+        // No long pause should have been issued.
+        expect(sleeps.every((ms) => ms < 100_000)).toBe(true);
+      });
+    });
+
+    it('respects custom breakerThreshold of 2', async () => {
+      await withTempDir(async (dir) => {
+        const provider = new MockProvider();
+        const entries: ManifestEntry[] = [];
+        for (let i = 0; i < 2; i += 1) {
+          const e = await createEntry(dir, `Album/CT${i}.jpg`, `2025/12/13/Album/CT${i}.jpg`);
+          provider.failAttempts.set(e.destinationKey, 99);
+          entries.push(e);
+        }
+        const tail = await createEntry(dir, 'Album/CTtail.jpg', '2025/12/13/Album/CTtail.jpg');
+        entries.push(tail);
+
+        const sleeps: number[] = [];
+        const summary = await uploadManifest({
+          provider,
+          entries,
+          statePath: path.join(dir, 'state.json'),
+          retryCount: 0,
+          uploadConcurrency: 1,
+          breakerThreshold: 2,
+          breakerPauseMs: 5_000,
+          sleep: async (ms: number) => {
+            sleeps.push(ms);
+          },
+        });
+
+        expect(summary.transientFailures).toBe(2);
+        expect(summary.uploaded).toBe(1);
+        // A pause near the configured 5_000 must have been issued for the tail entry.
+        expect(sleeps.some((ms) => ms >= 4_000 && ms <= 5_000)).toBe(true);
+      });
+    });
+
+    it('continues processing after the pause expires', async () => {
+      await withTempDir(async (dir) => {
+        const provider = new MockProvider();
+        const entries: ManifestEntry[] = [];
+        for (let i = 0; i < 2; i += 1) {
+          const e = await createEntry(dir, `Album/AF${i}.jpg`, `2025/12/13/Album/AF${i}.jpg`);
+          provider.failAttempts.set(e.destinationKey, 99);
+          entries.push(e);
+        }
+        const tail = await createEntry(dir, 'Album/AFtail.jpg', '2025/12/13/Album/AFtail.jpg');
+        entries.push(tail);
+
+        const summary = await uploadManifest({
+          provider,
+          entries,
+          statePath: path.join(dir, 'state.json'),
+          retryCount: 0,
+          uploadConcurrency: 1,
+          breakerThreshold: 2,
+          breakerPauseMs: 1, // tiny pause so test is fast
+          sleep: async () => {}, // skip the actual wait
+        });
+
+        expect(summary.transientFailures).toBe(2);
+        expect(summary.uploaded).toBe(1);
+      });
+    });
+  });
 });

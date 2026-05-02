@@ -71,6 +71,36 @@ function baseEnv(overrides: Partial<Env> = {}): Env {
   };
 }
 
+async function writeExternalRunLock(
+  workDir: string,
+  overrides: Partial<{
+    pid: number;
+    startedAt: string;
+    source: 'cli' | 'api';
+    command: string;
+    instanceId: string;
+    runToken: string;
+    lastSeenAt: string;
+  }> = {},
+) {
+  await fs.mkdir(workDir, { recursive: true });
+  const info = {
+    pid: process.pid === 1 ? 2 : 1,
+    startedAt: new Date().toISOString(),
+    source: 'cli' as const,
+    command: 'external takeout run',
+    instanceId: 'external-instance',
+    lastSeenAt: new Date().toISOString(),
+    ...overrides,
+  };
+  await fs.writeFile(
+    path.join(workDir, '.takeout-run.lock'),
+    JSON.stringify(info, null, 2),
+    'utf8',
+  );
+  return info;
+}
+
 describe('takeout routes', () => {
 
   beforeEach(async () => {
@@ -283,7 +313,191 @@ describe('takeout routes', () => {
     await app.close();
   });
 
-  // â”€â”€â”€ PUT /takeout/input-dir â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  it('treats an unreadable run lock as external and blocks mutations', async () => {
+    const inputDir = path.join(tempDir, 'input');
+    const workDir = path.join(tempDir, 'work');
+    const lockFile = path.join(workDir, '.takeout-run.lock');
+    await fs.mkdir(inputDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(lockFile, '{not-json', 'utf8');
+
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv({
+      TAKEOUT_INPUT_DIR: inputDir,
+      TAKEOUT_WORK_DIR: workDir,
+    }));
+
+    const statusRes = await app.inject({ method: 'GET', url: '/takeout/status' });
+    expect(statusRes.statusCode).toBe(200);
+    expect(statusRes.json().externalRun).toEqual(expect.objectContaining({
+      pid: -1,
+      source: 'cli',
+    }));
+
+    const actionRes = await app.inject({ method: 'POST', url: '/takeout/actions/scan' });
+    expect(actionRes.statusCode).toBe(409);
+    expect(actionRes.json().error.code).toBe('EXTERNAL_JOB_RUNNING');
+
+    const autoUploadRes = await app.inject({
+      method: 'PUT',
+      url: '/takeout/auto-upload',
+      payload: { enabled: true },
+    });
+    expect(autoUploadRes.statusCode).toBe(409);
+    expect(autoUploadRes.json().error.code).toBe('EXTERNAL_JOB_RUNNING');
+
+    const resetRes = await app.inject({ method: 'POST', url: '/takeout/reset-upload-state' });
+    expect(resetRes.statusCode).toBe(409);
+    expect(resetRes.json().error.code).toBe('EXTERNAL_JOB_RUNNING');
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    await expect(fs.readFile(lockFile, 'utf8')).resolves.toBe('{not-json');
+
+    await app.close();
+  });
+
+  it('returns 409 for action and auto-upload start attempts when an external lock exists', async () => {
+    const workDir = path.join(tempDir, 'work');
+    const existing = await writeExternalRunLock(workDir);
+
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv({ TAKEOUT_WORK_DIR: workDir }));
+
+    const actionRes = await app.inject({ method: 'POST', url: '/takeout/actions/scan' });
+    expect(actionRes.statusCode).toBe(409);
+    expect(actionRes.json().error.code).toBe('EXTERNAL_JOB_RUNNING');
+
+    const autoUploadRes = await app.inject({
+      method: 'PUT',
+      url: '/takeout/auto-upload',
+      payload: { enabled: true },
+    });
+    expect(autoUploadRes.statusCode).toBe(409);
+    expect(autoUploadRes.json().error.code).toBe('EXTERNAL_JOB_RUNNING');
+
+    const statusRes = await app.inject({ method: 'GET', url: '/takeout/status' });
+    expect(statusRes.json().externalRun).toEqual(expect.objectContaining({
+      pid: existing.pid,
+      source: 'cli',
+      command: 'external takeout run',
+    }));
+    expect(spawnMock).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  // ─── Graceful pause for external CLI runs ───────────────────────────────
+
+  it('POST /takeout/actions/pause writes a pause flag when an external run holds the lock', async () => {
+    const workDir = path.join(tempDir, 'work');
+    const existing = await writeExternalRunLock(workDir);
+
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv({ TAKEOUT_WORK_DIR: workDir }));
+
+    const pauseFlagPath = path.join(workDir, '.takeout-pause.flag');
+    await expect(fs.access(pauseFlagPath)).rejects.toBeDefined();
+
+    const pauseRes = await app.inject({ method: 'POST', url: '/takeout/actions/pause' });
+    expect(pauseRes.statusCode).toBe(202);
+    const body = pauseRes.json();
+    expect(body.external).toBe(true);
+    expect(body.pid).toBe(existing.pid);
+
+    // Pause flag should now exist with a valid payload.
+    const flagRaw = await fs.readFile(pauseFlagPath, 'utf8');
+    const flag = JSON.parse(flagRaw) as { pausedAt: string; reason: string | null };
+    expect(flag.pausedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+    expect(flag.reason).toBe('pause requested via API');
+
+    await app.close();
+  });
+
+  it('GET /takeout/status surfaces externalRun.pausePending when the flag exists', async () => {
+    const workDir = path.join(tempDir, 'work');
+    await writeExternalRunLock(workDir);
+    await fs.writeFile(
+      path.join(workDir, '.takeout-pause.flag'),
+      JSON.stringify({ pausedAt: new Date().toISOString(), reason: 'manual' }),
+      'utf8',
+    );
+
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv({ TAKEOUT_WORK_DIR: workDir }));
+
+    const statusRes = await app.inject({ method: 'GET', url: '/takeout/status' });
+    expect(statusRes.statusCode).toBe(200);
+    expect(statusRes.json().externalRun).toEqual(expect.objectContaining({
+      pausePending: true,
+    }));
+
+    await app.close();
+  });
+
+  it('POST /takeout/actions/pause returns 409 when no run is in progress', async () => {
+    const workDir = path.join(tempDir, 'work');
+    await fs.mkdir(workDir, { recursive: true });
+
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv({ TAKEOUT_WORK_DIR: workDir }));
+
+    const res = await app.inject({ method: 'POST', url: '/takeout/actions/pause' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe('NO_ACTION_RUNNING');
+    await expect(
+      fs.access(path.join(workDir, '.takeout-pause.flag')),
+    ).rejects.toBeDefined();
+
+    await app.close();
+  });
+
+  it('clears a stale pause flag when starting a new upload action', async () => {
+    const inputDir = path.join(tempDir, 'input');
+    const workDir = path.join(tempDir, 'work');
+    await fs.mkdir(inputDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    // Drop a .tgz so the upload pre-flight check passes.
+    await fs.writeFile(path.join(inputDir, 'takeout-001.tgz'), 'dummy');
+    // Stale pause flag from a previous run.
+    await fs.writeFile(
+      path.join(workDir, '.takeout-pause.flag'),
+      JSON.stringify({ pausedAt: '2020-01-01T00:00:00.000Z', reason: 'stale' }),
+      'utf8',
+    );
+
+    spawnMock.mockImplementation(() => {
+      const c = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      c.stdout = new EventEmitter();
+      c.stderr = new EventEmitter();
+      c.kill = vi.fn();
+      queueMicrotask(() => {
+        c.stdout.emit('data', 'upload output\n');
+        c.emit('close', 0);
+      });
+      return c;
+    });
+
+    const app = Fastify();
+    await registerTakeoutRoutes(app, baseEnv({
+      TAKEOUT_INPUT_DIR: inputDir,
+      TAKEOUT_WORK_DIR: workDir,
+    }));
+
+    const res = await app.inject({ method: 'POST', url: '/takeout/actions/upload' });
+    expect(res.statusCode).toBe(202);
+
+    await expect(
+      fs.access(path.join(workDir, '.takeout-pause.flag')),
+    ).rejects.toBeDefined();
+
+    await app.close();
+  });
+
+  // ─── PUT /takeout/input-dir ─────────────────────────────────────────────────
 
   it('PUT /takeout/input-dir sets custom input dir and returns it resolved', async () => {
     const app = Fastify();
@@ -1321,6 +1535,154 @@ describe('takeout routes', () => {
     // Legacy archives have no skipReasons, so only failedCount is shown
     expect(archive.notUploadedReasons).toEqual([
       { code: 'upload_failed', label: 'Upload failed', count: 3 },
+    ]);
+
+    await app.close();
+  });
+
+  it('emits upload_failed_transient when archive has transientFailedCount', async () => {
+    const inputDir = path.join(tempDir, 'input');
+    const workDir = path.join(tempDir, 'work');
+    const statePath = path.join(tempDir, 'state.json');
+    await fs.mkdir(inputDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workDir, 'manifest.jsonl'),
+      `${JSON.stringify({ destinationKey: 'a.jpg' })}\n`,
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({ version: 1, updatedAt: '2025-01-01T00:00:00.000Z', items: {} }),
+    );
+    await fs.writeFile(
+      path.join(workDir, 'archive-state.json'),
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        archives: {
+          'takeout-trans.tgz': {
+            status: 'failed',
+            entryCount: 10,
+            uploadedCount: 7,
+            skippedCount: 0,
+            failedCount: 3,
+            transientFailedCount: 3,
+            permanentFailedCount: 0,
+            archiveSizeBytes: 100_000,
+          },
+        },
+      }),
+    );
+
+    const env = baseEnv({ TAKEOUT_INPUT_DIR: inputDir, TAKEOUT_WORK_DIR: workDir, TRANSFER_STATE_PATH: statePath });
+    const app = Fastify();
+    await registerTakeoutRoutes(app, env);
+
+    const res = await app.inject({ method: 'GET', url: '/takeout/status' });
+    const body = res.json();
+    expect(res.statusCode).toBe(200);
+    const archive = body.archiveHistory[0];
+    expect(archive.notUploadedReasons).toEqual([
+      { code: 'upload_failed_transient', label: 'Upload failed (will retry next pass)', count: 3 },
+    ]);
+
+    await app.close();
+  });
+
+  it('emits upload_failed_permanent when archive has permanentFailedCount', async () => {
+    const inputDir = path.join(tempDir, 'input');
+    const workDir = path.join(tempDir, 'work');
+    const statePath = path.join(tempDir, 'state.json');
+    await fs.mkdir(inputDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workDir, 'manifest.jsonl'),
+      `${JSON.stringify({ destinationKey: 'a.jpg' })}\n`,
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({ version: 1, updatedAt: '2025-01-01T00:00:00.000Z', items: {} }),
+    );
+    await fs.writeFile(
+      path.join(workDir, 'archive-state.json'),
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        archives: {
+          'takeout-perm.tgz': {
+            status: 'failed',
+            entryCount: 10,
+            uploadedCount: 8,
+            skippedCount: 0,
+            failedCount: 2,
+            transientFailedCount: 0,
+            permanentFailedCount: 2,
+            archiveSizeBytes: 100_000,
+          },
+        },
+      }),
+    );
+
+    const env = baseEnv({ TAKEOUT_INPUT_DIR: inputDir, TAKEOUT_WORK_DIR: workDir, TRANSFER_STATE_PATH: statePath });
+    const app = Fastify();
+    await registerTakeoutRoutes(app, env);
+
+    const res = await app.inject({ method: 'GET', url: '/takeout/status' });
+    const body = res.json();
+    expect(res.statusCode).toBe(200);
+    const archive = body.archiveHistory[0];
+    expect(archive.notUploadedReasons).toEqual([
+      { code: 'upload_failed_permanent', label: 'Upload failed (needs re-run)', count: 2 },
+    ]);
+
+    await app.close();
+  });
+
+  it('emits both transient and permanent codes when archive has both counts', async () => {
+    const inputDir = path.join(tempDir, 'input');
+    const workDir = path.join(tempDir, 'work');
+    const statePath = path.join(tempDir, 'state.json');
+    await fs.mkdir(inputDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workDir, 'manifest.jsonl'),
+      `${JSON.stringify({ destinationKey: 'a.jpg' })}\n`,
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({ version: 1, updatedAt: '2025-01-01T00:00:00.000Z', items: {} }),
+    );
+    await fs.writeFile(
+      path.join(workDir, 'archive-state.json'),
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        archives: {
+          'takeout-both.tgz': {
+            status: 'failed',
+            entryCount: 10,
+            uploadedCount: 5,
+            skippedCount: 0,
+            failedCount: 5,
+            transientFailedCount: 3,
+            permanentFailedCount: 2,
+            archiveSizeBytes: 100_000,
+          },
+        },
+      }),
+    );
+
+    const env = baseEnv({ TAKEOUT_INPUT_DIR: inputDir, TAKEOUT_WORK_DIR: workDir, TRANSFER_STATE_PATH: statePath });
+    const app = Fastify();
+    await registerTakeoutRoutes(app, env);
+
+    const res = await app.inject({ method: 'GET', url: '/takeout/status' });
+    const body = res.json();
+    expect(res.statusCode).toBe(200);
+    const archive = body.archiveHistory[0];
+    expect(archive.notUploadedReasons).toEqual([
+      { code: 'upload_failed_transient', label: 'Upload failed (will retry next pass)', count: 3 },
+      { code: 'upload_failed_permanent', label: 'Upload failed (needs re-run)', count: 2 },
     ]);
 
     await app.close();

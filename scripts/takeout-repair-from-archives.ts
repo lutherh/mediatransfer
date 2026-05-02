@@ -18,6 +18,7 @@
  *   npx tsx scripts/takeout-repair-from-archives.ts --start-at 50            # resume from archive #50
  */
 import * as dotenv from 'dotenv';
+import { ensureCaffeinate } from "../src/utils/caffeinate.js";
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -34,6 +35,7 @@ import {
 } from './lib/repair-helpers.js';
 
 dotenv.config();
+ensureCaffeinate();
 
 // ── Parse arguments ─────────────────────────────────────────────
 

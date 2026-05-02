@@ -164,6 +164,25 @@ export type TakeoutStatus = {
   pipeline?: PipelineSummary;
   /** Whether auto-upload mode is enabled */
   autoUpload?: boolean;
+  /**
+   * Set when a foreign takeout writer (CLI overnight job, etc.) holds the
+   * run lock. While present, all mutation buttons in the UI must be
+   * disabled — the API will reject them with EXTERNAL_JOB_RUNNING anyway.
+   */
+  externalRun?: {
+    pid: number;
+    startedAt: string;
+    source: 'cli' | 'api';
+    command: string;
+    lastSeenAt?: string;
+    /**
+     * True when a graceful pause has already been requested for this
+     * external run. The CLI will exit cleanly after its current archive
+     * boundary; the UI uses this to switch the Pause button to a
+     * "Pause requested..." state to prevent duplicate clicks.
+     */
+    pausePending?: boolean;
+  } | null;
 };
 
 export type TakeoutArchiveHistoryEntry = {
@@ -182,7 +201,9 @@ export type TakeoutArchiveHistoryEntry = {
       | 'already_exists_in_destination'
       | 'already_uploaded_in_state'
       | 'already_skipped_in_state'
-      | 'upload_failed';
+      | 'upload_failed'
+      | 'upload_failed_transient'
+      | 'upload_failed_permanent';
     label: string;
     count: number;
   }>;

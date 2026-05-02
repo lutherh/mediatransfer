@@ -2,11 +2,14 @@ import * as dotenv from 'dotenv';
 import path from 'node:path';
 import { loadTakeoutConfig, parseTakeoutPathArgs } from '../src/takeout/config.js';
 import { runTakeoutIncremental } from '../src/takeout/incremental.js';
+import { clearPauseFlag } from '../src/takeout/pause-flag.js';
 import type { UploadProgressSnapshot } from '../src/takeout/uploader.js';
 import { validateScalewayConfig, ScalewayProvider } from '../src/providers/scaleway.js';
 import { formatDuration, formatBytes } from '../src/utils/format.js';
+import { ensureCaffeinate } from '../src/utils/caffeinate.js';
 
 dotenv.config();
+ensureCaffeinate();
 
 const args = process.argv.slice(2);
 const pathOverrides = parseTakeoutPathArgs(args);
@@ -63,6 +66,9 @@ const result = await runTakeoutIncremental(
     onUploadProgress(_archiveName, snapshot) {
       progressTracker.render(snapshot);
     },
+    onPaused(remaining) {
+      console.log(`\n⏸️  Graceful pause requested — stopping after current archive (${remaining} archive(s) still pending).`);
+    },
   },
 );
 progressTracker.complete();
@@ -78,6 +84,12 @@ if (result.reportCsvPath) console.log(`   Report CSV: ${result.reportCsvPath}`);
 
 if (result.totalFailed > 0) {
   process.exitCode = 2;
+}
+
+if (result.paused) {
+  await clearPauseFlag(config.workDir);
+  console.log('⏸️  Run paused gracefully at archive boundary. Re-run upload to resume.');
+  process.exitCode = 4;
 }
 
 function readStringArg(args: string[], name: string): string | undefined {
