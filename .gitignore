@@ -18,6 +18,9 @@ src/generated/
 data/takeout/google-api-state.json
 data/takeout/input/
 data/takeout/work/
+data/takeout/smoketest-input/
+data/takeout/smoketest-work/
+data/takeout/auto-upload.json
 data/takeout/state.json
 data/takeout/state.backup.json
 debug-output.txt
