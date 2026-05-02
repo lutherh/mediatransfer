@@ -115,15 +115,32 @@ PID_FILE="${MOUNT_POINT%/}.rclone.pid"
 
 # Unmount
 if [[ "${1:-}" == "--unmount" || "${1:-}" == "-u" ]]; then
-  # 1) Flush the rclone vfs writeback cache FIRST — before tearing the mount
+  # 1) Drain the rclone vfs writeback queue FIRST — before tearing the mount
   #    down. Unmounting can kill the rc server (or invalidate cache state),
   #    so any in-flight writes (--vfs-cache-mode writes) would be lost.
+  #
+  #    There is NO `vfs/sync` rc method on rclone 1.x (only forget|list|
+  #    queue|queue-set-expiry|refresh|stats). The correct primitive is to
+  #    poll `vfs/queue` until it reports zero pending uploads. Earlier
+  #    versions of this script called the non-existent `vfs/sync` and the
+  #    `|| true` masked the 404 — it was relying on rclone's graceful
+  #    SIGTERM drain (ExitTimeOut=900s in launchd) the whole time.
   if command -v rclone &>/dev/null; then
-    if rclone rc rc/noopauth --unix-socket "$RC_SOCK" --timeout 3s &>/dev/null; then
-      echo "Flushing rclone vfs cache via rc on $RC_SOCK ..."
-      rclone rc vfs/sync --unix-socket "$RC_SOCK" --timeout 120s 2>/dev/null || true
+    if rclone rc rc/noop --unix-socket "$RC_SOCK" --timeout 3s &>/dev/null; then
+      echo "Draining rclone vfs writeback queue via rc on $RC_SOCK ..."
+      drain_deadline=$(( $(date +%s) + 120 ))
+      while [ "$(date +%s)" -lt "$drain_deadline" ]; do
+        q_len=$(rclone rc vfs/queue --unix-socket "$RC_SOCK" --timeout 5s 2>/dev/null \
+          | jq -r '[.queue[]?] | length' 2>/dev/null || echo 0)
+        if [ "${q_len:-0}" = "0" ]; then
+          echo "  writeback queue empty"
+          break
+        fi
+        echo "  $q_len item(s) still pending; sleeping 2s"
+        sleep 2
+      done
     else
-      echo "WARN: rclone rc unreachable at $RC_SOCK — skipping vfs/sync (writeback cache may not be flushed)" >&2
+      echo "WARN: rclone rc unreachable at $RC_SOCK — skipping queue drain (relying on rclone SIGTERM grace period)" >&2
     fi
   fi
   # 2) Unmount the filesystem.
@@ -225,6 +242,10 @@ if [[ "${1:-}" == "--background" || "${1:-}" == "-b" ]]; then
   # window between bind() and rclone's chmod(). Parity with --supervised /
   # foreground branches below. See security review P3-1.
   umask 077
+  # Clear any stale Unix socket from a previously crashed rclone — otherwise
+  # bind() returns EADDRINUSE and rclone retries forever ("Failed to start
+  # remote control: ... bind: address already in use").
+  rm -f "$RC_SOCK" 2>/dev/null || true
   rclone "${RCLONE_ARGS[@]}"
   # Capture the PID of the daemon rclone forks. `rclone --daemon` double-forks,
   # so we record the most recent rclone PID owning this mount point.
@@ -243,10 +264,15 @@ elif [[ "${1:-}" == "--supervised" ]]; then
   # Tighten umask so the rc Unix socket is created 0600 even in the brief
   # window between bind() and rclone's chmod(). See security review P3-1.
   umask 077
+  # Clear any stale Unix socket from a prior rclone instance — launchd's
+  # SIGKILL on ExitTimeOut can leave the socket file behind, and the next
+  # supervised launch then loops on EADDRINUSE forever.
+  rm -f "$RC_SOCK" 2>/dev/null || true
   exec rclone "${RCLONE_ARGS[@]}"
 else
   echo "Mount running in foreground. Press Ctrl+C to stop."
   echo ""
   umask 077
+  rm -f "$RC_SOCK" 2>/dev/null || true
   exec rclone "${RCLONE_ARGS[@]}"
 fi
