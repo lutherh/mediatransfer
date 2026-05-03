@@ -218,14 +218,42 @@ RCLONE_ARGS=(
   --s3-endpoint "$ENDPOINT"
   --s3-region "$SIGNING_REGION"
   ${STORAGE_CLASS:+--s3-storage-class "$STORAGE_CLASS"}
-  --vfs-cache-mode writes
+  # `full` (vs `writes`) caches READS to disk too. Critical for Finder
+  # browsing on a remote bucket: without it, every QuickLook / icon-preview
+  # re-fetches the file from Scaleway nl-ams on each access. With `full`,
+  # the second open is local-disk fast.
+  --vfs-cache-mode full
   --vfs-write-back 5s
-  --vfs-cache-max-age 1h
-  --vfs-cache-max-size 2G
+  # Keep cached reads for a day; LRU-evicted by --vfs-cache-max-size.
+  --vfs-cache-max-age 24h
+  # 20 GiB read cache under ~/Library/Caches/rclone — enough to hold a
+  # working set of recently-browsed photos/videos.
+  --vfs-cache-max-size 20G
+  # Refuse to grow the cache when the disk has < 5 GiB free. Prevents
+  # rclone from filling the boot volume if ~/Library/Caches lives there.
+  --vfs-cache-min-free-space 5G
+  # Pre-fetch the next 128 MiB on sequential reads. Big QuickLook win for
+  # video scrubbing; only meaningful with --vfs-cache-mode full.
+  --vfs-read-ahead 128M
+  # Use only modtime+size for cache-invalidation fingerprinting (skip the
+  # slower hash check). Safe for an immutable photo archive — rclone still
+  # re-fetches if size or mtime changes.
+  --vfs-fast-fingerprint
   --vfs-read-chunk-size 16M
   --vfs-read-chunk-size-limit 64M
-  --dir-cache-time 30s
-  --poll-interval 0
+  # 5 minutes is the freshness ceiling for new objects written to S3
+  # OUT-OF-BAND (i.e. by MediaTransfer's S3 SDK, bypassing this mount).
+  # We CANNOT use a longer value here: the S3 backend silently ignores
+  # --poll-interval ("poll-interval is not supported by this remote"),
+  # so dir-cache-time is the ONLY freshness mechanism. Going higher than
+  # 5m means Immich's library scan can miss freshly-uploaded assets for
+  # up to that long. If you need lower latency, push an explicit
+  # `rclone rc --unix-socket data/rclone-rc.sock vfs/refresh dir=<path>`
+  # from the upload pipeline after each batch.
+  --dir-cache-time 5m
+  # Recursively warm the dir cache at mount time so the first Finder click
+  # doesn't have to round-trip to nl-ams to enumerate the bucket root.
+  --vfs-refresh
   --transfers 8
   --s3-chunk-size 16M
   # Default --low-level-retries=10 is intentional — do not lower; flaky
