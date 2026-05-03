@@ -142,7 +142,14 @@ services:
     # ghcr.io/immich-app/immich-server:release (pinned 2026-04-29)
     image: ghcr.io/immich-app/immich-server@sha256:c15bff75068effb03f4355997d03dc7e0fc58720c2b54ad6f7f10d1bc57efaa5
     container_name: immich_server
-    restart: unless-stopped
+    # `on-failure:5` (not `unless-stopped`) so a deterministic boot failure
+    # (e.g. StorageService ENOENT on a `.immich` sentinel after an rclone
+    # mount race — see /memories/repo/immich-init-sentinel-crash-loop-2026-05.md)
+    # stops silently retrying after 5 attempts. A loud `Exited (1)` is far
+    # better than a hidden 29-restart flap that the user only notices as
+    # "photos load slowly". The watchdog (immich-queue-watchdog.sh) also
+    # alerts on RestartCount delta as a defence in depth.
+    restart: on-failure:5
     stop_grace_period: 30s
     ports:
       # Bind on both the LAN IP (so phones on home Wi-Fi can upload
@@ -187,7 +194,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      # 180s (was 30s) — gives rclone NFS dir-cache time to revalidate
+      # `/usr/src/app/upload/{library,upload}/.immich` after a cold mount.
+      # On macOS the rclone NFS attribute cache can return stale ENOENT for
+      # a fresh write from the immich-init sidecar, deterministically
+      # crashing the StorageService integrity check. Stretching start_period
+      # rides out that window before Docker counts the container unhealthy.
+      # See agent investigation 2026-05-03 (29-restart crash loop).
+      start_period: 180s
 
   immich-machine-learning:
     # ghcr.io/immich-app/immich-machine-learning:release (pinned 2026-04-29)

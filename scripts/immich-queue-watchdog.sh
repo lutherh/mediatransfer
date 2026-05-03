@@ -38,7 +38,12 @@
 #
 # Exit codes:
 #   0   healthy, OR only advisory missing-workers signal (lazy connect)
-#   2   one or more queues stalled (confirmed across two samples)
+#   2   one or more queues stalled (confirmed across two samples), OR
+#       immich_server is in a restart loop (RestartCount delta >= 3 within
+#       a watchdog tick — typically 5 min apart). Restart-loop alerts do
+#       NOT trigger --auto-restart: bouncing a flapping container makes it
+#       worse. Operator must investigate (`docker logs immich_server`,
+#       check rclone NFS mount, .env.immich sentinels in S3).
 #   3   immich_server / immich_redis / S3 mount unreachable
 #  64   bad CLI usage
 #
@@ -189,14 +194,28 @@ for q in "${QUEUES[@]}"; do
   fi
 done
 
+# --- Sample immich_server restart-count for crash-loop detection ---
+# A 30s start_period + ENOENT on /usr/src/app/upload/library/.immich (rclone
+# NFS attribute-cache race after a cold mount) deterministically crashes
+# StorageService, killing the api process. Docker auto-restarts with
+# unless-stopped → silent flap. The /api/server/ping check passes briefly
+# during each Up window so /api/jobs and the stall rule never fire. Track
+# RestartCount as a separate signal. (immich-init-sentinel-crash-loop-2026-05)
+now_ts=$(date +%s)
+restart_count=$(docker inspect -f '{{.RestartCount}}' "$SERVER_CTR" 2>/dev/null || echo 0)
+
 # --- Compare to previous sample, persist new one ---
 prev_stalled=""
 prev_restart_ts=0
+prev_restart_count=$restart_count
+prev_restart_count_ts=$now_ts
 if [ -f "$STATE_FILE" ]; then
   # shellcheck disable=SC1090
   source "$STATE_FILE" 2>/dev/null || true
   prev_stalled="${PREV_STALLED:-}"
   prev_restart_ts="${PREV_RESTART_TS:-0}"
+  prev_restart_count="${PREV_RESTART_COUNT:-$restart_count}"
+  prev_restart_count_ts="${PREV_RESTART_COUNT_TS:-$now_ts}"
 fi
 
 confirmed_stall=()
@@ -207,9 +226,21 @@ for cur in "${stalled[@]:-}"; do
   fi
 done
 
+# Crash-loop detection: ≥3 restarts within the last sample window
+# (≤ 600s = 2 normal 5-min watchdog ticks) means immich_server is
+# flapping faster than the watchdog cadence and needs operator eyes.
+restart_delta=$(( restart_count - prev_restart_count ))
+restart_window=$(( now_ts - prev_restart_count_ts ))
+crash_loop=0
+if [ "$restart_delta" -ge 3 ] && [ "$restart_window" -gt 0 ] && [ "$restart_window" -le 600 ]; then
+  crash_loop=1
+fi
+
 {
   echo "PREV_STALLED=\"${stalled[*]:-}\""
   echo "PREV_RESTART_TS=${prev_restart_ts}"
+  echo "PREV_RESTART_COUNT=${restart_count}"
+  echo "PREV_RESTART_COUNT_TS=${now_ts}"
 } > "$STATE_FILE"
 
 # --- Report ---
@@ -249,9 +280,16 @@ if [ "${#confirmed_stall[@]}" -gt 0 ]; then
   log "ALERT stalled queues (2 consecutive samples): ${confirmed_stall[*]}"
   status=2
 fi
+if [ "$crash_loop" = 1 ]; then
+  log "ALERT immich_server crash-loop: RestartCount ${prev_restart_count} -> ${restart_count} in ${restart_window}s (no auto-recovery — investigate manually: docker logs $SERVER_CTR, rclone mount, .env.immich sentinels)"
+  status=2
+fi
 
-# --- Auto-recovery (only on confirmed stall) ---
-if [ "$AUTO_RESTART" = 1 ] && [ "$status" -eq 2 ]; then
+# --- Auto-recovery (only on confirmed queue stall, NOT crash-loop) ---
+# Bouncing a container that's already in a restart loop just feeds the loop;
+# a crash-loop alert (status=2 set by crash_loop=1) needs human eyes, not
+# another stop+start. Gate auto-restart strictly on confirmed_stall.
+if [ "$AUTO_RESTART" = 1 ] && [ "${#confirmed_stall[@]}" -gt 0 ]; then
   now=$(date +%s)
   age=$(( now - prev_restart_ts ))
   if [ "$age" -lt "$RESTART_COOLDOWN" ]; then
@@ -269,10 +307,14 @@ if [ "$AUTO_RESTART" = 1 ] && [ "$status" -eq 2 ]; then
   docker stop "$SERVER_CTR" 2>&1 | tee -a "$LOG_FILE"
   docker start "$SERVER_CTR" 2>&1 | tee -a "$LOG_FILE"
 
-  # Persist restart timestamp.
+  # Persist restart timestamp. Preserve crash-loop tracking fields so a
+  # successful watchdog-triggered restart doesn't reset the RestartCount
+  # baseline we use for crash-loop detection.
   {
     echo "PREV_STALLED=\"${stalled[*]:-}\""
     echo "PREV_RESTART_TS=${now}"
+    echo "PREV_RESTART_COUNT=${restart_count}"
+    echo "PREV_RESTART_COUNT_TS=${now_ts}"
   } > "$STATE_FILE"
   log "auto-restart done — next watchdog tick will re-verify"
 fi
