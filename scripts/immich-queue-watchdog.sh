@@ -109,26 +109,17 @@ b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
 # instead of triggering --auto-restart. (architect Risk #3, devops Risk #2)
 MOUNT_POINT="$ROOT_DIR/data/immich-s3"
 if mount | grep -Fq " $MOUNT_POINT "; then
-  # Bounded liveness probe — a wedged NFS endpoint can hang on `cd`/`ls`/`-d`,
-  # and Perl's in-process `alarm` does NOT interrupt kernel D-state syscalls
-  # like `stat()`. Use the same fork-and-SIGKILL idiom as start-all.sh's
-  # probe_mount_live() so SIGALRM in the parent can kill -9 a wedged child.
-  if ! perl -e '
-    use strict; use warnings;
-    my ($path, $secs) = @ARGV;
-    my $pid = fork();
-    if (!defined $pid) { exit 2; }
-    if ($pid == 0) {
-      open STDOUT, ">", "/dev/null"; open STDERR, ">", "/dev/null";
-      exec("/bin/ls", "-1", "$path/library") or exit 127;
-    }
-    local $SIG{ALRM} = sub { kill 9, $pid; waitpid($pid, 0); exit 3; };
-    alarm $secs;
-    waitpid($pid, 0);
-    my $code = $? >> 8;
-    exit($code == 0 ? 0 : 1);
-  ' "$MOUNT_POINT" 5; then
-    log "FATAL: $MOUNT_POINT mounted but library/ unreadable (stale NFS / rclone crash-loop / not yet provisioned) — fix s3mount, not Immich"
+  # Bounded liveness probe via rclone's rc Unix socket. We cannot use the
+  # filesystem (e.g. `ls $MOUNT_POINT/library`) because launchd-spawned
+  # processes hit macOS TCC and get EPERM on the NFS mount even though
+  # the caller owns it. `rc/noop` against the user-owned 0600 Unix socket
+  # is unaffected by TCC and proves that rclone is alive (which is the
+  # only thing we actually need to know — if rclone is up, the NFS
+  # endpoint is up). See start-all.sh probe_mount_live() for the same
+  # rationale.
+  if [ ! -S "$RC_SOCK" ] \
+     || ! rclone rc rc/noop --unix-socket "$RC_SOCK" --timeout 5s >/dev/null 2>&1; then
+    log "FATAL: rclone rc unreachable at $RC_SOCK — mount $MOUNT_POINT may be stale (rclone crash-loop / not yet provisioned). Fix s3mount, not Immich."
     exit 3
   fi
 else

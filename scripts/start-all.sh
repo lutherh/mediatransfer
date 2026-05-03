@@ -128,25 +128,22 @@ ensure_macos_s3_mount() {
   # always present in the canonical photosync/immich layout) with a 5s
   # bound to avoid hanging on a wedged NFS endpoint. See AGENTS.md
   # "Things that bite" — stale FUSE / dead NFS look identical from `mount`.
+  #
+  # Implementation note: an earlier perl-based `alarm`+`waitpid` probe was
+  # subject to macOS safe-signal deferral. We then tried a bash background
+  # `ls`+kill watchdog, but discovered that launchd-spawned processes
+  # cannot read paths under the rclone NFS mount on modern macOS — `ls`
+  # returns EPERM ("Operation not permitted") under TCC even though the
+  # caller owns the mount, while the same `ls` from a Terminal-spawned
+  # shell succeeds. The cure is to bypass the filesystem entirely: probe
+  # rclone's rc Unix socket. If rclone responds to `rc/noop`, the daemon
+  # is alive and the mount is by definition served. The socket is owned
+  # 0600 by the user and is not subject to the same TCC gate as the
+  # NFS path.
   probe_mount_live() {
-    local target="$1"
-    # Use a backgrounded `ls` + perl-bounded wait. macOS lacks GNU `timeout`
-    # by default; perl is shipped with the system and gives us a hard cap.
-    perl -e '
-      use strict; use warnings;
-      my ($path, $secs) = @ARGV;
-      my $pid = fork();
-      if (!defined $pid) { exit 2; }
-      if ($pid == 0) {
-        open STDOUT, ">", "/dev/null"; open STDERR, ">", "/dev/null";
-        exec("/bin/ls", "-1", "$path/library") or exit 127;
-      }
-      local $SIG{ALRM} = sub { kill 9, $pid; waitpid($pid, 0); exit 3; };
-      alarm $secs;
-      waitpid($pid, 0);
-      my $code = $? >> 8;
-      exit($code == 0 ? 0 : 1);
-    ' "$target" 5
+    local rc_sock="$SCRIPT_DIR/../data/rclone-rc.sock"
+    [ -S "$rc_sock" ] || return 1
+    rclone rc rc/noop --unix-socket "$rc_sock" --timeout 5s >/dev/null 2>&1
   }
 
   if is_nfs_mounted "$abs_mount"; then
