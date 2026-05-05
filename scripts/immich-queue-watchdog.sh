@@ -43,7 +43,13 @@
 #       a watchdog tick — typically 5 min apart). Restart-loop alerts do
 #       NOT trigger --auto-restart: bouncing a flapping container makes it
 #       worse. Operator must investigate (`docker logs immich_server`,
-#       check rclone NFS mount, .env.immich sentinels in S3).
+#       check rclone NFS mount, .env.immich sentinels in S3). Also raised
+#       on thumb-drift: files-on-disk count under data/immich/thumbs is
+#       <THUMB_DRIFT_RATIO (default 0.75) of asset_file preview+thumbnail
+#       row count — typically a host-side wipe; recover with
+#       `curl -X PUT /api/jobs/thumbnailGeneration -d
+#       '{"command":"start","force":true}'`. Drift never triggers
+#       --auto-restart (no container at fault).
 #   3   immich_server / immich_redis / S3 mount unreachable
 #  64   bad CLI usage
 #
@@ -65,7 +71,24 @@ mkdir -p "$LOG_DIR"
 
 REDIS_CTR="${IMMICH_REDIS_CTR:-immich_redis}"
 SERVER_CTR="${IMMICH_SERVER_CTR:-immich_server}"
+POSTGRES_CTR="${IMMICH_POSTGRES_CTR:-immich_postgres}"
 API_BASE="${IMMICH_API_BASE:-http://127.0.0.1:2283}"
+
+# Thumb drift detector: compare files on disk under THUMBS_DIR to
+# preview/thumbnail rows in asset_file. Catches the failure mode
+# observed on 2026-04-28 where the host-side data/immich/thumbs dir
+# was wiped (during a macOS-native NFS pivot) leaving ~78k orphan DB
+# rows; "Generate Thumbnails (Missing)" then silently skipped them
+# because Immich's NOT EXISTS query trusts the DB and never stats the
+# disk. The /api/server/ping healthcheck stayed green throughout —
+# users only noticed via slow photo-viewer loads (preview 500 →
+# fallback to /original 4 MB fetch). See findings 2026-05-05.
+THUMBS_DIR="${IMMICH_THUMBS_DIR:-$ROOT_DIR/data/immich/thumbs}"
+# Alert when (files_on_disk / db_rows) < this. 0.75 = alert at 25% loss.
+THUMB_DRIFT_RATIO="${IMMICH_THUMB_DRIFT_RATIO:-0.75}"
+# Skip the check entirely if there are fewer than this many DB rows
+# (avoids noise on a fresh empty install). Default: 100.
+THUMB_DRIFT_MIN_ROWS="${IMMICH_THUMB_DRIFT_MIN_ROWS:-100}"
 
 # API key for /api/jobs. Created in the Immich UI (Account Settings ->
 # API Keys). Stored in .env.immich as IMMICH_WATCHDOG_API_KEY=<key>.
@@ -122,10 +145,27 @@ if mount | grep -Fq " $MOUNT_POINT "; then
   # only thing we actually need to know — if rclone is up, the NFS
   # endpoint is up). See start-all.sh probe_mount_live() for the same
   # rationale.
-  if [ ! -S "$RC_SOCK" ] \
-     || ! rclone rc rc/noop --unix-socket "$RC_SOCK" --timeout 5s >/dev/null 2>&1; then
-    log "FATAL: rclone rc unreachable at $RC_SOCK — mount $MOUNT_POINT may be stale (rclone crash-loop / not yet provisioned). Fix s3mount, not Immich."
-    exit 3
+  #
+  # Per-attempt timeout is 5s and we retry once after a 2s backoff. A
+  # single 5s probe was tripping on transient NFS metadata blips (rclone
+  # vfs cache GC, brief Scaleway latency spikes) and producing FATAL
+  # exit 3 false alarms (Finding D, 2026-05-05). A truly wedged mount
+  # fails BOTH attempts, so AGENTS.md's hard rule "watchdog must refuse
+  # to act on wedged mount" is preserved. Worst-case latency is ~12s
+  # (5 + 2 + 5), still well inside the 5-min watchdog tick. Do NOT just
+  # bump the per-attempt timeout — that would let a truly dead rclone
+  # block the watchdog for the full timeout every tick.
+  probe_rclone_live() {
+    [ -S "$RC_SOCK" ] || return 1
+    rclone rc rc/noop --unix-socket "$RC_SOCK" --timeout 5s >/dev/null 2>&1
+  }
+  if ! probe_rclone_live; then
+    sleep 2
+    if ! probe_rclone_live; then
+      log "FATAL: rclone rc unreachable at $RC_SOCK — mount $MOUNT_POINT may be stale (rclone crash-loop / not yet provisioned). Fix s3mount, not Immich."
+      exit 3
+    fi
+    log "WARN: rclone rc probe failed once, recovered on retry — mount $MOUNT_POINT had a transient blip"
   fi
 else
   log "FATAL: $MOUNT_POINT not mounted — fix s3mount, not Immich"
@@ -141,7 +181,18 @@ if [ -z "$API_KEY" ]; then
   log "FATAL: IMMICH_WATCHDOG_API_KEY not set (export it or add to .env.immich)"
   exit 3
 fi
-JOBS_JSON="$(curl -fsS -m 10 -H "x-api-key: $API_KEY" "$API_BASE/api/jobs" 2>/dev/null || true)"
+# Pass the API key via curl's -K config on stdin so the value never appears
+# in argv. Header values written via `-H "x-api-key: $KEY"` show up in
+# `ps -ef` and /proc/<pid>/cmdline to all local UIDs for the lifetime of
+# every poll (every 5 min via the LaunchAgent), letting any local process
+# harvest the key. -K reads curl config from stdin; the header value never
+# touches argv, the filesystem, or the env. Defensive escape of " and \
+# for curl's config-file syntax (Immich UI keys are alphanumeric +
+# `-_.` so this is belt-and-braces).
+_api_key_escaped=$(printf '%s' "$API_KEY" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+JOBS_JSON="$(printf 'header = "x-api-key: %s"\n' "$_api_key_escaped" \
+  | curl -fsS -m 10 -K- "$API_BASE/api/jobs" 2>/dev/null || true)"
+unset _api_key_escaped
 if [ -z "$JOBS_JSON" ]; then
   log "FATAL: $API_BASE/api/jobs unreachable or auth rejected"
   exit 3
@@ -172,7 +223,7 @@ if [ "${#QUEUES[@]}" -eq 0 ]; then
 fi
 
 # --- Sample each queue ---
-declare -a missing_workers stalled rows
+declare -a missing_workers stalled paused_backlog rows
 for q in "${QUEUES[@]}"; do
   name_tag="immich_bull:$(b64 "$q")"
   workers=$(printf '%s\n' "$CLIENT_LIST" \
@@ -191,6 +242,15 @@ for q in "${QUEUES[@]}"; do
   # those are intentional.
   if [ "$paused" = "false" ] && [ "$wait_n" -gt "$WAIT_THRESHOLD" ] && [ "$active_n" -eq 0 ]; then
     stalled+=("$q:$wait_n")
+  fi
+  # Paused-with-backlog rule (advisory only, 2026-05-03): catches the
+  # concurrency-change wedge where JobRepository.waitForQueueCompletion()
+  # spins forever because active never hits 0 under load. The queue is
+  # legitimately paused (so the stall rule won't fire and we won't auto-
+  # restart — pausing is also a valid user action), but a paused queue
+  # with persistent backlog is suspicious. Surfaced as an INFO log only.
+  if [ "$paused" = "true" ] && [ "$wait_n" -gt 0 ]; then
+    paused_backlog+=("$q:$wait_n")
   fi
 done
 
@@ -226,6 +286,15 @@ for cur in "${stalled[@]:-}"; do
   fi
 done
 
+prev_paused_backlog="${PREV_PAUSED_BACKLOG:-}"
+confirmed_paused_backlog=()
+for cur in "${paused_backlog[@]:-}"; do
+  cur_q="${cur%%:*}"
+  if printf '%s' "$prev_paused_backlog" | tr ' ' '\n' | grep -qE "^${cur_q}:"; then
+    confirmed_paused_backlog+=("$cur")
+  fi
+done
+
 # Crash-loop detection: ≥3 restarts within the last sample window
 # (≤ 600s = 2 normal 5-min watchdog ticks) means immich_server is
 # flapping faster than the watchdog cadence and needs operator eyes.
@@ -238,10 +307,45 @@ fi
 
 {
   echo "PREV_STALLED=\"${stalled[*]:-}\""
+  echo "PREV_PAUSED_BACKLOG=\"${paused_backlog[*]:-}\""
   echo "PREV_RESTART_TS=${prev_restart_ts}"
   echo "PREV_RESTART_COUNT=${restart_count}"
   echo "PREV_RESTART_COUNT_TS=${now_ts}"
 } > "$STATE_FILE"
+
+# --- Thumb drift detector (2026-05-05) ---
+# Compare files on disk vs DB rows; alert (status=2) if a large
+# fraction of derivatives are missing. Advisory only — there is no
+# safe auto-recovery (forced regen is heavy and the operator should
+# choose the moment). The signal lights up on the next watchdog tick
+# after a host-side wipe, instead of waiting for a user complaint.
+thumb_db_rows=0
+thumb_disk_files=0
+thumb_drift_alert=0
+thumb_drift_skip=""
+if ! docker inspect -f '{{.State.Running}}' "$POSTGRES_CTR" 2>/dev/null | grep -q true; then
+  thumb_drift_skip="postgres_not_running"
+elif [ ! -d "$THUMBS_DIR" ]; then
+  thumb_drift_skip="thumbs_dir_missing"
+else
+  thumb_db_rows=$(docker exec -i "$POSTGRES_CTR" psql -U immich -d immich -tA \
+    -c "SELECT count(*) FROM asset_file WHERE type IN ('preview','thumbnail');" 2>/dev/null \
+    | tr -d '[:space:]' || echo 0)
+  thumb_db_rows=${thumb_db_rows:-0}
+  # Cheap file count — find on host SSD, ~80k entries is sub-second.
+  thumb_disk_files=$(find "$THUMBS_DIR" -type f \( -name '*.webp' -o -name '*.jpeg' -o -name '*.jpg' \) 2>/dev/null | wc -l | tr -d '[:space:]')
+  thumb_disk_files=${thumb_disk_files:-0}
+
+  if [ "$thumb_db_rows" -ge "$THUMB_DRIFT_MIN_ROWS" ]; then
+    # Integer comparison: files * 100 < rows * (ratio * 100)
+    ratio_pct=$(awk -v r="$THUMB_DRIFT_RATIO" 'BEGIN{printf "%d", r*100}')
+    lhs=$(( thumb_disk_files * 100 ))
+    rhs=$(( thumb_db_rows * ratio_pct ))
+    if [ "$lhs" -lt "$rhs" ]; then
+      thumb_drift_alert=1
+    fi
+  fi
+fi
 
 # --- Report ---
 # Helper: serialize a bash array to a JSON array, emitting [] (not [""]) when
@@ -263,8 +367,13 @@ if [ "$JSON" = 1 ]; then
   printf '%s' "$JOBS_JSON" | jq \
     --argjson missing "$(json_array ${missing_workers[@]+"${missing_workers[@]}"})" \
     --argjson stalled "$(json_array ${confirmed_stall[@]+"${confirmed_stall[@]}"})" \
+    --argjson paused_backlog "$(json_array ${confirmed_paused_backlog[@]+"${confirmed_paused_backlog[@]}"})" \
+    --argjson thumb_disk "${thumb_disk_files:-0}" \
+    --argjson thumb_db "${thumb_db_rows:-0}" \
+    --argjson thumb_alert "${thumb_drift_alert:-0}" \
+    --arg thumb_skip "${thumb_drift_skip:-}" \
     --arg ts "$(ts)" \
-    '{ts: $ts, missing_workers: $missing, confirmed_stall: $stalled, queues: .}'
+    '{ts: $ts, missing_workers: $missing, confirmed_stall: $stalled, confirmed_paused_backlog: $paused_backlog, thumb_drift: {disk_files: $thumb_disk, db_rows: $thumb_db, alert: ($thumb_alert == 1), skip: $thumb_skip}, queues: .}'
 else
   printf '%s\n' "${rows[@]}" | tee -a "$LOG_FILE"
 fi
@@ -280,9 +389,27 @@ if [ "${#confirmed_stall[@]}" -gt 0 ]; then
   log "ALERT stalled queues (2 consecutive samples): ${confirmed_stall[*]}"
   status=2
 fi
+if [ "${#confirmed_paused_backlog[@]}" -gt 0 ]; then
+  # Advisory only — paused queues with persistent backlog typically mean
+  # JobRepository.waitForQueueCompletion() is wedged after a concurrency
+  # change (see header / memory immich-queue-watchdog.md, 2026-05-03).
+  # Recovery requires pause-via-API + docker stop/start + resume-via-API.
+  # Plain 'docker restart' won't unwedge it, so we deliberately don't
+  # auto-restart here — a paused queue is also a valid user state.
+  log "INFO paused-with-backlog (2 consecutive samples, advisory — possible concurrency-change wedge): ${confirmed_paused_backlog[*]}"
+fi
 if [ "$crash_loop" = 1 ]; then
   log "ALERT immich_server crash-loop: RestartCount ${prev_restart_count} -> ${restart_count} in ${restart_window}s (no auto-recovery — investigate manually: docker logs $SERVER_CTR, rclone mount, .env.immich sentinels)"
   status=2
+fi
+
+if [ -n "$thumb_drift_skip" ]; then
+  log "INFO thumb-drift check skipped: $thumb_drift_skip"
+elif [ "$thumb_drift_alert" = 1 ]; then
+  log "ALERT thumb-drift: $thumb_disk_files files on disk vs $thumb_db_rows DB rows (< ${THUMB_DRIFT_RATIO} ratio). Possible host-side wipe of $THUMBS_DIR — Immich 'Missing' regen will SKIP these. Recover via: curl -X PUT $API_BASE/api/jobs/thumbnailGeneration -H 'x-api-key: \$KEY' -H 'content-type: application/json' -d '{\"command\":\"start\",\"force\":true}'"
+  status=2
+else
+  log "thumb-drift OK: $thumb_disk_files files / $thumb_db_rows DB rows"
 fi
 
 # --- Auto-recovery (only on confirmed queue stall, NOT crash-loop) ---
@@ -312,6 +439,7 @@ if [ "$AUTO_RESTART" = 1 ] && [ "${#confirmed_stall[@]}" -gt 0 ]; then
   # baseline we use for crash-loop detection.
   {
     echo "PREV_STALLED=\"${stalled[*]:-}\""
+    echo "PREV_PAUSED_BACKLOG=\"${paused_backlog[*]:-}\""
     echo "PREV_RESTART_TS=${now}"
     echo "PREV_RESTART_COUNT=${restart_count}"
     echo "PREV_RESTART_COUNT_TS=${now_ts}"

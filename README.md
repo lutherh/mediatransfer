@@ -533,11 +533,13 @@ If you start a script outside the standard entry points (e.g. an ad-hoc `tsx` in
 caffeinate -dimsu -w <cli-pid> &
 ```
 
-**rclone S3 mount.** If you mount your bucket for Immich, **always flush the rclone VFS cache before unmounting**, or any pending writes since the last flush will be lost silently:
+**rclone S3 mount.** If you mount your bucket for Immich, **always drain the rclone VFS writeback queue before unmounting**, or any pending writes since the last flush will be lost silently. Use the helper, which polls `vfs/queue` to zero before tearing down the mount:
 
 ```bash
-rclone rc --unix-socket data/rclone-rc.sock vfs/sync
+scripts/mount-s3.sh --unmount
 ```
+
+> Note: there is no `vfs/sync` rc method on rclone 1.x. Earlier versions of these docs called the non-existent method; the current helper polls `vfs/queue` until it reports zero pending uploads (default 120s deadline) and only then unmounts.
 
 Never `kill -9` rclone or yank `data/immich-s3` while writes are pending.
 
@@ -572,7 +574,7 @@ For local dev these are usually left unset; the SPA falls back to `http://<your-
 | Wrong object storage target | Re-check `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`, `SCW_REGION`, and `SCW_BUCKET` |
 | Takeout buttons disabled, amber “External run in progress” banner | A CLI/script holds the lock — wait for it, or remove `data/takeout/work/.takeout-run.lock` only after confirming no `tsx scripts/takeout-*.ts` process is running |
 | API returns `409 EXTERNAL_JOB_RUNNING` | Same as above — the API refuses to start a second writer |
-| Photos missing in Immich after a restart | rclone cache wasn't flushed before remount. See [Long-Running Jobs and Unattended Operation](#long-running-jobs-and-unattended-operation) for the `vfs/sync` command |
+| Photos missing in Immich after a restart | rclone cache wasn't drained before remount. Use `scripts/mount-s3.sh --unmount` (it polls `vfs/queue` to zero); see [Long-Running Jobs and Unattended Operation](#long-running-jobs-and-unattended-operation) |
 
 ## Stopping Everything
 

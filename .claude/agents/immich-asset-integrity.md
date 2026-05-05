@@ -16,11 +16,11 @@ Re-read these every time. Past sessions have wasted hours by assuming the wrong 
    - **Mac-native NFS mount** at `data/immich-s3` (started by `scripts/mount-s3.sh`, managed by `uk.4to.mediatransfer.stack` launchagent). This is the **single source of truth** that `immich_server` reads via the bind `data/immich-s3 → /usr/src/app/upload`.
    - **In-container FUSE sidecar** `immich_rclone_s3` at `data/s3-mount → /mnt/s3`. On macOS this **cannot propagate writes back through OrbStack** and is gated behind `profiles: [linux]` in `docker-compose.immich.yml` — i.e. it does **not** run on macOS at all. On Linux it's the active mount.
    - Confirm which mount Immich actually reads: `docker inspect immich_server --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}'`
-2. **`--vfs-cache-mode full` buffers writes locally.** If rclone is killed (launchagent kicked, container restarted, mount force-unmounted) before the cache flushes, **uploads silently disappear**. The Mac-native rclone exposes an rc Unix socket at `data/rclone-rc.sock` (0600). Always flush before tear-down:
+2. **`--vfs-cache-mode full` buffers writes locally.** If rclone is killed (launchagent kicked, container restarted, mount force-unmounted) before the cache drains, **uploads silently disappear**. The Mac-native rclone exposes an rc Unix socket at `data/rclone-rc.sock` (0600). There is no `vfs/sync` rc method on rclone 1.x — the correct primitive is to poll `vfs/queue` to zero, which is exactly what `scripts/mount-s3.sh --unmount` does. Always use the helper before tear-down:
    ```bash
-   rclone rc --unix-socket data/rclone-rc.sock vfs/sync --timeout 120s
+   scripts/mount-s3.sh --unmount   # polls vfs/queue → 0, then unmounts
    ```
-   `scripts/mount-s3.sh --unmount` does this automatically; manual `umount` / `kill` does NOT.
+   Manual `umount` / `kill` skips the drain and is unsafe.
 3. **DB table is `asset` (singular).** `assets` does not exist — `psql ... "SELECT ... FROM assets"` fails. Use:
    ```bash
    docker exec immich_postgres psql -U immich -d immich -tAc "SELECT count(*) FROM asset WHERE \"isOffline\"=false AND \"deletedAt\" IS NULL"
@@ -121,7 +121,7 @@ rclone rc --unix-socket data/rclone-rc.sock vfs/stats 2>/dev/null | jq '{diskCac
 docker exec immich_rclone_s3 sh -c 'du -sh /root/.cache/rclone 2>/dev/null; find /root/.cache/rclone -type f -size +0 2>/dev/null | head' 2>/dev/null || echo "rclone-s3 container not running (macOS profile)"
 ```
 
-Files in the vfs cache that don't exist on S3 are recoverable. **Do not** restart, kill, or `umount` the rclone process while writeback transfers are queued — flush first via `rclone rc --unix-socket data/rclone-rc.sock vfs/sync --timeout 120s`. `rclone rc vfs/forget` is read-only and safe.
+Files in the vfs cache that don't exist on S3 are recoverable. **Do not** restart, kill, or `umount` the rclone process while writeback transfers are queued — drain first via `scripts/mount-s3.sh --unmount` (which polls `vfs/queue` to zero; there is no `vfs/sync` rc method on rclone 1.x). `rclone rc vfs/forget` is read-only and safe.
 
 ## Phase 4 — Decision matrix
 
@@ -135,7 +135,7 @@ Files in the vfs cache that don't exist on S3 are recoverable. **Do not** restar
 ## Constraints
 
 - **Never** run `docker restart`, `kill`, `umount`, `launchctl bootout`, `rm -rf`, or `rclone rc` mutations without an explicit user "go ahead" referencing the specific command.
-- **Never** unmount `data/immich-s3` or kill the launchagent without first running `rclone rc --unix-socket data/rclone-rc.sock vfs/sync` (writeback cache loss = silent data loss; this is the 2026-04 incident pattern).
+- **Never** unmount `data/immich-s3` or kill the launchagent without first draining the writeback queue via `scripts/mount-s3.sh --unmount` (which polls `vfs/queue` to zero; there is no `vfs/sync` rc method on rclone 1.x). Skipping the drain = silent data loss; this is the 2026-04 incident pattern.
 - **Never** delete or overwrite anything in `~/Library/Caches/rclone/` or `data/s3-mount/`. Unflushed bytes there may be the only surviving copy.
 - **Never** touch `data/takeout/state*.json` (per AGENTS.md).
 - Recovery / forensic artifacts go under `data/logs/recovery-<YYYY-MM>/` (0700) — not `/tmp` (cleared on reboot, world-readable).

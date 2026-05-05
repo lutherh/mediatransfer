@@ -77,7 +77,11 @@ services:
       start_period: 20s
 
   postgres:
-    image: postgres:16-alpine
+    # postgres:16-alpine pinned by digest 2026-05-05 to prevent silent base-image
+    # drift (Finding E). To upgrade: `docker pull postgres:16-alpine` then
+    # `docker inspect --format '{{index .RepoDigests 0}}' postgres:16-alpine`
+    # and update both the digest and the date comment.
+    image: postgres@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50
     container_name: mediatransfer_db
     restart: unless-stopped
     ports:
@@ -95,7 +99,9 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    # redis:7-alpine pinned by digest 2026-05-05 to prevent silent base-image
+    # drift (Finding E). To upgrade: see postgres comment above.
+    image: redis@sha256:7aec734b2bb298a1d769fd8729f13b8514a41bf90fcdd1f38ec52267fbaa8ee6
     container_name: mediatransfer_cache
     restart: unless-stopped
     ports:

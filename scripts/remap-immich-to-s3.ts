@@ -20,7 +20,7 @@
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { ensureCaffeinate } from '../src/utils/caffeinate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -62,28 +62,36 @@ function parseEnvFile(content: string): Record<string, string> {
 }
 
 // --- Run SQL via docker exec (piped via stdin to avoid quoting issues) ---
+// Array-form execFileSync intentionally: shell-string execSync is a command-
+// injection vector if any constant ever becomes config-driven.
 function runSQL(sql: string): string {
-	const cmd = `docker exec -i ${DB_CONTAINER} psql -U ${DB_USER} -d ${DB_NAME} -t -A`;
-	return execSync(cmd, {
-		input: sql,
-		maxBuffer: 100 * 1024 * 1024,
-		timeout: 120_000,
-		encoding: 'utf-8',
-		cwd: rootDir,
-	}).trim();
+	return execFileSync(
+		'docker',
+		['exec', '-i', DB_CONTAINER, 'psql', '-U', DB_USER, '-d', DB_NAME, '-t', '-A'],
+		{
+			input: sql,
+			maxBuffer: 100 * 1024 * 1024,
+			timeout: 120_000,
+			encoding: 'utf-8',
+			cwd: rootDir,
+		},
+	).trim();
 }
 
 // Run larger SQL statements via stdin — throws on psql errors
 function runSQLFile(sqlContent: string): string {
-	const cmd = `docker exec -i ${DB_CONTAINER} psql -U ${DB_USER} -d ${DB_NAME} -v ON_ERROR_STOP=1`;
 	try {
-		return execSync(cmd, {
-			input: sqlContent,
-			maxBuffer: 100 * 1024 * 1024,
-			timeout: 300_000,
-			encoding: 'utf-8',
-			cwd: rootDir,
-		}).trim();
+		return execFileSync(
+			'docker',
+			['exec', '-i', DB_CONTAINER, 'psql', '-U', DB_USER, '-d', DB_NAME, '-v', 'ON_ERROR_STOP=1'],
+			{
+				input: sqlContent,
+				maxBuffer: 100 * 1024 * 1024,
+				timeout: 300_000,
+				encoding: 'utf-8',
+				cwd: rootDir,
+			},
+		).trim();
 	} catch (err: any) {
 		const msg = err.stderr || err.stdout || err.message || 'Unknown error';
 		throw new Error(`SQL batch failed: ${msg}`);
@@ -109,24 +117,40 @@ function buildS3Index(): Map<string, string[]> {
 	const region = mainEnv.SCW_REGION || 'nl-ams';
 	const accessKey = mainEnv.SCW_ACCESS_KEY;
 	const secretKey = mainEnv.SCW_SECRET_KEY;
+	if (!accessKey || !secretKey) {
+		throw new Error('SCW_ACCESS_KEY and SCW_SECRET_KEY must be set in .env');
+	}
 
-	const rcloneCmd = [
-		'docker', 'compose', 'exec', '-T', 'app', 'rclone', 'lsf',
+	// Pass S3 credentials via env vars (not argv) so they don't leak through
+	// `ps -ef` / /proc/<pid>/cmdline. `docker compose exec -e NAME` (no `=value`)
+	// forwards the variable BY NAME from the docker CLI's own environment into
+	// the container; rclone reads RCLONE_S3_ACCESS_KEY_ID /
+	// RCLONE_S3_SECRET_ACCESS_KEY for the on-the-fly :s3: backend.
+	const raw = execFileSync(
+		'docker',
+		[
+			'compose', 'exec', '-T',
+			'-e', 'RCLONE_S3_ACCESS_KEY_ID',
+			'-e', 'RCLONE_S3_SECRET_ACCESS_KEY',
+			'app', 'rclone', 'lsf',
 			`:s3:${bucket}/immich/s3transfers/`,
-		'--s3-provider', 'Scaleway',
-		'--s3-endpoint', `s3.${region}.scw.cloud`,
-		'--s3-access-key-id', accessKey,
-		'--s3-secret-access-key', secretKey,
-		'--s3-region', region,
-		'-R', '--files-only',
-	].join(' ');
-
-	const raw = execSync(rcloneCmd, {
-		maxBuffer: 100 * 1024 * 1024,
-		timeout: 600_000,
-		encoding: 'utf-8',
-		cwd: rootDir,
-	});
+			'--s3-provider', 'Scaleway',
+			'--s3-endpoint', `s3.${region}.scw.cloud`,
+			'--s3-region', region,
+			'-R', '--files-only',
+		],
+		{
+			maxBuffer: 100 * 1024 * 1024,
+			timeout: 600_000,
+			encoding: 'utf-8',
+			cwd: rootDir,
+			env: {
+				...process.env,
+				RCLONE_S3_ACCESS_KEY_ID: accessKey,
+				RCLONE_S3_SECRET_ACCESS_KEY: secretKey,
+			},
+		},
+	);
 
 	const lines = raw.split('\n').filter(l => l.length > 0);
 	console.log(`  Found ${lines.length} files in S3 s3transfers/`);
@@ -403,15 +427,16 @@ async function main() {
 	for (const idx of sampleIndices) {
 		const u = updates[idx];
 		try {
-			const result = execSync(
-				`docker exec immich_server test -f "${u.newPath.replace(/"/g, '\\"')}" && echo OK || echo MISSING`,
-				{ encoding: 'utf-8', timeout: 10_000 }
-			).trim();
-			if (result === 'OK') verifyPass++;
-			else {
-				verifyFail++;
-				if (failedPaths.length < 10) failedPaths.push(u.newPath);
-			}
+			// Array-form: u.newPath is a single argv element — no shell parsing,
+			// so an S3 filename containing backticks / $(...) / ; cannot achieve
+			// command injection (was: shell-string execSync → RCE on operator host).
+			// `test -f` exits 0 if the file exists, non-zero otherwise → throws.
+			execFileSync(
+				'docker',
+				['exec', 'immich_server', 'test', '-f', u.newPath],
+				{ stdio: 'ignore', timeout: 10_000 },
+			);
+			verifyPass++;
 		} catch {
 			verifyFail++;
 			if (failedPaths.length < 10) failedPaths.push(u.newPath);

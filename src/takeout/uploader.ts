@@ -707,13 +707,16 @@ class StateCheckpointManager {
   private writeChain: Promise<void> = Promise.resolve();
   private flushError: unknown;
   private readonly timer: NodeJS.Timeout;
+  private readonly persist: (statePath: string, state: UploadState) => Promise<void>;
 
   constructor(
     private readonly statePath: string,
     private readonly state: UploadState,
     private readonly persistEvery: number,
     flushIntervalMs: number,
+    persist: (statePath: string, state: UploadState) => Promise<void> = persistUploadState,
   ) {
+    this.persist = persist;
     this.timer = setInterval(() => {
       this.enqueueFlush();
     }, flushIntervalMs);
@@ -752,7 +755,15 @@ class StateCheckpointManager {
     this.dirty = false;
     this.dirtyUpdates = 0;
     this.writeChain = this.writeChain
-      .then(() => persistUploadState(this.statePath, this.state))
+      .then(() => this.persist(this.statePath, this.state))
+      .then(() => {
+        // Clear any sticky error from a prior transient failure: a successful
+        // persist supersedes it and `stopAndFlush` should not throw when the
+        // current state has actually made it to disk. Without this clear, a
+        // single ENOSPC/EBUSY blip during a periodic flush would surface as
+        // a failure at end-of-upload even though every later flush succeeded.
+        this.flushError = undefined;
+      })
       .catch((error) => {
         // Re-mark dirty so a future flush retries this state.
         this.dirty = true;
@@ -760,6 +771,10 @@ class StateCheckpointManager {
       });
   }
 }
+
+// Exported for unit tests (the optional `persist` ctor arg lets tests inject
+// a fail-once stub to exercise the transient-failure → success path).
+export { StateCheckpointManager };
 
 function computeBackoffDelay(baseDelayMs: number, attempt: number): number {
   const jitter = Math.floor(Math.random() * 100);

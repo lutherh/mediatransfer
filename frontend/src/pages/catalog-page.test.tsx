@@ -303,6 +303,105 @@ describe('CatalogPage', () => {
     expect(screen.queryByText('No media found matching "missing-folder"')).not.toBeInTheDocument();
     expect(await screen.findByRole('link', { name: 'Start photo transfer' })).toHaveAttribute('href', '/');
   });
+
+  // ── Bulk delete error rollback (Finding F) ─────────────────────────────
+  it('restores selection and surfaces a toast when bulk delete fails', async () => {
+    const { deleteCatalogItems, fetchCatalogItems } = await import('@/lib/api');
+    // Re-seed catalog items (an earlier test in this describe block sticks an
+    // empty-items mockResolvedValue on fetchCatalogItems).
+    vi.mocked(fetchCatalogItems).mockResolvedValue({
+      items: [
+        {
+          key: '2025/06/16/photo1.jpg',
+          encodedKey: 'abc1',
+          size: 5000,
+          lastModified: '2025-06-16T12:00:00Z',
+          capturedAt: '2025-06-16T10:00:00Z',
+          mediaType: 'image',
+          sectionDate: '2025-06-16',
+        },
+      ],
+      nextToken: undefined,
+    } as never);
+    vi.mocked(deleteCatalogItems).mockRejectedValueOnce(new Error('500 boom'));
+
+    renderCatalogPage();
+
+    // Select first thumbnail.
+    const selectButtons = await screen.findAllByLabelText('Select');
+    fireEvent.click(selectButtons[0]);
+
+    // SelectionBar appears with "1 selected".
+    expect(await screen.findAllByText(/1 selected/i)).not.toHaveLength(0);
+
+    // Click toolbar Delete button to arm confirmation.
+    const armDelete = await screen.findByRole('button', { name: /^Delete$/ });
+    fireEvent.click(armDelete);
+
+    // Confirm prompt visible.
+    expect(await screen.findByText(/Permanently delete 1 file\?/)).toBeInTheDocument();
+
+    // Click confirmation Delete (still labelled Delete; is now the second one
+    // in the document — but findByRole with the exact name returns the
+    // currently-mounted button, which is the confirm button at this point).
+    const confirmDelete = await screen.findByRole('button', { name: /^Delete$/ });
+    fireEvent.click(confirmDelete);
+
+    // Toast surfaces with retry guidance.
+    expect(
+      await screen.findByText(/Failed to delete 1 item\. Selection restored — try again\./),
+    ).toBeInTheDocument();
+
+    // Selection is preserved — toolbar still shows "1 selected".
+    expect(screen.getAllByText(/1 selected/i).length).toBeGreaterThan(0);
+
+    // Confirmation state is also preserved (rollback restored it).
+    expect(screen.getByText(/Permanently delete 1 file\?/)).toBeInTheDocument();
+  });
+
+  // ── Add-to-album error toast (Finding G) ───────────────────────────────
+  it('surfaces an error toast and closes the modal when album add fails', async () => {
+    const { fetchAlbums, updateAlbum, fetchCatalogItems } = await import('@/lib/api');
+    vi.mocked(fetchCatalogItems).mockResolvedValue({
+      items: [
+        {
+          key: '2025/06/16/photo1.jpg',
+          encodedKey: 'abc1',
+          size: 5000,
+          lastModified: '2025-06-16T12:00:00Z',
+          capturedAt: '2025-06-16T10:00:00Z',
+          mediaType: 'image',
+          sectionDate: '2025-06-16',
+        },
+      ],
+      nextToken: undefined,
+    } as never);
+    vi.mocked(fetchAlbums).mockResolvedValue({
+      albums: [{ id: 'a1', name: 'Trip', keys: [] }],
+    } as never);
+    vi.mocked(updateAlbum).mockRejectedValueOnce(new Error('503 unavailable'));
+
+    renderCatalogPage();
+
+    // Select an item.
+    const selectButtons = await screen.findAllByLabelText('Select');
+    fireEvent.click(selectButtons[0]);
+    expect(await screen.findAllByText(/1 selected/i)).not.toHaveLength(0);
+
+    // Open Add to Album modal.
+    fireEvent.click(await screen.findByRole('button', { name: /Add to Album/i }));
+
+    // Click the "Trip" album in the picker.
+    fireEvent.click(await screen.findByRole('button', { name: /Trip/ }));
+
+    // Toast surfaces with the error message.
+    expect(
+      await screen.findByText(/503 unavailable\. Selection preserved — try again\./),
+    ).toBeInTheDocument();
+
+    // Selection is preserved so the user can retry.
+    expect(screen.getAllByText(/1 selected/i).length).toBeGreaterThan(0);
+  });
 });
 
 // ── formatSectionDate tests (extracted logic) ──────────────────────────────

@@ -143,6 +143,12 @@ ensure_macos_s3_mount() {
   probe_mount_live() {
     local rc_sock="$SCRIPT_DIR/../data/rclone-rc.sock"
     [ -S "$rc_sock" ] || return 1
+    # 5s per attempt, retry once after 2s backoff. Matches the watchdog
+    # (immich-queue-watchdog.sh) — both probes tolerate sub-5s NFS blips
+    # but still fail fast on a genuinely wedged rclone. See Finding D
+    # (2026-05-05) for the false-alarm incident that drove this.
+    rclone rc rc/noop --unix-socket "$rc_sock" --timeout 5s >/dev/null 2>&1 && return 0
+    sleep 2
     rclone rc rc/noop --unix-socket "$rc_sock" --timeout 5s >/dev/null 2>&1
   }
 

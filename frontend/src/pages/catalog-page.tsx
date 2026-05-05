@@ -1249,28 +1249,52 @@ export function CatalogPage() {
   // ── Bulk delete mutation ──
   // Batches deletions in chunks of 200 to stay within API limits.
   // Optimistically fades out selected thumbnails and shows a toast on completion.
-  const deleteMutation = useMutation({
-    mutationFn: async (encodedKeys: string[]) => {
-      // Optimistic: immediately fade out the thumbnails
+  // Selection + confirmation state are snapshotted in onMutate and restored
+  // in onError so a failed network call doesn't silently wipe a multi-select
+  // the user spent time building.
+  const deleteMutation = useMutation<
+    void,
+    Error,
+    string[],
+    { previousSelected: Set<string>; previousConfirm: boolean }
+  >({
+    onMutate: (encodedKeys) => {
+      const previousSelected = selected;
+      const previousConfirm = confirmDelete;
+      // Optimistic: immediately fade out the thumbnails.
       setDeletingKeys(new Set(encodedKeys));
-      setSelected(new Set());
-      setConfirmDelete(false);
+      return { previousSelected, previousConfirm };
+    },
+    mutationFn: async (encodedKeys: string[]) => {
       for (let i = 0; i < encodedKeys.length; i += 200) {
         await deleteCatalogItems(encodedKeys.slice(i, i + 200));
       }
     },
     onSuccess: (_data, encodedKeys) => {
-      setDeletingKeys(new Set());
+      // Commit selection clear + close confirmation only when the API succeeds.
+      setSelected(new Set());
+      setConfirmDelete(false);
       void queryClient.invalidateQueries({ queryKey: ['catalog-items'] });
       void queryClient.invalidateQueries({ queryKey: ['catalog-stats'] });
       void queryClient.invalidateQueries({ queryKey: ['catalog-duplicates'] });
       const count = encodedKeys.length;
       pushToast('success', `${count} item${count === 1 ? '' : 's'} deleted`);
     },
-    onError: (_err, encodedKeys) => {
-      // Restore thumbnails on failure
+    onError: (_err, encodedKeys, context) => {
+      // Rollback: restore the selection + confirmation snapshot so the user
+      // can retry without re-selecting hundreds of items.
+      if (context) {
+        setSelected(context.previousSelected);
+        setConfirmDelete(context.previousConfirm);
+      }
+      pushToast(
+        'error',
+        `Failed to delete ${encodedKeys.length} item${encodedKeys.length === 1 ? '' : 's'}. Selection restored — try again.`,
+      );
+    },
+    onSettled: () => {
+      // Always clear the optimistic fade marker, success or failure.
       setDeletingKeys(new Set());
-      pushToast('error', `Failed to delete ${encodedKeys.length} item${encodedKeys.length === 1 ? '' : 's'}`);
     },
   });
 
@@ -1290,6 +1314,15 @@ export function CatalogPage() {
     onSuccess: () => {
       setShowAlbumModal(false);
       void queryClient.invalidateQueries({ queryKey: ['albums'] });
+      const count = selected.size;
+      pushToast('success', `Added ${count} item${count === 1 ? '' : 's'} to album`);
+    },
+    onError: (err) => {
+      // Close the modal so the toast is visible, and let the user retry
+      // from the still-populated selection toolbar.
+      setShowAlbumModal(false);
+      const message = err instanceof Error ? err.message : 'Failed to add to album';
+      pushToast('error', `${message}. Selection preserved — try again.`);
     },
   });
 

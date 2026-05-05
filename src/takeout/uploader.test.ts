@@ -5,7 +5,7 @@ import { Readable } from 'node:stream';
 import { describe, it, expect } from 'vitest';
 import type { CloudProvider, ObjectInfo } from '../providers/types.js';
 import type { ManifestEntry } from './manifest.js';
-import { uploadManifest, loadUploadState, collectDatePrefixes, preloadDestinationIndex } from './uploader.js';
+import { uploadManifest, loadUploadState, persistUploadState, collectDatePrefixes, preloadDestinationIndex, StateCheckpointManager } from './uploader.js';
 
 class MockProvider implements CloudProvider {
   readonly name = 'MockProvider';
@@ -904,6 +904,81 @@ describe('takeout/uploader', () => {
 
         expect(summary.transientFailures).toBe(2);
         expect(summary.uploaded).toBe(1);
+      });
+    });
+  });
+
+  describe('StateCheckpointManager flushError stickiness', () => {
+    it('clears flushError after a transient failure followed by a successful persist', async () => {
+      await withTempDir(async (dir) => {
+        const statePath = path.join(dir, 'state.json');
+        const state = {
+          version: 1 as const,
+          updatedAt: new Date(0).toISOString(),
+          items: {} as Record<string, { status: 'uploaded'; uploadedAt: string }>,
+        };
+
+        let calls = 0;
+        const persist = async (sp: string, s: typeof state) => {
+          calls += 1;
+          if (calls === 1) {
+            const err = new Error('transient ENOSPC') as NodeJS.ErrnoException;
+            err.code = 'ENOSPC';
+            throw err;
+          }
+          await persistUploadState(sp, s as never);
+        };
+
+        // flushIntervalMs huge so we drive flushes manually via persistEvery=1.
+        const mgr = new StateCheckpointManager(
+          statePath,
+          state as never,
+          1,
+          60_000,
+          persist as never,
+        );
+
+        // Flush #1 — fails (sets flushError to ENOSPC).
+        state.items['k1'] = { status: 'uploaded', uploadedAt: new Date().toISOString() };
+        mgr.markDirty();
+
+        // Flush #2 — succeeds; must clear the sticky error.
+        state.items['k2'] = { status: 'uploaded', uploadedAt: new Date().toISOString() };
+        mgr.markDirty();
+
+        await expect(mgr.stopAndFlush()).resolves.toBeUndefined();
+        expect(calls).toBeGreaterThanOrEqual(2);
+
+        const persisted = await loadUploadState(statePath);
+        expect(persisted.items['k2']?.status).toBe('uploaded');
+      });
+    });
+
+    it('still throws when the FINAL persist fails (no false success)', async () => {
+      await withTempDir(async (dir) => {
+        const statePath = path.join(dir, 'state.json');
+        const state = {
+          version: 1 as const,
+          updatedAt: new Date(0).toISOString(),
+          items: {} as Record<string, { status: 'uploaded'; uploadedAt: string }>,
+        };
+
+        const persist = async () => {
+          throw new Error('fs always broken');
+        };
+
+        const mgr = new StateCheckpointManager(
+          statePath,
+          state as never,
+          1,
+          60_000,
+          persist as never,
+        );
+
+        state.items['k1'] = { status: 'uploaded', uploadedAt: new Date().toISOString() };
+        mgr.markDirty();
+
+        await expect(mgr.stopAndFlush()).rejects.toThrow('fs always broken');
       });
     });
   });

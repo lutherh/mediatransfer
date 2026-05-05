@@ -237,4 +237,35 @@ describe('loadEnv', () => {
     expect(() => loadEnv({ ...validEnv, UPLOAD_RETRY_COUNT: '-1' })).toThrow();
     expect(() => loadEnv({ ...validEnv, UPLOAD_RETRY_COUNT: '21' })).toThrow();
   });
+
+  describe('API_AUTH_TOKEN non-loopback enforcement (Finding C)', () => {
+    it('rejects HOST=0.0.0.0 with no API_AUTH_TOKEN even in development', () => {
+      expect(() =>
+        loadEnv({ ...validEnv, HOST: '0.0.0.0' }),
+      ).toThrow(/API_AUTH_TOKEN is required when HOST is not loopback/);
+    });
+
+    it('rejects a LAN IP with no API_AUTH_TOKEN', () => {
+      expect(() =>
+        loadEnv({ ...validEnv, HOST: '192.168.1.10' }),
+      ).toThrow(/API_AUTH_TOKEN is required when HOST is not loopback/);
+    });
+
+    it('accepts HOST=0.0.0.0 when API_AUTH_TOKEN is provided', () => {
+      const env = loadEnv({
+        ...validEnv,
+        HOST: '0.0.0.0',
+        API_AUTH_TOKEN: 'a'.repeat(32),
+      });
+      expect(env.HOST).toBe('0.0.0.0');
+      expect(env.API_AUTH_TOKEN).toBe('a'.repeat(32));
+    });
+
+    it.each(['127.0.0.1', 'localhost', '::1'])(
+      'allows loopback host %s without API_AUTH_TOKEN',
+      (host) => {
+        expect(() => loadEnv({ ...validEnv, HOST: host })).not.toThrow();
+      },
+    );
+  });
 });

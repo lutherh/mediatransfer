@@ -316,13 +316,12 @@ echo "Wrote $PLIST_STACK"
 
 # ── Watchdog agent (StartInterval, opt-out via missing API key) ──
 WATCHDOG_API_KEY=$(read_env_val "$ROOT_DIR/.env.immich" IMMICH_WATCHDOG_API_KEY "")
-# XML-escape the key before plist heredoc interpolation. Today's Immich keys are
-# base64url-ish so this is defensive, but a paste error with `&`/`<`/`>` would
-# otherwise produce a malformed plist that launchctl silently drops. (audit W1)
-if [ -n "$WATCHDOG_API_KEY" ]; then
-  WATCHDOG_API_KEY=$(printf '%s' "$WATCHDOG_API_KEY" \
-    | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e "s/'/\&apos;/g" -e 's/"/\&quot;/g')
-fi
+# We only use this value to gate whether the agent gets installed at all.
+# The plist intentionally does NOT bake the key in: the watchdog script
+# reads .env.immich at runtime, so rotating the key only requires editing
+# .env.immich (no plist regen, no kickstart). Hardcoding it in the plist
+# made past rotations silently fail because launchd's EnvironmentVariables
+# wins over the script's .env.immich fallback. (2026-05-05)
 if [ -z "$WATCHDOG_API_KEY" ]; then
   echo "WARN: IMMICH_WATCHDOG_API_KEY not set in .env.immich — skipping queuewatchdog agent."
   echo "      Create an API key in the Immich UI (Account Settings → API Keys) and add:"
@@ -354,8 +353,6 @@ else
     <string>${BIN_DIR_DOCKER}${BIN_DIR_RCLONE}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>HOME</key>
     <string>${HOME}</string>
-    <key>IMMICH_WATCHDOG_API_KEY</key>
-    <string>${WATCHDOG_API_KEY}</string>
   </dict>
 
   <!-- Every 5 min. Cheap (<2s); reads /api/jobs + a single CLIENT LIST. -->

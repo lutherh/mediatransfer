@@ -87,6 +87,26 @@ const envSchema = z.object({
    */
   TRANSFER_ITEM_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
 }).superRefine((env, ctx) => {
+  // Loopback-only binds (127.0.0.1, localhost, ::1) are safe without auth
+  // because no off-host traffic can reach the listener. Any other HOST —
+  // including 0.0.0.0, a LAN IP, or a hostname — exposes destructive
+  // endpoints (DELETE /catalog/api/items, takeout actions, credential
+  // CRUD) to the network and MUST require API_AUTH_TOKEN regardless of
+  // NODE_ENV. Without this gate, `HOST=0.0.0.0 npm run dev` silently
+  // disables the auth hook in src/api/index.ts (which is only registered
+  // when an apiAuthToken is passed). Security finding C, 2026-05-05.
+  const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+  if (!LOOPBACK_HOSTS.has(env.HOST) && !env.API_AUTH_TOKEN) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['API_AUTH_TOKEN'],
+      message:
+        `API_AUTH_TOKEN is required when HOST is not loopback (got HOST="${env.HOST}"). ` +
+        'Either bind to 127.0.0.1 or set API_AUTH_TOKEN (min 16 chars). ' +
+        'Generate one with: openssl rand -hex 24',
+    });
+  }
+
   // Production-only hardening: reject weak or missing secrets that are safe
   // in dev but dangerous when the service is exposed to the internet.
   if (env.NODE_ENV !== 'production') return;
