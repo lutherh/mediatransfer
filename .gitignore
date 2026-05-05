@@ -100,3 +100,7 @@ data/s3-filelist-rclone.txt
 data/library-admin-filenames.txt
 data/local-library-files.txt
 data/merged-compose-debug.txt
+scripts/temp-logs-from-immich-server.txt
+plans/09-takeout-reimport-from-tgz-backup.md
+plans/09-takeout-reimport-from-tgz-backup.md
+plans/10-thumbnail-recovery-runbook.md
